@@ -93,6 +93,7 @@ void send_AT_Command_machine(void);
 boolean_en  send_AT_Command_machine_finish(void);
 void  send_AT_Command_machine_idle(void);
 void  send_AT_Command_machine_star(char *command,uint8 length, char *response, unsigned char waitCount, uint8 throwAwayTail) ;
+boolean_en nb_get_rsrp_dbm10(s32 *rsrp_dbm10);
 boolean_en OTA_ENABLE_IS_SET(void);
 void set_OTA_ENABLE(void);
 void nbSendTcpData_sm(void);

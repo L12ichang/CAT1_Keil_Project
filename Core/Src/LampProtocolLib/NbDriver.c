@@ -42,6 +42,8 @@ static u8 POWERED_DOWN_read_count=0;
 CONNECT_CONFIG_state_en connect_state=CONNECT_CONFIG_STATE_IDLE;
 static boolean_en imei_ready = BOOL_FALSE;
 static boolean_en iccid_ready = BOOL_FALSE;
+static boolean_en rsrp_ready = BOOL_FALSE;
+static s32 nb_rsrp_dbm10 = 0;
 
 typedef enum
 {
@@ -232,6 +234,20 @@ static boolean_en nb_at_command_is_qccid(void)
     return (atcommand != 0 && strstr((const char *)atcommand, "AT+QCCID") != 0) ? BOOL_TRUE : BOOL_FALSE;
 }
 
+static boolean_en nb_at_command_is_qeng(void)
+{
+    if (atcommand == 0)
+    {
+        return BOOL_FALSE;
+    }
+    if (strstr((const char *)atcommand, "QENG") != 0 ||
+        strstr((const char *)atcommand, "qeng") != 0)
+    {
+        return BOOL_TRUE;
+    }
+    return BOOL_FALSE;
+}
+
 static const char *nb_iccid_fail_reason_name(void)
 {
     switch (iccid_fail_reason)
@@ -287,6 +303,16 @@ boolean_en  send_AT_Command_machine_finish(void)
 void  send_AT_Command_machine_idle(void)
 {
     sendcommad_state=SEND_COMMAND_STATE_IDLE ;
+}
+
+boolean_en nb_get_rsrp_dbm10(s32 *rsrp_dbm10)
+{
+    if (rsrp_ready == BOOL_FALSE || rsrp_dbm10 == 0)
+    {
+        return BOOL_FALSE;
+    }
+    *rsrp_dbm10 = nb_rsrp_dbm10;
+    return BOOL_TRUE;
 }
 
 u64 char_to_digita(u8* buf,u8 len)
@@ -418,6 +444,63 @@ static void capture_iccid_from_line(const u8 *line)
     }
 }
 
+static boolean_en capture_rsrp_from_qeng_line(const u8 *line)
+{
+    const char *p;
+    s32 sign;
+    s32 value;
+
+    if (line == 0 ||
+        strstr((const char *)line, "+QENG:") == 0 ||
+        strstr((const char *)line, "servingcell") == 0)
+    {
+        return BOOL_FALSE;
+    }
+
+    p = (const char *)line;
+    while (*p != '\0')
+    {
+        while (*p != '\0' && *p != '-' && (*p < '0' || *p > '9'))
+        {
+            ++p;
+        }
+        if (*p == '\0')
+        {
+            break;
+        }
+
+        sign = 1;
+        if (*p == '-')
+        {
+            sign = -1;
+            ++p;
+        }
+        if (*p < '0' || *p > '9')
+        {
+            continue;
+        }
+
+        value = 0;
+        while (*p >= '0' && *p <= '9')
+        {
+            value = (value * 10) + (*p - '0');
+            ++p;
+        }
+        value *= sign;
+
+        if (value >= -160 && value <= -40)
+        {
+            nb_rsrp_dbm10 = value * 10;
+            rsrp_ready = BOOL_TRUE;
+            printf("[QENG] rsrp=%ld.%lddBm\n",
+                   (long)(nb_rsrp_dbm10 / 10),
+                   (long)((nb_rsrp_dbm10 < 0) ? -(nb_rsrp_dbm10 % 10) : (nb_rsrp_dbm10 % 10)));
+            return BOOL_TRUE;
+        }
+    }
+    return BOOL_FALSE;
+}
+
 static void capture_identity_line(const u8 *line)
 {
     if (strstr((const char *)atcommand, "AT+CGSN"))
@@ -427,6 +510,10 @@ static void capture_identity_line(const u8 *line)
     else if (strstr((const char *)atcommand, "AT+QCCID"))
     {
         capture_iccid_from_line(line);
+    }
+    else if (nb_at_command_is_qeng() == BOOL_TRUE)
+    {
+        (void)capture_rsrp_from_qeng_line(line);
     }
 }
 

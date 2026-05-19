@@ -154,6 +154,8 @@ int zk_publish_response_with_dt(const zk_message_header_t *request,
                                 zk_response_dt_builder_t builder,
                                 void *ctx);
 void zk_mqtt_session_process(void);
+void zk_runtime_stats_init(void);
+void zk_runtime_counter_process(void);
 boolean_en zk_mqtt_accept_login_ack(const zk_message_header_t *header);
 boolean_en zk_mqtt_accept_heartbeat_ack(const zk_message_header_t *header);
 int zk_parse_login_response(const char *json_str, zk_login_response_t *response);

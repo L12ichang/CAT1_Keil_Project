@@ -64,6 +64,20 @@ static uint32 zk_control_restore_tick = 0;
 static uint32 zk_control_restore_delay_ms = 0;
 static int zk_control_restore_brightness = 0;
 
+/* 运行时间统计：非阻塞、低频更新（秒级），周期低频写Flash */
+static uint32 zk_boot_run_seconds;              /* 本次上电累计运行秒数 */
+static uint32 zk_boot_light_seconds;            /* 本次上电累计亮灯秒数（仅dim_level>0时累加） */
+static uint32 zk_total_run_base_seconds;        /* 历史总运行秒数 */
+static uint32 zk_total_light_base_seconds;      /* 历史总亮灯秒数 */
+static uint32 zk_runtime_last_tick;             /* 上次统计tick */
+static uint32 zk_runtime_flash_seq;
+static uint32 zk_runtime_last_save_tick;
+static boolean_en zk_runtime_loaded = BOOL_FALSE;
+static boolean_en zk_runtime_powerdown_saved = BOOL_FALSE;
+static uint32 zk_signal_query_tick;
+static char zk_signal_qeng_cmd[] = "AT+QENG=\"servingcell\"\r\n";
+static char zk_signal_qeng_resp[] = "OK";
+
 #define ZK_CNCTRL_SUPPORTED_CNS 1
 #define ZK_CNCTRL_LAST_MAX_SEC  (24UL * 60UL * 60UL)
 #define ZK_ALARM_POWER_DOWN_INDEX 7U
@@ -73,6 +87,13 @@ static int zk_control_restore_brightness = 0;
 #define ZK_PROPERTY_FLASH_VERSION 1U
 #define ZK_PROPERTY_FLASH_MAIN_ADDR (DATAROM_STARTADDR + FLASH_PAGE_SIZE)
 #define ZK_PROPERTY_FLASH_BACKUP_ADDR (BAKDATAROM_STARTADDR + FLASH_PAGE_SIZE)
+#define ZK_RUNTIME_FLASH_MAGIC 0x5A4B5254UL
+#define ZK_RUNTIME_FLASH_VERSION 1U
+#define ZK_RUNTIME_FLASH_OFFSET 0x200UL
+#define ZK_RUNTIME_FLASH_MAIN_ADDR (ZK_PROPERTY_FLASH_MAIN_ADDR + ZK_RUNTIME_FLASH_OFFSET)
+#define ZK_RUNTIME_FLASH_BACKUP_ADDR (ZK_PROPERTY_FLASH_BACKUP_ADDR + ZK_RUNTIME_FLASH_OFFSET)
+#define ZK_RUNTIME_SAVE_INTERVAL_MS (6UL * 60UL * 60UL * 1000UL)
+#define ZK_SIGNAL_QUERY_INTERVAL_MS (4UL * 60UL * 1000UL)
 #define ZK_FLASH_SAVE_ERROR 99
 
 typedef struct
@@ -101,6 +122,17 @@ typedef struct
     s32 tPeriod;
     u32 checksum;
 } zk_property_flash_record_t;
+
+typedef struct
+{
+    u32 magic;
+    u16 version;
+    u16 size;
+    u32 seq;
+    u32 total_run_seconds;
+    u32 total_light_seconds;
+    u32 checksum;
+} zk_runtime_flash_record_t;
 
 typedef struct
 {
@@ -712,6 +744,148 @@ static boolean_en zk_property_flash_store_config(const zk_device_config_t *confi
     return BOOL_FALSE;
 }
 
+static u16 zk_runtime_flash_checksum(zk_runtime_flash_record_t *record)
+{
+    return crc16_modbus_get((unsigned char *)record,
+                            sizeof(*record) - sizeof(record->checksum));
+}
+
+static boolean_en zk_runtime_record_valid(zk_runtime_flash_record_t *record)
+{
+    if (record->magic != ZK_RUNTIME_FLASH_MAGIC ||
+        record->version != ZK_RUNTIME_FLASH_VERSION ||
+        record->size != sizeof(*record))
+    {
+        return BOOL_FALSE;
+    }
+    return ((u16)record->checksum == zk_runtime_flash_checksum(record)) ? BOOL_TRUE : BOOL_FALSE;
+}
+
+static boolean_en zk_runtime_flash_read_record(u32 addr,
+                                               zk_runtime_flash_record_t *record)
+{
+    hw_flash_read_bytes(addr, (u8 *)record, sizeof(*record));
+    return zk_runtime_record_valid(record);
+}
+
+static void zk_runtime_record_from_current(zk_runtime_flash_record_t *record,
+                                           u32 seq)
+{
+    memset(record, 0, sizeof(*record));
+    record->magic = ZK_RUNTIME_FLASH_MAGIC;
+    record->version = ZK_RUNTIME_FLASH_VERSION;
+    record->size = (u16)sizeof(*record);
+    record->seq = seq;
+    record->total_run_seconds = zk_total_run_base_seconds + zk_boot_run_seconds;
+    record->total_light_seconds = zk_total_light_base_seconds + zk_boot_light_seconds;
+    record->checksum = zk_runtime_flash_checksum(record);
+}
+
+static boolean_en zk_runtime_flash_write_record(u32 addr,
+                                                zk_runtime_flash_record_t *record)
+{
+    hw_flash_write_bytes(addr, (u8 *)record, sizeof(*record));
+    return user_flash_check(addr, (u8 *)record, sizeof(*record));
+}
+
+static boolean_en zk_runtime_flash_store_current(void)
+{
+    zk_runtime_flash_record_t record;
+    u32 next_seq;
+    boolean_en main_ok;
+    boolean_en backup_ok;
+
+    next_seq = zk_runtime_flash_seq + 1U;
+    if (next_seq == 0U)
+    {
+        next_seq = 1U;
+    }
+
+    zk_runtime_record_from_current(&record, next_seq);
+    main_ok = zk_runtime_flash_write_record(ZK_RUNTIME_FLASH_MAIN_ADDR, &record);
+    backup_ok = zk_runtime_flash_write_record(ZK_RUNTIME_FLASH_BACKUP_ADDR, &record);
+    if (main_ok == BOOL_TRUE || backup_ok == BOOL_TRUE)
+    {
+        zk_runtime_flash_seq = next_seq;
+        return BOOL_TRUE;
+    }
+    return BOOL_FALSE;
+}
+
+static void zk_runtime_save_process(uint32 now)
+{
+    if (Timer_PassedDelay(zk_runtime_last_save_tick, ZK_RUNTIME_SAVE_INTERVAL_MS) == BOOL_TRUE)
+    {
+        (void)zk_runtime_flash_store_current();
+        zk_runtime_last_save_tick = now;
+    }
+
+    if (power_down_flag != 0)
+    {
+        if (zk_runtime_powerdown_saved == BOOL_FALSE)
+        {
+            (void)zk_runtime_flash_store_current();
+            zk_runtime_last_save_tick = now;
+            zk_runtime_powerdown_saved = BOOL_TRUE;
+        }
+    }
+    else
+    {
+        zk_runtime_powerdown_saved = BOOL_FALSE;
+    }
+}
+
+void zk_runtime_stats_init(void)
+{
+    zk_runtime_flash_record_t main_record;
+    zk_runtime_flash_record_t backup_record;
+    zk_runtime_flash_record_t *selected;
+    boolean_en main_ok;
+    boolean_en backup_ok;
+
+    if (zk_runtime_loaded == BOOL_TRUE)
+    {
+        return;
+    }
+
+    main_ok = zk_runtime_flash_read_record(ZK_RUNTIME_FLASH_MAIN_ADDR, &main_record);
+    backup_ok = zk_runtime_flash_read_record(ZK_RUNTIME_FLASH_BACKUP_ADDR, &backup_record);
+
+    selected = NULL;
+    if (main_ok == BOOL_TRUE && backup_ok == BOOL_TRUE)
+    {
+        selected = (main_record.seq >= backup_record.seq) ? &main_record : &backup_record;
+    }
+    else if (main_ok == BOOL_TRUE)
+    {
+        selected = &main_record;
+    }
+    else if (backup_ok == BOOL_TRUE)
+    {
+        selected = &backup_record;
+    }
+
+    if (selected != NULL)
+    {
+        zk_runtime_flash_seq = selected->seq;
+        zk_total_run_base_seconds = selected->total_run_seconds;
+        zk_total_light_base_seconds = selected->total_light_seconds;
+    }
+    else
+    {
+        zk_runtime_flash_seq = 0;
+        zk_total_run_base_seconds = 0;
+        zk_total_light_base_seconds = 0;
+    }
+
+    zk_boot_run_seconds = 0;
+    zk_boot_light_seconds = 0;
+    zk_runtime_last_tick = Timer_GetTickCount();
+    zk_runtime_last_save_tick = zk_runtime_last_tick;
+    zk_runtime_powerdown_saved = BOOL_FALSE;
+    zk_runtime_loaded = BOOL_TRUE;
+}
+
 static void zk_device_config_refresh_iccid_field(zk_device_config_t *config)
 {
     if (config == NULL)
@@ -1102,12 +1276,13 @@ int zk_make_login_packet(char *buf, int buf_size)
         return -1;
     }
     zk_device_config_refresh_iccid();
+    /* 登录上报：DevInfo.prodtp按协议使用prodtp字段名，Dim包含dimTp调光方式 */
     return snprintf(buf, buf_size,
                     "{\"SN\":\"%s\",\"TM\":\"%s\",\"SV\":\"%s\",\"ID\":\"%s\",\"CT\":\"%s\","
-                    "\"DT\":{\"DevInfo\":{\"protId\":%d,\"clas\":\"%s\",\"prottp\":\"%s\",\"hver\":%d,\"sver\":%d},"
+                    "\"DT\":{\"DevInfo\":{\"protId\":%d,\"clas\":\"%s\",\"prodtp\":\"%s\",\"hver\":%d,\"sver\":%d},"
                     "\"MdlInfo\":{\"mver\":\"%s\",\"iccid\":\"%s\"},"
                     "\"Gis\":{\"lng\":%ld,\"lat\":%ld,\"zone\":%d},"
-                    "\"Dim\":[{\"cns\":%d,\"polar\":%d,\"dlmt\":%d,\"ulmt\":%d,\"rti\":%d,\"rtPwr\":%d}],"
+                    "\"Dim\":[{\"cns\":%d,\"dimTp\":%d,\"polar\":%d,\"dlmt\":%d,\"ulmt\":%d,\"rti\":%d,\"rtPwr\":%d}],"
                     "\"Sense\":{\"di\":%d,\"sBri\":%d,\"sBriTm\":%d}}}",
                     header.sn,
                     header.tm,
@@ -1125,6 +1300,7 @@ int zk_make_login_packet(char *buf, int buf_size)
                     zk_dev_cfg.lat,
                     zk_dev_cfg.zone,
                     zk_dev_cfg.cns,
+                    zk_dev_cfg.dimTp,
                     zk_dev_cfg.polar,
                     zk_dev_cfg.dlmt,
                     zk_dev_cfg.ulmt,
@@ -1287,17 +1463,84 @@ boolean_en zk_dispatch_message(cJSON *root, const zk_message_header_t *header)
     return BOOL_FALSE;
 }
 
+/* 运行时间非阻塞统计：秒级更新RAM，6小时或掉电时低频持久化 */
+void zk_runtime_counter_process(void)
+{
+    uint32 now;
+    uint32 elapsed_ms;
+    uint32 elapsed_seconds;
+
+    if (zk_runtime_loaded != BOOL_TRUE)
+    {
+        zk_runtime_stats_init();
+    }
+
+    now = Timer_GetTickCount();
+    if (zk_runtime_last_tick == 0)
+    {
+        zk_runtime_last_tick = now;
+        return;
+    }
+
+    elapsed_ms = now - zk_runtime_last_tick;
+    if (elapsed_ms < 1000UL)
+    {
+        zk_runtime_save_process(now);
+        return;                             /* 不到1秒不处理，降低CPU开销 */
+    }
+
+    elapsed_seconds = elapsed_ms / 1000UL;
+    zk_boot_run_seconds += elapsed_seconds;
+    zk_runtime_last_tick += elapsed_seconds * 1000UL;
+
+    /* 仅当灯亮时累加亮灯时间（dim_level>0表示灯亮） */
+    if (dim_level > 0U)
+    {
+        zk_boot_light_seconds += elapsed_seconds;
+    }
+
+    zk_runtime_save_process(now);
+}
+
+static boolean_en zk_signal_query_process(uint32 now)
+{
+    if (online == 0 || pubsend_state_idle() == BOOL_FALSE)
+    {
+        return BOOL_FALSE;
+    }
+    if (zk_signal_query_tick != 0 &&
+        Timer_PassedDelay(zk_signal_query_tick, ZK_SIGNAL_QUERY_INTERVAL_MS) == BOOL_FALSE)
+    {
+        return BOOL_FALSE;
+    }
+    if (send_AT_Command_machine_finish() != BOOL_TRUE)
+    {
+        return BOOL_FALSE;
+    }
+
+    send_AT_Command_machine_star(zk_signal_qeng_cmd,
+                                 (uint8)strlen(zk_signal_qeng_cmd),
+                                 zk_signal_qeng_resp,
+                                 25,
+                                 1);
+    zk_signal_query_tick = now;
+    return BOOL_TRUE;
+}
+
 static void zk_add_runtime_time_groups(cJSON *dt_root)
 {
     cJSON *run_tm;
     cJSON *light_tm;
     cJSON *light_total;
     cJSON *light_run;
-    uint32 total_minutes;
-    uint32 light_minutes;
+    uint32 run_minutes;                     /* 本次上电运行分钟 */
+    uint32 light_run_minutes;               /* 本次上电亮灯分钟 */
 
-    total_minutes = Timer_GetTickCount() / 60000UL;
-    light_minutes = (dim_level > 0U) ? total_minutes : 0UL;
+    /* 先更新统计，确保上报的是最新累计值 */
+    zk_runtime_counter_process();
+
+    run_minutes = zk_boot_run_seconds / 60U;
+    light_run_minutes = zk_boot_light_seconds / 60U;
 
     run_tm = zk_cjson_create_tx_object("RunTm");
     light_tm = zk_cjson_create_tx_object("LightTm");
@@ -1308,12 +1551,16 @@ static void zk_add_runtime_time_groups(cJSON *dt_root)
         return;
     }
 
-    cJSON_AddNumberToObject(run_tm, "tTime", (double)total_minutes);
-    cJSON_AddNumberToObject(run_tm, "rTime", (double)total_minutes);
+    /* RunTm.tTime = Flash历史累计 + 本次上电累计，单位分钟 */
+    cJSON_AddNumberToObject(run_tm, "tTime", (double)((zk_total_run_base_seconds + zk_boot_run_seconds) / 60U));
+    /* RunTm.rTime = 本次上电运行分钟 */
+    cJSON_AddNumberToObject(run_tm, "rTime", (double)run_minutes);
     cJSON_AddItemToObject(dt_root, "RunTm", run_tm);
 
-    cJSON_AddItemToArray(light_total, cJSON_CreateNumber((double)light_minutes));
-    cJSON_AddItemToArray(light_run, cJSON_CreateNumber((double)light_minutes));
+    /* LightTm.tLtTime = Flash历史亮灯累计 + 本次亮灯累计，单位分钟 */
+    cJSON_AddItemToArray(light_total, cJSON_CreateNumber((double)((zk_total_light_base_seconds + zk_boot_light_seconds) / 60U)));
+    /* LightTm.rLtTime = 本次上电亮灯分钟（关灯后保持历史值不归零） */
+    cJSON_AddItemToArray(light_run, cJSON_CreateNumber((double)light_run_minutes));
     cJSON_AddItemToObject(light_tm, "tLtTime", light_total);
     cJSON_AddItemToObject(light_tm, "rLtTime", light_run);
     cJSON_AddItemToObject(dt_root, "LightTm", light_tm);
@@ -1365,11 +1612,13 @@ static void zk_add_ele_info_group(cJSON *dt_root)
         return;
     }
 
-    cJSON_AddItemToArray(e, cJSON_CreateNumber(0));
+    /* EleInfo.e[0]: 0表示无故障；有故障时上报当前电源故障位图 */
+    cJSON_AddItemToArray(e, cJSON_CreateNumber((double)error_flag_byte));
     cJSON_AddItemToArray(c, cJSON_CreateNumber((double)Z_ac_current));
     cJSON_AddItemToArray(v, cJSON_CreateNumber((double)ac_voltage_8209));
     cJSON_AddItemToArray(f, cJSON_CreateNumber((double)ac_pf));
-    cJSON_AddItemToArray(p, cJSON_CreateNumber((double)((ac_powerpa + 5U) / 10U)));
+    /* EleInfo.p: BL0942有功功率ac_powerpa原始单位0.01W，平台按原始数字显示W，故/100转为整数W（四舍五入） */
+    cJSON_AddItemToArray(p, cJSON_CreateNumber((double)((ac_powerpa + 50U) / 100U)));
     cJSON_AddItemToArray(r_ec, cJSON_CreateNumber((double)energy_this_time));
     cJSON_AddItemToArray(t_ec, cJSON_CreateNumber((double)sys_data.ac_EnergyP));
     cJSON_AddItemToObject(ele_info, "e", e);
@@ -1393,7 +1642,7 @@ static void zk_add_per_sts_group(cJSON *dt_root)
     {
         return;
     }
-    cJSON_AddNumberToObject(per_sts, "lux", 0);
+    /* PerSts: 仅上报temp（有NTC真实来源），lux无光照传感器硬件故不上报 */
     cJSON_AddNumberToObject(per_sts, "temp", Ntctemp.Ntctemp);
     cJSON_AddItemToObject(dt_root, "PerSts", per_sts);
 }
@@ -1401,27 +1650,18 @@ static void zk_add_per_sts_group(cJSON *dt_root)
 static void zk_add_signal_group(cJSON *dt_root)
 {
     cJSON *signal;
-    int rsrp;
-
-    rsrp = -1100;
-    if (getSignal() >= 2U)
-    {
-        rsrp = -700;
-    }
-    else if (getSignal() == 1U)
-    {
-        rsrp = -900;
-    }
+    s32 rsrp;
 
     signal = zk_cjson_create_tx_object("Signal");
     if (signal == NULL)
     {
         return;
     }
-    cJSON_AddNumberToObject(signal, "rsrp", rsrp);
-    cJSON_AddNumberToObject(signal, "cellid", 0);
-    cJSON_AddNumberToObject(signal, "pci", 0);
-    cJSON_AddNumberToObject(signal, "snr", 0);
+    /* Signal.rsrp只使用AT+QENG真实解析值；未获取到时不上报rsrp，避免用等级值伪造 */
+    if (nb_get_rsrp_dbm10(&rsrp) == BOOL_TRUE)
+    {
+        cJSON_AddNumberToObject(signal, "rsrp", (double)rsrp);
+    }
     cJSON_AddNumberToObject(signal, "reg", online ? 1 : 0);
     cJSON_AddItemToObject(dt_root, "Signal", signal);
 }
@@ -1475,7 +1715,7 @@ static int zk_publish_runtime_report(const char *ct)
     if (strcmp(ct, ZK_CT_CYCLIC) == 0)
     {
         zk_add_signal_group(dt);
-        zk_add_angle_group(dt);
+        /* zk_add_angle_group: 当前无倾角传感器硬件，不上报Angle字段；后续接入硬件后恢复调用 */
     }
 
     if (zk_send_json_root(root, NULL) != 0)
@@ -1995,6 +2235,8 @@ void zk_mqtt_session_process(void)
             (void)zk_publish_heartbeat_packet();
             return;
         }
+
+        (void)zk_signal_query_process(now);
     }
 }
 
@@ -2201,7 +2443,7 @@ static void zk_add_dev_info_prop(cJSON *dt_root)
     cJSON_AddNumberToObject(item, "protId", zk_dev_cfg.protId);
     cJSON_AddStringToObject(item, "SN", zk_mqtt_cfg.imei);
     cJSON_AddStringToObject(item, "clas", zk_dev_cfg.clas);
-    cJSON_AddStringToObject(item, "prottp", zk_dev_cfg.prottp);
+    cJSON_AddStringToObject(item, "prodtp", zk_dev_cfg.prottp); /* JSON字段按协议使用prodtp */
     cJSON_AddNumberToObject(item, "hver", zk_dev_cfg.hver);
     cJSON_AddNumberToObject(item, "sver", zk_dev_cfg.sver);
     cJSON_AddItemToObject(dt_root, "DevInfo", item);

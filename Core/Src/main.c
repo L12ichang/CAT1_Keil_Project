@@ -161,6 +161,7 @@ int main(void)
     portableInit();
     sys_data_load();
     zk_work_plan_init();
+    zk_runtime_stats_init();
     if(sys_data.sn==0xaa5555aa)
     {
         sys_data.sn =0;    //����AP���ˣ�BAKROM��ʶ����Ҫ����
@@ -186,10 +187,12 @@ int main(void)
     if(softstar) //����������
     {
         softstar=0;
-        sys_pwm_fade_output(0, 100);//������������
+        dim_level = 100;                    /* 同步调光状态，确保RunSts上报亮灯+100%亮度 */
+        sys_pwm_fade_output(0, 100);        /* 上电默认满功率输出（不走zk_apply_brightness避免误触发变化上报） *///������������
     }
     hw_uart3_process();
     sys_tick_process();
+    zk_runtime_counter_process();
   
     hw_gateway_process();           
     uart_diam_process();
