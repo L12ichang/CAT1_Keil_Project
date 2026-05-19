@@ -1,0 +1,16 @@
+{
+  "jlink": {
+    "device": "STM32F103RC",
+    "interface": "SWD",
+    "speed_khz": 4000
+  },
+  "serial": {
+    "preferred_port": "/dev/cu.wchusbserial2330",
+    "baudrate": 1000000
+  },
+  "build": {
+    "flash_base": "0x08008000",
+    "default_firmware": "MDK-ARM-8008000/out/cat1.bin",
+    "fallback_firmware": []
+  }
+}

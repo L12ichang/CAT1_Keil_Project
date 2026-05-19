@@ -1,0 +1,1581 @@
+#include "NbDriver.h"
+#include "string.h"
+#include "stdio.h"
+#include "Portable.h"
+#include "Utils.h"
+#include "Queue.h"
+#include "TcpClient.h"
+#include "Protocol.h"
+#include "App.h"
+#include "Portable.h"
+#include "watchdog.h"
+#include "hw_gateway.h"
+#include "hw_4g_io.h"
+#include "common.h"
+#include "ota.h"
+#include "type.h"
+#include "http_active.h"
+#include "mqtt_zk_protocol.h"
+extern QUEUE  usartRecvQueue;//�������ݽ��ն���
+#define RECV_BUF_LENGTH 600
+#define CONNECTING_MAX_WAIT_TIME 20
+#define CONNECTED_MAX_WAIT_TIME 5
+#define MAX_RECONNECT_COUNT 6*5 //6*20*5s=10min
+#define NB_DEBUG_PRINT
+uint8 stringBuf[RECV_BUF_LENGTH];//���ݽ��ջ���
+static  uint16 recvLength = 0;//���ݽ��ճ���
+//static  uint32 connectingTimer = 0;//���Ӷ�ʱ��
+//static  uint32 idleTimer = 0;//���ж�ʱ��
+static  NB_STATE state = NB_STATE_POWER_DOWN;//nbģ��״̬
+//static  uint8 reconnectCount = 0;//��������
+//static  uint8 *serverAddress;//���ӵķ�������ַ
+//static  uint8 serverAddressLength = 0;//��������ַ����
+//static  uint16 serverPort = 0;//�������˿ں�
+static  uint32 pub_timer=0;//����delay
+ u8   OTA_ENABLE=0;
+ u8 IMEI[18]={0};
+ u8 IMEI10[13]={0};
+uint8 simCardICCID[22]={0};
+char * IMEI_CHAR;
+u32 IMEI_DEC;
+static u8 POWERED_DOWN_read_count=0;
+CONNECT_CONFIG_state_en connect_state=CONNECT_CONFIG_STATE_IDLE;
+static boolean_en imei_ready = BOOL_FALSE;
+static boolean_en iccid_ready = BOOL_FALSE;
+
+typedef enum
+{
+    NB_ICCID_FAIL_NONE = 0,
+    NB_ICCID_FAIL_TIMEOUT,
+    NB_ICCID_FAIL_ERROR,
+    NB_ICCID_FAIL_BAD_LENGTH,
+} NB_ICCID_FAIL_REASON_EN;
+
+static NB_ICCID_FAIL_REASON_EN iccid_fail_reason = NB_ICCID_FAIL_NONE;
+static u8 iccid_last_digit_count = 0;
+
+static const char *nb_state_name(NB_STATE value)
+{
+    switch (value)
+    {
+        case NB_STATE_POWER_DOWN: return "POWER_DOWN";
+        case NB_STATE_NOT_CONNECT: return "NOT_CONNECT";
+        case NB_STATE_CONNECTING: return "CONNECTING";
+        case NB_STATE_CONNECTED: return "CONNECTED";
+        case NB_STATE_IDLE: return "IDLE";
+        default: return "UNKNOWN";
+    }
+}
+
+static const char *connect_state_name(CONNECT_CONFIG_state_en value)
+{
+    switch (value)
+    {
+        case CONNECT_CONFIG_STATE_IDLE: return "STATE_IDLE";
+        case CONNECT_CONFIG_RESETING: return "RESETING";
+        case CONNECT_CONFIG_READY: return "READY";
+        case CONNECT_CONFIG_AT_CFUN0: return "AT_CFUN0";
+        case CONNECT_CONFIG_AT_CFUN1: return "AT_CFUN1";
+        case CONNECT_CONFIG_AT_CPIN: return "AT_CPIN";
+        case CONNECT_CONFIG_AT_QENG: return "AT_QENG";
+        case CONNECT_CONFIG_AT_RECVMODE: return "AT_RECVMODE";
+        case CONNECT_CONFIG_AT_VERSION: return "AT_VERSION";
+        case CONNECT_CONFIG_AT_keepalive: return "AT_KEEPALIVE";
+        case CONNECT_CONFIG_AT_IEMI: return "AT_IEMI";
+        case CONNECT_CONFIG_AT_QCCID: return "AT_QCCID";
+        case CONNECT_CONFIG_HTTP_ACTIVE: return "HTTP_ACTIVE";
+        case CONNECT_CONFIG_WAIT_ACTIVE: return "WAIT_ACTIVE";
+        case CONNECT_CONFIG_AT_qmtping: return "AT_QMTPING";
+        case CONNECT_CONFIG_WAITING_QMTCLOSE: return "WAITING_QMTCLOSE";
+        case CONNECT_CONFIG_AT_IPPORT: return "AT_IPPORT";
+        case CONNECT_CONFIG_AT_QMTCONN: return "AT_QMTCONN";
+        case CONNECT_CONFIG_AT_QMTSUB: return "AT_QMTSUB";
+        case CONNECT_CONFIG_AT_LAST: return "AT_LAST";
+        case CONNECT_CONFIG__COMPLETE: return "COMPLETE";
+        default: return "UNKNOWN";
+    }
+}
+
+static void nb_trace_state_change(void)
+{
+    static boolean_en inited = BOOL_FALSE;
+    static NB_STATE last_nb_state = NB_STATE_POWER_DOWN;
+    static CONNECT_CONFIG_state_en last_connect_state = CONNECT_CONFIG_STATE_IDLE;
+
+    if (inited == BOOL_FALSE)
+    {
+        inited = BOOL_TRUE;
+        last_nb_state = state;
+        last_connect_state = connect_state;
+        printf("[NB] boot state=%s connect_state=%s\n",
+               nb_state_name(state),
+               connect_state_name(connect_state));
+        return;
+    }
+
+    if (last_connect_state != connect_state)
+    {
+        printf("[NB] connect_state %s -> %s\n",
+               connect_state_name(last_connect_state),
+               connect_state_name(connect_state));
+        last_connect_state = connect_state;
+    }
+
+    if (last_nb_state != state)
+    {
+        printf("[NB] state %s -> %s\n",
+               nb_state_name(last_nb_state),
+               nb_state_name(state));
+        last_nb_state = state;
+    }
+}
+
+ extern   boolean_en  _4g_reset_finish(void) ;
+
+/**
+*@brief   �Ӵ������ݶ��ж�ȡһ���ַ���
+*@param	  buf���ַ�������
+*@param	  len���ַ�������
+*@param	  syncMode���Ƿ�������ʽִ�иú���
+*@return  ��ȡ�����ַ�������
+*/
+ uint16 readLine(uint8 *buf, uint16 *len, uint8 syncMode)
+{
+     uint8 count = 0;
+    do {
+             while (dequeue(&usartRecvQueue, buf + *len))
+            {                
+                 if (++(*len) >= RECV_BUF_LENGTH) 
+                {
+                    *len = 0;
+                }
+                if ((*len >= 2) && (buf[*len - 2] == '\r') && (buf[*len - 1] == '\n')) 
+                {
+                    if (*len == 2) 
+                    {
+                         *len = 0;//���˿���
+                         continue;
+                    }
+                    buf[*len] = 0;
+                    return *len;
+                }
+          }
+          if (syncMode) 
+           {
+               delayMs(20);
+           }
+       } while (syncMode && (++count < 100));
+
+    return 0;
+}
+/**
+*@brief   �Ӵ������ݶ��ж�ȡһ���ַ���
+*@param	  buf���ַ�������
+*@param	  len�����յ��ַ���ʵ�ʳ���
+*@param	  firmwarelenth���̼��·��ĸ����ĳ���
+*@return  ��ȡ�����ַ�������
+*/
+ uint16 readLine_get_firmware(uint8 *buf, uint16 *len, uint16 *firmwarelenth)
+{
+   
+    do {
+            while (dequeue(&usartRecvQueue, buf + *len))
+            {
+                     if (++(*len) >( *firmwarelenth)+6) //����ģ������ĳ����쳣   �̼���β��\r''\n'��"OK\r\n"
+                        {
+
+                            *len = 0;
+                        }
+                        if ((*len >2) && (buf[*len-2] == '\r') && (buf[*len -1] == '\n')) 
+                        {
+                            if (*len <= *firmwarelenth) //���˹̼��е� '\r''\n'
+                        {
+                            continue;
+                        }
+                        buf[*len] = 0;
+                        return *len;
+                        }
+          }
+     
+     } while (0);
+     return 0;
+}
+     
+/**
+*@brief   ִ��AT����
+*@param	  command�����͵�AT�����ַ���
+*@param	  length��AT�����
+
+*/
+void sendCommand(void *command,uint16 length)
+{
+    flushQueue(&usartRecvQueue);
+   // printf("usartSendData=%s\n",command);
+    usartSendData((uint8 *)command, length);
+}
+    
+static SEND_COMMAND_state_en sendcommad_state= SEND_COMMAND_STATE_IDLE;
+static u32  wait_timer=0;
+
+static u8   read_counter=0;
+static u8   resend_counter=0;
+static char * atcommand;
+static u8 atlength;
+static char *atresponse;
+static u32 atwaitCount;
+
+static void clear_imei_data(void);
+static void clear_iccid_data(void);
+
+static boolean_en nb_at_command_is_qccid(void)
+{
+    return (atcommand != 0 && strstr((const char *)atcommand, "AT+QCCID") != 0) ? BOOL_TRUE : BOOL_FALSE;
+}
+
+static const char *nb_iccid_fail_reason_name(void)
+{
+    switch (iccid_fail_reason)
+    {
+        case NB_ICCID_FAIL_TIMEOUT: return "timeout";
+        case NB_ICCID_FAIL_ERROR: return "error";
+        case NB_ICCID_FAIL_BAD_LENGTH: return "bad_length";
+        case NB_ICCID_FAIL_NONE:
+        default: return "unknown";
+    }
+}
+
+static void nb_set_default_iccid(void)
+{
+    memset(simCardICCID, 0, sizeof(simCardICCID));
+    strncpy((char *)simCardICCID, NB_ICCID_DEFAULT, sizeof(simCardICCID) - 1);
+    simCardICCID[sizeof(simCardICCID) - 1] = 0;
+    iccid_ready = BOOL_FALSE;
+}
+
+void  send_AT_Command_machine_star(char *command,uint8 length, char *response,unsigned char waitCount, uint8 throwAwayTail)
+{
+    (void)throwAwayTail;
+    atcommand=command;
+    atlength =length;
+    atresponse=  response;
+    atwaitCount=waitCount;
+    read_counter=0;
+    resend_counter=0;
+    if (strstr((const char *)command, "AT+CGSN"))
+    {
+        clear_imei_data();
+    }
+    else if (strstr((const char *)command, "AT+QCCID"))
+    {
+        clear_iccid_data();
+        printf("[ICCID] start AT+QCCID max_attempts=%u\n", (unsigned int)NB_ICCID_MAX_ATTEMPTS);
+    }
+    sendcommad_state=SEND_COMMAND_STATE_READY;
+}
+
+boolean_en  send_AT_Command_machine_finish(void) 
+{
+    if( sendcommad_state==SEND_COMMAND_STATE_RXING_COMPLETE)
+      {
+          return BOOL_TRUE;
+      }
+      else
+      {
+          return BOOL_FALSE; 
+      }  
+}
+void  send_AT_Command_machine_idle(void)
+{
+    sendcommad_state=SEND_COMMAND_STATE_IDLE ;
+}
+
+u64 char_to_digita(u8* buf,u8 len)
+{ 
+    u8*  recvURC;  
+    recvURC=buf;
+    u64  leng_temp=0;
+    u8 lenth=len;
+   while (lenth)
+   {
+        lenth--;
+        leng_temp =leng_temp * 10 + *recvURC - '0';
+        recvURC++; 
+   }
+   return leng_temp;         
+}
+
+static u8 copy_digits_from_line(u8 *dst, u8 dst_size, const u8 *src, u8 max_digits)
+{
+    u8 count;
+    u16 i;
+
+    count = 0;
+    if (dst_size == 0)
+    {
+        return 0;
+    }
+    memset(dst, 0, dst_size);
+    for (i = 0; src[i] != 0 && count < (dst_size - 1) && count < max_digits; ++i)
+    {
+        if (src[i] >= '0' && src[i] <= '9')
+        {
+            dst[count++] = src[i];
+        }
+    }
+    dst[count] = 0;
+    return count;
+}
+
+static void clear_imei_data(void)
+{
+    memset(IMEI, 0, sizeof(IMEI));
+    memset(IMEI10, 0, sizeof(IMEI10));
+    IMEI_DEC = 0;
+    imei_ready = BOOL_FALSE;
+}
+
+static void clear_iccid_data(void)
+{
+    memset(simCardICCID, 0, sizeof(simCardICCID));
+    iccid_ready = BOOL_FALSE;
+    iccid_fail_reason = NB_ICCID_FAIL_NONE;
+    iccid_last_digit_count = 0;
+}
+
+static boolean_en nb_imei_is_ready(void)
+{
+    u8 i;
+
+    if (imei_ready == BOOL_FALSE)
+    {
+        return BOOL_FALSE;
+    }
+    for (i = 0; i < 15; ++i)
+    {
+        if (IMEI[i] < '0' || IMEI[i] > '9')
+        {
+            return BOOL_FALSE;
+        }
+    }
+    return (IMEI[15] == 0) ? BOOL_TRUE : BOOL_FALSE;
+}
+
+static boolean_en nb_iccid_is_ready(void)
+{
+    u8 i;
+
+    if (iccid_ready == BOOL_FALSE)
+    {
+        return BOOL_FALSE;
+    }
+    for (i = 0; i < sizeof(simCardICCID) - 1 && simCardICCID[i] != 0; ++i)
+    {
+        if (simCardICCID[i] < '0' || simCardICCID[i] > '9')
+        {
+            return BOOL_FALSE;
+        }
+    }
+    return (i >= 19 && i <= 20) ? BOOL_TRUE : BOOL_FALSE;
+}
+
+static void capture_imei_from_line(const u8 *line)
+{
+    u8 digits[18];
+    u8 digit_count;
+
+    digit_count = copy_digits_from_line(digits, sizeof(digits), line, 15);
+    if (digit_count == 15)
+    {
+        memcpy(IMEI, digits, 16);
+        memset(IMEI10, 0, sizeof(IMEI10));
+        memcpy(IMEI10, IMEI + 8, 7);
+        IMEI_DEC = char_to_digita(IMEI10, 7);
+        imei_ready = BOOL_TRUE;
+        printf("IMEI=%s\n", IMEI);
+        printf("IMEI_DEC=%d\n", IMEI_DEC);
+    }
+}
+
+static void capture_iccid_from_line(const u8 *line)
+{
+    u8 digits[22];
+    u8 digit_count;
+
+    digit_count = copy_digits_from_line(digits, sizeof(digits), line, 20);
+    iccid_last_digit_count = digit_count;
+    if (digit_count >= 19)
+    {
+        memset(simCardICCID, 0, sizeof(simCardICCID));
+        memcpy(simCardICCID, digits, digit_count);
+        iccid_ready = BOOL_TRUE;
+        iccid_fail_reason = NB_ICCID_FAIL_NONE;
+        printf("[ICCID] ok iccid=%s\n", (const char *)simCardICCID);
+    }
+    else if (strstr((const char *)line, "+QCCID:") != 0)
+    {
+        iccid_fail_reason = NB_ICCID_FAIL_BAD_LENGTH;
+        printf("[ICCID] bad_length digits=%u line=%s", (unsigned int)digit_count, (const char *)line);
+    }
+}
+
+static void capture_identity_line(const u8 *line)
+{
+    if (strstr((const char *)atcommand, "AT+CGSN"))
+    {
+        capture_imei_from_line(line);
+    }
+    else if (strstr((const char *)atcommand, "AT+QCCID"))
+    {
+        capture_iccid_from_line(line);
+    }
+}
+
+static void send_AT_Command_machine_wait_or_retry(void)
+{
+    if(++read_counter<atwaitCount)
+    {
+        wait_timer=Timer_GetTickCount();//�ٴζ�ȡ
+    }
+    else
+    {
+        if (nb_at_command_is_qccid() == BOOL_TRUE &&
+            iccid_fail_reason == NB_ICCID_FAIL_NONE)
+        {
+            iccid_fail_reason = NB_ICCID_FAIL_TIMEOUT;
+        }
+        sendcommad_state= SEND_COMMAND_STATE_READY;//���ζ�ȡ���ɹ��ط�
+    }
+}
+
+
+/**
+*@brief   �첽��ʽִ��AT����
+*@param	  command�����͵�AT�����ַ���
+*@param	  length��AT�����
+*@param	  response�������յ���ִ�н���Ӽ�
+*@param	  waitCount�����εȴ�������20msΪ��λ��
+*@param	  throwAwayTail���Ƿ�����Ӧ�еġ�OK��
+*@return  nbģ��ظ���ִ�н�����ַ�����
+*/
+ void send_AT_Command_machine(void)
+{
+    switch (sendcommad_state)
+    {
+        case  SEND_COMMAND_STATE_IDLE :
+               break;
+        case  SEND_COMMAND_STATE_READY:
+        case  SEND_COMMAND_STATE_RESETING :
+                if (nb_at_command_is_qccid() == BOOL_TRUE)
+                {
+                    if (resend_counter >= NB_ICCID_MAX_ATTEMPTS)
+                    {
+                        if (iccid_fail_reason == NB_ICCID_FAIL_NONE)
+                        {
+                            iccid_fail_reason = NB_ICCID_FAIL_TIMEOUT;
+                        }
+                        nb_set_default_iccid();
+                        printf("[ICCID] failed reason=%s attempts=%u digits=%u use default invalid iccid=%s\n",
+                               nb_iccid_fail_reason_name(),
+                               (unsigned int)NB_ICCID_MAX_ATTEMPTS,
+                               (unsigned int)iccid_last_digit_count,
+                               NB_ICCID_DEFAULT);
+                        resend_counter=0;
+                        sendcommad_state= SEND_COMMAND_STATE_RXING_COMPLETE;
+                        break;
+                    }
+                    ++resend_counter;
+                }
+                else if(++resend_counter>5)//�ط�����
+                {
+                    resend_counter=0;
+                    sendcommad_state= SEND_COMMAND_STATE_RXING_COMPLETE;
+                    break; 
+                 }   
+                 
+                  sendcommad_state= SEND_COMMAND_STATE_TXING;
+
+               break;
+        case  SEND_COMMAND_STATE_TXING:
+               {
+                    if (nb_at_command_is_qccid() == BOOL_TRUE)
+                    {
+                        printf("[ICCID] attempt=%u send AT+QCCID\n", (unsigned int)resend_counter);
+                    }
+                    sendCommand((uint8*)atcommand, atlength) ;
+                    sendcommad_state= SEND_COMMAND_STATE_RXING;
+                    wait_timer=Timer_GetTickCount();
+                    read_counter=0;//�ض�����
+               }
+              break;
+        
+        case  SEND_COMMAND_STATE_RXING :   
+              if(Timer_PassedDelay(wait_timer, 20))
+               {
+                   if (readLine(stringBuf, &recvLength, 0))
+                    {
+                        capture_identity_line(stringBuf);
+                        if (nb_at_command_is_qccid() == BOOL_TRUE &&
+                            strstr((const char *)stringBuf, "ERROR") != 0)
+                        {
+                            iccid_fail_reason = NB_ICCID_FAIL_ERROR;
+                            printf("[ICCID] error line=%s", (const char *)stringBuf);
+                        }
+                        if (strstr((const char *) stringBuf, atresponse))
+                        {
+                            if (strstr((const char *)atcommand, "AT+CGSN") &&
+                                nb_imei_is_ready() == BOOL_FALSE)
+                            {
+                                recvLength = 0;
+                                send_AT_Command_machine_wait_or_retry();
+                                break;
+                            }
+                            if (nb_at_command_is_qccid() == BOOL_TRUE &&
+                                nb_iccid_is_ready() == BOOL_FALSE)
+                            {
+                                recvLength = 0;
+                                send_AT_Command_machine_wait_or_retry();
+                                break;
+                            }
+                            recvLength = 0;
+                            sendcommad_state= SEND_COMMAND_STATE_RXING_COMPLETE;
+                            resend_counter=0;//�ط���������
+                        }
+                        else
+                        {
+                            recvLength = 0;
+                            send_AT_Command_machine_wait_or_retry();
+                        }
+                    }
+                    else
+                    {
+                        send_AT_Command_machine_wait_or_retry();
+                    }
+             }          
+             break;
+          case  SEND_COMMAND_STATE_RXING_COMPLETE :
+            break;
+       
+        default :
+          break;
+    }
+    
+    
+}
+
+
+void  _4G_configModule_machine_star(void)
+{
+    clear_imei_data();
+    clear_iccid_data();
+    connect_state=CONNECT_CONFIG_RESETING;
+}
+
+void  _4G_configModule_star_from_onestate(CONNECT_CONFIG_state_en start_state) 
+{//��ĳһ��״̬��ʼ����MQTT
+    connect_state=start_state;
+    sendcommad_state=SEND_COMMAND_STATE_RXING_COMPLETE;
+}
+  
+boolean_en  _4G_configModule_machine_finish(void)
+{
+   if( connect_state==CONNECT_CONFIG__COMPLETE)
+    {
+        return BOOL_TRUE;
+    }
+    else
+    {
+        return BOOL_FALSE; 
+    }  
+}
+
+void _4G_configModule_machine(void) 
+{  
+    nb_trace_state_change();
+    switch(connect_state)
+    {
+        case CONNECT_CONFIG_STATE_IDLE:
+        break;
+        case CONNECT_CONFIG_RESETING:
+           resetNbModule();//ģ�鸴λ
+           connect_state=CONNECT_CONFIG_READY;
+        break;
+        case CONNECT_CONFIG_READY:                 
+             if( _4g_reset_finish()==BOOL_TRUE)
+             {//ģ�鸴λ�ɹ���ʼ��ATָ��
+                recvLength = 0;
+                  // printf_buf(stringBuf,72);
+                if (readLine(stringBuf, &recvLength, 0))
+                {   
+                     printf_buf(stringBuf,recvLength);
+                    if( strstr((const char *) stringBuf, "POWERED DOWN"))
+                    {
+                         printf("POWERED DOWN");
+                         connect_state=CONNECT_CONFIG_RESETING;
+                         _4g_reset_idle() ;//��λ�ź���ɺ����idle
+                         printf("__________________ģ�����ϵ�___________________\n");
+                         break;
+                    }
+                    else if( strstr((const char *) stringBuf, "RDY"))
+                    {
+                        printf("POWERED RDY");
+                        send_AT_Command_machine_star("AT+CFUN=0\r\n", 11, "OK", 50, 0) ;
+                        connect_state=CONNECT_CONFIG_AT_CFUN0;
+                    }
+               
+                    else
+                    {//δ����
+                            printf_buf(stringBuf,recvLength);
+                           if(POWERED_DOWN_read_count<2) 
+                             {    //�ض�                   
+                                 connect_state= CONNECT_CONFIG_READY;
+                                 break;
+                             }
+                             else
+                             {//ֱ������ȥ
+                                 
+                                 POWERED_DOWN_read_count=0;
+                             }
+                    
+                    }
+                 }
+                     send_AT_Command_machine_star("AT+CFUN=0\r\n", 11, "OK", 50, 0) ;
+                     connect_state=CONNECT_CONFIG_AT_CFUN0;
+              }
+       
+       break;
+       case CONNECT_CONFIG_AT_CFUN0:
+             if(send_AT_Command_machine_finish()==TRUE)
+             {
+              send_AT_Command_machine_star("AT+CFUN=1\r\n", 11, "OK", 50, 0);
+              connect_state=CONNECT_CONFIG_AT_CFUN1;  
+             }
+       break;   
+       case CONNECT_CONFIG_AT_CFUN1:
+             if(send_AT_Command_machine_finish()==TRUE)
+             {
+             send_AT_Command_machine_star("AT+CPIN?\r\n", strlen("AT+CPIN?\r\n"), "+CPIN: READY",20, 0);
+        
+              connect_state=CONNECT_CONFIG_AT_CPIN;   
+             }                 
+      break;  
+      case CONNECT_CONFIG_AT_CPIN:
+             if(send_AT_Command_machine_finish()==TRUE)
+             {
+               send_AT_Command_machine_star("at+qeng=\"servingcell\"\r\n", strlen("at+qeng=\"servingcell\"\r\n"), "+QENG: \"servingcell\",\"NOCONN\"", 20, 0);
+        
+              connect_state=CONNECT_CONFIG_AT_QENG;   
+             }                 
+      break;                         
+      case CONNECT_CONFIG_AT_QENG:
+             if(send_AT_Command_machine_finish()==TRUE)
+             {
+              send_AT_Command_machine_star("AT+QMTCFG=\"recv/mode\",0,0,0\r\n",strlen("AT+QMTCFG=\"recv/mode\",0,0,0\r\n"),"OK",20, 1);
+              connect_state=CONNECT_CONFIG_AT_RECVMODE;
+             }
+       break;
+
+       case CONNECT_CONFIG_AT_RECVMODE:
+             if(send_AT_Command_machine_finish()==TRUE)
+             {
+              send_AT_Command_machine_star("AT+QMTCFG=\"version\",0,4\r\n",strlen("AT+QMTCFG=\"version\",0,4\r\n"),"OK",25, 1);
+              connect_state=CONNECT_CONFIG_AT_VERSION;
+             }
+        break;
+        case CONNECT_CONFIG_AT_VERSION:
+             if(send_AT_Command_machine_finish()==TRUE)
+             {
+              send_AT_Command_machine_star("AT+QMTCFG=\"keepalive\",0,120\r\n",strlen("AT+QMTCFG=\"keepalive\",0,120\r\n"),"OK",25, 1);
+              connect_state=CONNECT_CONFIG_AT_keepalive;
+             }
+        break;
+        case CONNECT_CONFIG_AT_keepalive:
+             if(send_AT_Command_machine_finish()==TRUE)
+             {
+              send_AT_Command_machine_star("AT+QMTCFG=\"qmtping\",0,30\r\n",strlen("AT+QMTCFG=\"qmtping\",0,30\r\n"),"OK", 25, 1);
+              connect_state=CONNECT_CONFIG_AT_IEMI;
+             }
+      break;
+      case   CONNECT_CONFIG_AT_IEMI:
+           if(send_AT_Command_machine_finish()==TRUE)
+             {
+                 send_AT_Command_machine_star("AT+CGSN\r\n",strlen("AT+CGSN\r\n"),"OK", 50, 1);
+              connect_state=CONNECT_CONFIG_AT_qmtping;
+             }
+      break;
+      case   CONNECT_CONFIG_AT_QCCID:
+           if(send_AT_Command_machine_finish()==TRUE)
+             {
+                 static char sendStringBufSub[96];
+                 int cmd_len;
+                 zk_device_config_refresh_iccid();
+                 cmd_len = zk_build_qmt_sub_cmd(sendStringBufSub, sizeof(sendStringBufSub));
+                 if (cmd_len <= 0 || cmd_len >= (int)sizeof(sendStringBufSub))
+                 {
+                     connect_state=CONNECT_CONFIG_RESETING;
+                     break;
+                 }
+                 send_AT_Command_machine_star(sendStringBufSub,(uint8)cmd_len,"+QMTSUB: 0,1,0", 50, 1);
+                 connect_state=CONNECT_CONFIG_AT_QMTSUB;
+             }
+       break;
+
+       case CONNECT_CONFIG_HTTP_ACTIVE:
+       break;
+       case CONNECT_CONFIG_WAIT_ACTIVE:
+       break;
+
+       case CONNECT_CONFIG_AT_qmtping:
+             if(send_AT_Command_machine_finish()==TRUE)
+             {
+              static char sendStringBufOpen[96];
+              int cmd_len;
+              if (zk_mqtt_init() == BOOL_FALSE)
+              {
+                  printf("MQTT config blocked: invalid real IMEI\n");
+                  connect_state=CONNECT_CONFIG_RESETING;
+                  break;
+              }
+              cmd_len = zk_build_qmt_open_cmd(sendStringBufOpen, sizeof(sendStringBufOpen));
+              if (cmd_len <= 0 || cmd_len >= (int)sizeof(sendStringBufOpen))
+              {
+                  connect_state=CONNECT_CONFIG_RESETING;
+                  break;
+              }
+              send_AT_Command_machine_star(sendStringBufOpen,(uint8)cmd_len, "+QMTOPEN: 0,0", 50, 1);
+              connect_state=CONNECT_CONFIG_AT_IPPORT;
+             }
+       break;
+       case CONNECT_CONFIG_AT_IPPORT:
+             if(send_AT_Command_machine_finish()==TRUE)
+              {
+              static char sendStringBufConn[128];
+              int cmd_len;
+              cmd_len = zk_build_qmt_conn_cmd(sendStringBufConn, sizeof(sendStringBufConn));
+              if (cmd_len <= 0 || cmd_len >= (int)sizeof(sendStringBufConn))
+              {
+                  connect_state=CONNECT_CONFIG_RESETING;
+                  break;
+              }
+              send_AT_Command_machine_star(sendStringBufConn,(uint8)cmd_len,"+QMTCONN: 0,0,0", 50, 1);
+              connect_state=CONNECT_CONFIG_AT_QMTCONN;
+              }
+        break;
+        case CONNECT_CONFIG_AT_QMTCONN:
+             if(send_AT_Command_machine_finish()==TRUE)
+             {
+                 send_AT_Command_machine_star("AT+QCCID\r\n",strlen("AT+QCCID\r\n"),"+QCCID:", 25, 1);
+                 connect_state=CONNECT_CONFIG_AT_QCCID;
+             }
+       break;
+       case CONNECT_CONFIG_AT_QMTSUB:
+             if(send_AT_Command_machine_finish()==TRUE)
+             {
+                 static char sendStringBufSubUp[96];
+                 int cmd_len;
+                 cmd_len = zk_build_qmt_sub_upgrade_cmd(sendStringBufSubUp, sizeof(sendStringBufSubUp));
+                 if (cmd_len <= 0 || cmd_len >= (int)sizeof(sendStringBufSubUp))
+                 {
+                     connect_state=CONNECT_CONFIG_RESETING;
+                     break;
+                 }
+                 send_AT_Command_machine_star(sendStringBufSubUp,(uint8)cmd_len,"+QMTSUB: 0,2,0", 50, 1);
+                 connect_state=CONNECT_CONFIG_AT_LAST;
+             }
+       break;
+       case CONNECT_CONFIG_AT_LAST:
+             if(send_AT_Command_machine_finish()==TRUE)
+             {
+              connect_state=CONNECT_CONFIG__COMPLETE;
+              state = NB_STATE_CONNECTED;
+              onNBEvent(NB_EVENT_CONNECTED, 0, 0);
+             }
+      break;
+
+      case CONNECT_CONFIG__COMPLETE:
+      break;    
+    
+      default:   
+      break;    
+    }
+ 
+}
+
+
+ 
+
+
+
+/**
+*@brief   �������ӵķ�������Ϣ
+*@param	  address����������ַ��ע�⣺������ֻ�����������ַ����ָ�룬����������
+*@param	  length����������ַ����
+*@param	  port���������˿ں�
+*@return  ��
+*/
+/*
+void nbDriverInit(uint8 *address, uint8 length, uint32 port) { 
+    serverAddressLength = length;
+    serverAddress = address;
+    serverPort = port;
+}
+*/
+/**
+*@brief   ���ӷ�����
+*@return  ��
+*/
+/*
+static void connectServer(void) 
+{
+    if(0 == sendCommandAndReceiveResponse("AT+CGPADDR?\r\n", 13, "+CGPADDR: 0,\"", 20, 0))
+    {
+        return;
+    }
+
+    sendCommandAndReceiveResponse("AT+QICLOSE=0\r\n", 14, "OK", 20, 0);
+    usartSendData("AT+QIOPEN=0,0,\"TCP\",\"", 21);
+    usartSendData((uint8 *) serverAddress, serverAddressLength);
+    usartSendData("\",", 2);
+    sprintf((char *) stringBuf, "%d\r\n", serverPort);
+    usartSendData(stringBuf, strlen((char const *) stringBuf));
+#ifdef NB_DEBUG_PRINT
+    printf("nb:connect server:%s,%d\r\n", serverAddress, serverPort);
+#endif
+}*/
+
+/**
+*@brief   �������ģʽ
+*@return  ��
+*/
+/*
+void nbEnterIDLE(void) {                                        //-----------------------------------------------
+    recvLength = 0;
+    sendCommandAndReceiveResponse("AT+QICLOSE=0\r\n", 14, "CLOSE OK", 20, 0);
+    reconnectCount = 0;
+    flushQueue(&usartRecvQueue);
+    state = NB_STATE_IDLE;
+    idleTimer = Timer_GetTickCount();
+#ifdef NB_DEBUG_PRINT
+    printf("nb:enter idle\r\n");
+#endif
+}*/
+
+
+//MQTT ������Ϣ     
+
+/**
+*@brief   ����tcp����
+*@param	  pData��Ҫ���͵����ݻ���
+*@param	  length�����͵����ݳ���
+*@return  NB_ERROR_NONE�����ͳɹ�������������ʧ��
+*/
+
+
+PUBSEDN_STATE_EN pubsend_state=PUBSEDN_STATE_IDLE ;
+static uint8 *pubData;
+static uint16 publength;
+static uint8 pubDataBuf[ZK_JSON_BUF_SIZE];
+static u8 pub_en_flag=0;
+//
+static  char sendStringBuf3[128];
+
+static boolean_en pubsend_is_busy(void)
+{
+    if (pub_en_flag || pubsend_state != PUBSEDN_STATE_IDLE)
+    {
+        return BOOL_TRUE;
+    }
+    return BOOL_FALSE;
+}
+uint8 nbSendTcpData(uint8 *pData, uint16 length)
+{
+    const char *topic;
+    uint16 msg_id;
+
+    if (pData == 0 || length == 0 || length >= sizeof(pubDataBuf))
+    {
+        return NB_ERROR_SEND_FAIL;
+    }
+    if (pubsend_is_busy() == BOOL_TRUE)
+    {
+        return NB_ERROR_SEND_FAIL;
+    }
+
+    topic = zk_mqtt_get_pub_topic();
+    if (topic == 0)
+    {
+        return NB_ERROR_SEND_FAIL;
+    }
+    msg_id = zk_mqtt_next_packet_id();
+    snprintf(sendStringBuf3, sizeof(sendStringBuf3),
+             "AT+QMTPUBEX=0,%u,1,0,\"%s\",%d\r\n",
+             msg_id, topic, length);
+    memcpy(pubDataBuf, pData, length);
+    pubData=pubDataBuf;
+    publength=length;
+    sendCommand((uint8*)sendStringBuf3,strlen(sendStringBuf3));
+    printf_buf(pubData,publength);
+    pub_timer=Timer_GetTickCount();
+    pub_en_flag=1;
+    return  NB_ERROR_NONE;
+}
+uint8 g4Send_MQTT_Data(char *topic,char *pData)
+{
+    const char *pub_topic;
+    uint16 msg_id;
+    uint16 length;
+
+    if (pData == 0)
+    {
+        return NB_ERROR_SEND_FAIL;
+    }
+    pub_topic = topic;
+#if ZK_PROTOCOL_ONLY
+    if(pub_topic == 0 || strncmp(pub_topic, "MS/", 3) != 0)
+    {
+        return NB_ERROR_SEND_FAIL;
+    }
+#else
+    if(pub_topic == 0 || strncmp(pub_topic, "MS/", 3) != 0)
+    {
+        pub_topic = zk_mqtt_get_pub_topic();
+    }
+    if (pub_topic == 0)
+    {
+        return NB_ERROR_SEND_FAIL;
+    }
+#endif
+    length = (uint16)strlen(pData);
+    if (length == 0 || length >= sizeof(pubDataBuf))
+    {
+        return NB_ERROR_SEND_FAIL;
+    }
+    if (pubsend_is_busy() == BOOL_TRUE)
+    {
+        return NB_ERROR_SEND_FAIL;
+    }
+
+    msg_id = zk_mqtt_next_packet_id();
+    snprintf(sendStringBuf3, sizeof(sendStringBuf3),
+             "AT+QMTPUBEX=0,%u,1,0,\"%s\",%d\r\n",
+             msg_id, pub_topic, length);
+    memcpy(pubDataBuf, pData, length);
+    pubData=pubDataBuf;
+    publength=length;
+    sendCommand((uint8*)sendStringBuf3,strlen(sendStringBuf3));
+    pub_timer=Timer_GetTickCount();
+    pub_en_flag=1;
+    return  NB_ERROR_NONE;
+}
+
+boolean_en pubsend_state_finish()
+{
+    if( pubsend_state==PUBSEDN_STATE_SENDFINISH)
+    {
+     return BOOL_TRUE ;
+    }
+    else{
+    return BOOL_FALSE;}
+    
+}
+boolean_en pubsend_state_idle()
+{
+    if( pubsend_state==PUBSEDN_STATE_IDLE)
+    {
+     return BOOL_TRUE ;
+    
+    }
+    else
+    {
+    return BOOL_FALSE;
+    }    
+}
+
+
+void pubsend_state_set_idle(void)
+{
+    pub_en_flag=0;
+    pubsend_state=PUBSEDN_STATE_IDLE;
+}
+
+void nbSendTcpData_sm(void)
+{
+    switch (pubsend_state)
+    {
+        case PUBSEDN_STATE_IDLE:
+                    if(pub_en_flag==1)
+                    {
+                        pub_en_flag=0;
+                        pubsend_state=PUBSEDN_STATE_SEND;
+                    }
+             break;
+        case PUBSEDN_STATE_SEND:             
+                  if(Timer_PassedDelay(pub_timer, 100))
+                  {  
+                       sendCommand(pubData,publength) ;//��������
+                       pubsend_state=PUBSEDN_STATE_SENDFINISH;
+                  }
+               break;
+        case  PUBSEDN_STATE_SENDFINISH:
+                 pubsend_state=PUBSEDN_STATE_IDLE;//����ط�Ҫ�ص�
+              break;
+        
+        default:
+              break;
+    }
+}
+
+
+
+
+
+/**
+*@brief   �첽��ȡsim��ICCID
+*@param	  simCardICCIDLength��ICCID����
+*@param	  simCardICCID��ICCID����
+*@return  1����ȡ�ɹ���0������ʧ��
+*/
+
+
+uint8 geteSimCardICCID(uint8 *simCardICCIDLength, uint8 *simCardICCID) 
+{
+    //+QCCID: 89860492192071686658
+     uint8 *p;
+    *simCardICCIDLength = 0;
+   // p = sendCommandAndReceiveResponse("AT+QCCID\r\n", 10, "+QCCID", 100, 1);
+    send_AT_Command_machine_star("AT+QCCID\r\n",strlen("AT+QCCID\r\n"),"+QCCID",100,1);  //
+    if (p == 0) 
+    {
+       // nbEnterIDLE();
+   extern void resetTcpState(void);
+       resetTcpState();
+        return 0;
+    }
+
+    //��λ����һ������
+    while (*p != ' ')p++;
+    p++;
+
+    //�������ŵ�simCardICCID
+    while (*p != '\r') {
+        simCardICCID[*simCardICCIDLength] = *p;
+        if (++*simCardICCIDLength >= 30)
+        {
+            *simCardICCIDLength = 0;
+            return 0;
+        }
+        p++;
+    }
+    return 1;
+}
+
+/**
+*@brief   ��ȡ�ź�ǿ��
+*@return  0���ź�����1���ź��У�2���ź�ǿ
+*/
+/*
+uint8 getSignalQuality(void) {
+     uint8 rsrq = 0, rsrp = 0;
+     uint8 *p = sendCommandAndReceiveResponse("AT+CESQ\r\n", 9, "+CESQ", 100, 1);
+    if (p == 0) {
+        nbEnterIDLE();
+        return 0;
+    }
+
+    while (*p != '\r')p++;//��λ�����һ������
+    while (*p != ',')p--;//�˻ص����һ��','
+    p--;
+    while (*p != ',')p--;//�˻ص������ڶ���','
+    p++;
+
+    while (*p != ',') {
+        rsrq = rsrq * 10 + *p - '0';
+        p++;
+    }
+    p++;
+    while (*p != '\r') {
+        rsrp = rsrp * 10 + *p - '0';
+        p++;
+    }
+
+#ifdef NB_DEBUG_PRINT
+    printf("nb:signal:%d,%d\r\n", rsrq, rsrp);
+#endif
+    if (rsrq >= 26 && rsrp >= 41) {
+        return 2;
+    } else if (rsrq >= 18 && rsrp >= 31) {
+        return 1;
+    }
+    return 0;
+}
+*/
+/**
+*@brief   ���num�Ƿ�Ϊ�����ַ�
+*@param	  num���ַ�����
+*@return  1�������֣�0����������
+*/
+/*
+static uint8 isNumber(char num) {
+    if (num >= '0' && num <= '9') {
+        return 1;
+    }
+    return 0;
+}
+*/
+/**
+*@brief   ��ȡ��ǰ����ʱ��
+*@param	  sTime��ʱ��
+*@param	  sDate������
+*@param	  timeZone��ʱ������ 1/4 СʱΪ��λ��ʾ����ʱ��� GMT ֮���ʱ������
+*         ��Χ��-47 ~ +48�����磬2019/05/06,22:10:00+8 ��ʾ2019��5��6�ţ�22:10:00GMT+2Сʱ��
+*@return  1����ȡ�ɹ���0����ȡʧ��
+*/
+/*
+uint8 getCurrentTime(TimeType *sTime,
+                     DateType *sDate,
+                     signed char *timeZone) {
+     uint8 *p;
+     uint8 i = 0;
+     signed char timeZoneSign = 1;
+     uint8 msgLength;
+    if (timeZone == 0)return 0;
+    p = sendCommandAndReceiveResponse("AT+CCLK?\r\n", 10, "+CCLK", 100, 1);
+    //+CCLK: "2022/05/06,10:01:35+32"
+    if (p == 0) {
+        nbEnterIDLE();
+        return 0;
+    }
+
+    msgLength = strlen((char const *) p);
+
+
+    //�ҵ���һ�����֣���������λ
+    while (i < msgLength) {
+        if (isNumber(p[i])) {
+            break;
+        }
+        i++;
+    }
+    if (i >= msgLength) {
+        return 0;
+    }
+
+    //��
+    i += 2;
+    if (!isNumber(p[i]) || !isNumber(p[i + 1])) {
+        return 0;
+    }
+    sDate->Year = (p[i] - '0') * 10 + p[i + 1] - '0';
+    if (sDate->Year > 99) {
+        return 0;
+    }
+    //��
+    i += 2;
+    if (p[i] != '/')return 0;
+    i++;
+    if (!isNumber(p[i]) || !isNumber(p[i + 1])) {
+        return 0;
+    }
+    sDate->Month = (p[i] - '0') * 10 + p[i + 1] - '0';
+    if (sDate->Month > 12) {
+        return 0;
+    }
+    //��
+    i += 2;
+    if (p[i] != '/')return 0;
+    i++;
+    if (!isNumber(p[i]) || !isNumber(p[i + 1])) {
+        return 0;
+    }
+    sDate->Date = (p[i] - '0') * 10 + p[i + 1] - '0';
+    if (sDate->Date > 31) {
+        return 0;
+    }
+
+    //ʱ
+    i += 2;
+    if (p[i] != ',')return 0;
+    i++;
+    if (!isNumber(p[i]) || !isNumber(p[i + 1])) {
+        return 0;
+    }
+    sTime->Hours = (p[i] - '0') * 10 + p[i + 1] - '0';
+    if (sTime->Hours > 24) {
+        return 0;
+    }
+    //��
+    i += 2;
+    if (p[i] != ':')return 0;
+    i++;
+    if (!isNumber(p[i]) || !isNumber(p[i + 1])) {
+        return 0;
+    }
+    sTime->Minutes = (p[i] - '0') * 10 + p[i + 1] - '0';
+    if (sTime->Minutes > 60) {
+        return 0;
+    }
+    //��
+    i += 2;
+    if (p[i] != ':')return 0;
+    i++;
+    if (!isNumber(p[i]) || !isNumber(p[i + 1])) {
+        return 0;
+    }
+    sTime->Seconds = (p[i] - '0') * 10 + p[i + 1] - '0';
+    if (sTime->Seconds > 60) {
+        return 0;
+    }
+
+    *timeZone = 0;
+    i += 2;
+    timeZoneSign = p[i] == '+' ? 1 : -1;
+    i++;
+    if (i >= msgLength) {
+        return 0;
+    }
+
+    while (isNumber(p[i])) {
+        *timeZone = *timeZone * 10 + p[i] - '0';
+        i++;
+        if (i >= msgLength) {
+            return 0;
+        }
+    }
+
+    *timeZone *= timeZoneSign;
+
+    return 1;
+}*/
+
+/**
+*@brief   ���ϱ���URC�ж�ȡ�������·�������
+*@param	  pData���������·������ݻ���
+*@param	  pLength���������·������ݳ���
+*@param	  recvURC��nbģ���ϱ���URC
+*@return  1����ȡ�ɹ���0����ȡʧ��
+*/
+
+static uint8 nb_payload_is_quoted(char *line_start, char *payload_start)
+{
+    char *p;
+
+    p = payload_start;
+    while (p > line_start)
+    {
+        --p;
+        if (*p == ' ' || *p == '\t')
+        {
+            continue;
+        }
+        return (*p == '"') ? 1 : 0;
+    }
+    return 0;
+}
+
+static uint16 nb_unescape_qmtrecv_payload(uint8 *payload, uint16 length)
+{
+    uint16 src;
+    uint16 dst;
+
+    src = 0;
+    dst = 0;
+    while (src < length)
+    {
+        if (payload[src] == '\\' && (src + 1) < length)
+        {
+            if (payload[src + 1] == '"' ||
+                payload[src + 1] == '\\' ||
+                payload[src + 1] == '/')
+            {
+                payload[dst++] = payload[src + 1];
+                src += 2;
+                continue;
+            }
+        }
+        payload[dst++] = payload[src++];
+    }
+    payload[dst] = 0;
+    return dst;
+}
+
+static uint8 readTcpData(uint8 *pData, uint16 *pLength, uint8 *recvURC)
+{
+    char *line_start;
+    char *payload_start;
+    char *payload_end;
+    uint16 len;
+    uint8 payload_quoted;
+
+    *pLength = 0;
+    line_start = (char *)recvURC;
+    payload_start = strchr(line_start, '{');
+    if (payload_start == 0)
+    {
+        return 0;
+    }
+
+    payload_end = strrchr(payload_start, '}');
+    if (payload_end == 0 || payload_end < payload_start)
+    {
+        return 0;
+    }
+
+    len = (uint16)(payload_end - payload_start + 1);
+    if (len >= RECV_BUF_LENGTH)
+    {
+        return 0;
+    }
+
+    payload_quoted = nb_payload_is_quoted(line_start, payload_start);
+    memmove(pData, payload_start, len);
+    pData[len] = 0;
+    if (payload_quoted)
+    {
+        len = nb_unescape_qmtrecv_payload(pData, len);
+    }
+    *pLength = len;
+    return 1;
+}
+
+static boolean_en nb_is_link_lost_line(uint8 *buf)
+{
+    if (strstr((const char *)buf, "+QIURC: \"pdpdeact\"") ||
+        strstr((const char *)buf, "+QMTSTAT: 0,1") ||
+        strstr((const char *)buf, "+QMTSTAT: 0,2") ||
+        strstr((const char *)buf, "+QMTSTAT: 0,3"))
+    {
+        return BOOL_TRUE;
+    }
+    return BOOL_FALSE;
+}
+
+/**
+*@brief   NBģ���ϱ���URC 
+*@param	  buf��ģ���ϱ���URC
+*@return  ��
+*/
+static void parseResult(uint8 *buf)                //�������
+    { 
+     uint16 dataLength;
+    switch (state) 
+        {
+        case NB_STATE_CONNECTING:
+            /*
+            if (strstr((const char *) buf, "+QIOPEN: 0,0")) {//���ӷ������ɹ�
+                state = NB_STATE_CONNECTED;
+                reconnectCount = 0;
+                onNBEvent(NB_EVENT_CONNECTED, 0, 0);
+            } else if (strstr((const char *) buf, "ERROR")) {//���ӷ�����ʧ��
+                sendCommandAndReceiveResponse("AT+QICLOSE=0\r\n", 14, "OK", 20, 0);
+                if (reconnectCount >= MAX_RECONNECT_COUNT) {                                           
+                    resetNbModule();
+                    nbEnterIDLE();
+                    onNBEvent(NB_EVENT_CONNECT_TIME_OUT, 0, 0);
+                }
+            }*/
+            break;
+
+        case NB_STATE_CONNECTED:
+        /*
+            if (strstr((const char *) buf, "closed")) {//�����������Ͽ�����
+                onNBEvent(NB_EVENT_LOST_CONNECTION, 0, 0);
+                nbEnterIDLE();
+            } else if (strstr((const char *) buf, "ERROR")) {
+                nbEnterIDLE();
+            } else */  
+        
+        
+            if (nb_is_link_lost_line(buf))
+            {
+                extern void resetTcpState(void);
+                onNBEvent(NB_EVENT_LOST_CONNECTION, 0, 0);
+                resetTcpState();
+            }
+            else if (strstr((const char *) buf,"+QMTRECV:"))
+            {
+                    //+QMTRECV: 0,0,"DL-WDJ","erewre"       "+QIURC: \"recv\""
+                    //�յ��������·�����Ϣ
+                  //  printf("NB:here3\r\n");
+                   //  delayMs(10);//�˴���ʱ�����ȴ���
+                    
+                   if (readTcpData(stringBuf, &dataLength, buf) > 0)
+                     {   //��ȡ�����MQTT�������ݵ� stringBuf  
+                        
+                              //  printf("NB:recv payload buf ok :%d,%s\r\n", dataLength, stringBuf);
+                                extern   void printf_buf2(const char* str, u8* buf, u16 length);
+                           //    printf_buf2(stringBuf,stringBuf,dataLength);
+                                
+                                if(OTA_ENABLE==0)//��OTA�¶�ȡ����������
+                                {
+                                   recive_flag_MQTT();
+                                   onNBEvent(NB_EVENT_DATA, stringBuf, dataLength);//ת�Ƶ�gateway.c�д���  ---------------------------------------- ����ط���JSON���ݣ���Ҫ�������ݴ���
+                                }
+                            
+                        
+                    } 
+                    else 
+                    {
+
+                      //  printf("NB:recv payload buf NG :%d,%x\r\n", dataLength, stringBuf);
+                      //   printf("nb:read tcp data fail\r\n");
+
+                     }
+                
+                
+                   /*
+                    } else if (strstr((const char *) buf, "SEND OK")) {
+                       
+                        onNBEvent(NB_EVENT_UPLOAD_COMPLETE, 0, 0);
+                    }
+                    break;
+                   */
+            }
+     break;
+    }
+}
+
+
+void SET_NB_STAT_EPOWER_DOWN(void)
+{
+    state = NB_STATE_POWER_DOWN;  
+}
+
+
+
+
+
+u8   OTA_ENABLE_state=0;
+
+void set_OTA_ENABLE(void)
+{
+     OTA_ENABLE_state=1;//�͸������ϱ��Ǳ�֪ͨ��־
+    
+     _4G_OTA_machine_contextid();//����ģ������,��������·��
+    
+}
+void changea_to_MQTT_modle(void)
+{
+    
+    OTA_ENABLE=0;//�ر�OTA���е�MQTT
+    OTA_ENABLE_state=0;//�͸������ϱ��Ǳ�֪ͨ��־
+    gateway_state=GATEWAY_STATE_CYCLIC_SCAN_AND_REAPORT_DRIVER_DATA;            
+    //����OTA����ǰ��MQTT����ָ��
+    _4G_configModule_star_from_onestate( CONNECT_CONFIG_AT_qmtping) ;    //��ĳһ��״̬��ʼ����,����MQTT����ָ��  
+}
+boolean_en OTA_ENABLE_IS_SET(void)
+{
+    
+    if(OTA_ENABLE)
+    {
+        return BOOL_TRUE;
+    }
+    else
+    {
+       return BOOL_FALSE;
+    }
+    
+}
+
+
+
+
+
+
+/**
+*@brief   4Gģ��״̬����ʵ���Զ����ӷ������ͻص��¼�
+*@return  ��
+*/
+void nbModuleProcess(void) 
+{     
+
+    switch (state) 
+    {
+        case NB_STATE_POWER_DOWN:
+
+        if(OTA_ENABLE)
+        {
+            
+
+        }
+        else
+        {
+           _4G_configModule_machine_star();//ģ������
+        }
+            state = NB_STATE_CONNECTED;
+            break;
+ 
+        case NB_STATE_NOT_CONNECT:     
+            /*            
+            sendCommandAndReceiveResponse("ATE0\r\n", 6, "OK", 10, 0);
+            state = NB_STATE_CONNECTING;
+            connectServer();                                                //��������?
+            connectingTimer = Timer_GetTickCount();
+           */
+            break;
+        case NB_STATE_CONNECTING:
+            /* 
+            if (Timer_PassedDelay(connectingTimer, CONNECTING_MAX_WAIT_TIME * 1000)) 
+            {
+                if (++reconnectCount > MAX_RECONNECT_COUNT)   //30��  10��������
+                {
+                    reconnectCount = 0;
+
+                    resetNbModule();
+                    nbEnterIDLE();
+                    onNBEvent(NB_EVENT_CONNECT_TIME_OUT , 0, 0);  
+                    break;
+                }
+
+                connectServer();//����   //20��������
+                connectingTimer = Timer_GetTickCount();
+                break;
+            }
+             */
+        case   NB_STATE_CONNECTED:
+        case   NB_STATE_IDLE:
+            
+            /* ���ﱣ�����룬��������ת����
+            if (state == NB_STATE_IDLE && Timer_PassedDelay(idleTimer, CONNECTING_MAX_WAIT_TIME * 1000)) 
+                {
+#ifdef NB_DEBUG_PRINT
+                printf("nb:idle time out\r\n");
+#endif
+                state = NB_STATE_NOT_CONNECT;
+            }*/
+//printf("NB:here\n"); 
+                
+               if(OTA_ENABLE)//OTAģʽ��HTTP��       //���յ��ǹ̼��������û����ݰ�
+                {
+                    if(  mcu_copy_firmware_getdata() ==BOOL_TRUE)
+                    {   
+                           //  
+                         while (readLine_get_firmware(stringBuf, &recvLength,&pack_length)) 
+                        { 
+                            pack_length=0;
+                            printf("0MCU�洢1recvLength=%d\n",recvLength);
+                            printf_buf(stringBuf,recvLength);           //  �����Ѿ�����̼���Ϣ�����յ��ǹ̼�����
+                            {
+                               OTA_STROE_MCU(stringBuf,recvLength-2);   //-2��ȥ��β����\r\n
+                            }
+                            recvLength = 0; 
+                        }
+                     }
+                }
+                else         //MQTTģʽ
+                {
+                      if(_4G_configModule_machine_finish() ==BOOL_TRUE)
+                      {  //ģ���������
+                             
+                            while (readLine(stringBuf, &recvLength, 0)) 
+                            {
+//                                printf("stringBuf\n");
+//                                printf("stringBuf=%s\n",stringBuf);
+                                parseResult(stringBuf);//������
+                                
+                                recvLength = 0;
+                             }
+                      }
+               }
+              break;
+    }//switch����
+      
+}
