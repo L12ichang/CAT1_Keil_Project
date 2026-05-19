@@ -177,8 +177,6 @@ int main(void)
     sys_bl0942_init();
     sys_pow_drop_check_inint();  
     mac_reset();
-    // ZK 协议独占 4G/MQTT 启动链路，先屏蔽旧激活流程避免抢占模组状态机。
-    // app_activate_init();
     __enable_irq();
 
 
@@ -229,18 +227,11 @@ int main(void)
      }
     sys_pow_drop_check_process();
     danger_current_check_process();
-    // 旧二进制协议会通过 sendTcpData() 向当前 ZK MQTT 主题发包，运行期先禁用。
-    // appProcess();
     error_report_process();
     sys_pwm_process();
     sys_temp_low_protect_process();
     zk_work_plan_process();
 
-    // 旧 HTTP 激活链路会打断当前 ZK MQTT 会话，运行期先禁用。
-    // app_activate_process();
-
-    // http_congfig_fsm();
-    // http_post_fsm();
     json_process ();
   }
 }

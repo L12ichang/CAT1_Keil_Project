@@ -13,7 +13,7 @@ def read_text(relative_path: str) -> str:
 
 class Phase2LegacyCleanupTests(unittest.TestCase):
     def test_legacy_protocol_disabled_in_main_loop(self):
-        """旧协议函数在main.c中已被注释禁用"""
+        """旧协议函数不再出现在main.c主循环"""
         main_c = read_text("Core/Src/main.c")
 
         for symbol in [
@@ -24,14 +24,7 @@ class Phase2LegacyCleanupTests(unittest.TestCase):
             "appProcess(",
         ]:
             with self.subTest(symbol=symbol):
-                # 每个出现都应是被注释的 (// 开头)
-                for line in main_c.splitlines():
-                    if symbol in line:
-                        stripped = line.strip()
-                        self.assertTrue(
-                            stripped.startswith("//"),
-                            f"{symbol} found in active code: '{stripped}'"
-                        )
+                self.assertNotIn(symbol, main_c)
 
     def test_sys_tick_still_calls_legacy_timer(self):
         """sys_tick.c仍调用app_activate_timer()（已知遗留项，待后续清理）"""
@@ -55,12 +48,16 @@ class Phase2LegacyCleanupTests(unittest.TestCase):
     def test_json_protocol_routes_to_zk_handlers_only(self):
         json_protocol_c = read_text("Core/Src/LampProtocolLib/Json_Protocol.c")
         mqtt_zk_c = read_text("Core/Src/LampProtocolLib/mqtt_zk_protocol.c")
+        removed_terms = [
+            "get_" + "realtime_data",
+            "set_" + "level",
+            "Power" + "Data",
+        ]
 
-        # 旧协议cmd处理已禁用
-        self.assertIn("旧协议已禁用", json_protocol_c)
-        self.assertIn("旧协议 cmd 处理已移除", json_protocol_c)
+        for term in removed_terms:
+            with self.subTest(term=term):
+                self.assertNotIn(term, json_protocol_c)
 
-        # Json入口只调用中科统一分发，具体handler顺序收口到mqtt_zk_protocol.c
         self.assertIn("zk_dispatch_message(root, header)", json_protocol_c)
         self.assertIn("zk_handle_property_read", mqtt_zk_c)
         self.assertIn("zk_handle_property_write", mqtt_zk_c)
@@ -74,10 +71,14 @@ class Phase2LegacyCleanupTests(unittest.TestCase):
 
     def test_legacy_binary_json_commands_disabled(self):
         json_protocol_c = read_text("Core/Src/LampProtocolLib/Json_Protocol.c")
+        removed_terms = [
+            "upLoad" + "Powerdata",
+            "mqtt_reply_" + "set_" + "level",
+        ]
 
-        # 旧的set_level/get_realtime_data命令在注释块中
-        self.assertIn("旧协议处理已禁用", json_protocol_c)
-        self.assertIn("旧协议 cmd 处理已移除", json_protocol_c)
+        for term in removed_terms:
+            with self.subTest(term=term):
+                self.assertNotIn(term, json_protocol_c)
 
 
 if __name__ == "__main__":

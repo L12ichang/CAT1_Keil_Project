@@ -187,7 +187,6 @@ void onNBEvent(uint8 subEvent, uint8 *pData, uint16 length)
 
         case NB_EVENT_DATA:
         //������ʼ--------------------------------------------------------------------------------------------------------------------------------------------------------
-     //   printf("Pdata=%s\n",temp);
               extern  void app_mqtt_rx(char * rx);//Json������
              app_mqtt_rx((char*)pData);
 

@@ -25,9 +25,9 @@ class KeilAppImageCheckTest(unittest.TestCase):
             self.assertIn("missing_keil_outputs", report.details)
             self.assertTrue(any("rebuild in Keil" in warning for warning in report.warnings))
 
-    def test_8000000_project_is_rejected_for_app_burning(self):
+    def test_non_app_project_is_rejected_for_app_burning(self):
         report = run_checks(
-            ROOT / "MDK-ARM-8000000" / "project.uvprojx",
+            ROOT / "MDK-ARM-LEGACY" / "project.uvprojx",
             app_base=APP_BASE,
             safe_end=APP_SAFE_END,
             require_fresh=False,

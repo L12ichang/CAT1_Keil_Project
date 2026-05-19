@@ -6,15 +6,14 @@
 
 - `MDK-ARM-8008000/project.uvprojx`
 
-不要把 `MDK-ARM-8000000/project.uvprojx` 作为本次 App 更新固件烧录入口。当前项目资料和旧构建产物显示：
+当前 App 更新固件只使用上述 Keil 入口。地址布局如下：
 
 - Bootloader 区域：`0x08000000`
 - App 区域：`0x08008000`
 - `MDK-ARM-8008000/out/cat1.map` 中 `__Vectors` 为 `0x08008000`
 - `MDK-ARM-8008000/out/cat1.sct` 中 `LR_IROM1` 为 `0x08008000`
-- `MDK-ARM-8000000/out/cat1.map` 中 `__Vectors` 为 `0x08000000`
 
-所以保留 Bootloader、只更新 App 时，只能烧录 8008000 工程重新生成的 App 产物。
+所以保留 Bootloader、只更新 App 时，只能烧录 `MDK-ARM-8008000` 工程重新生成的 App 产物。
 
 ## 烧录前检查
 
@@ -69,7 +68,7 @@ python3 tools/check_keil_app_image.py --skip-freshness
 - 优先使用 `MDK-ARM-8008000/out/cat1.hex`
 - 如果使用 `cat1.bin`，起始地址必须设置为 `0x08008000`
 - 不要执行 Full Chip Erase
-- 不要把 `MDK-ARM-8000000/out/cat1.bin` 当作本次 App 固件烧录
+- 不要使用非 `MDK-ARM-8008000` 目录生成的 App 产物
 
 ## 烧录后验证
 
