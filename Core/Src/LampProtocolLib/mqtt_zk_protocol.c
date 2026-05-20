@@ -504,6 +504,13 @@ static uint32 zk_get_effective_period_sec(int configured, uint32 default_value)
     return (configured > 0) ? (uint32)configured : default_value;
 }
 
+static void zk_sync_online_period_timers(uint32 now)
+{
+    zk_report_tick = now;
+    zk_time_request_tick = now;
+    zk_heartbeat_tick = now;
+}
+
 static int zk_get_run_status_code(void)
 {
     return (dim_level > 0U) ? 31 : 32;
@@ -1155,6 +1162,15 @@ static void zk_note_send_payload_result(uint8 result)
         zk_send_busy_fail_count = 0;
         printf("ZK MQTT publish slot busy cleared\r\n");
     }
+}
+
+static void zk_log_periodic_send_failure(const char *task_name)
+{
+    if (task_name == NULL)
+    {
+        return;
+    }
+    printf("ZK %s send failed, retry later\r\n", task_name);
 }
 
 static int zk_send_payload(const char *payload, uint16 length, const char *topic)
@@ -2124,9 +2140,15 @@ static void zk_control_restore_process(void)
 void zk_mqtt_session_process(void)
 {
     uint32 now;
+    uint32 report_period_ms;
+    uint32 time_request_period_ms;
+    uint32 heartbeat_period_ms;
 
     now = Timer_GetTickCount();
     zk_control_restore_process();
+    report_period_ms = zk_get_effective_period_sec(zk_dev_cfg.uPeriod, ZK_UPLOAD_INTERVAL_SEC) * 1000UL;
+    time_request_period_ms = zk_get_effective_period_sec(zk_dev_cfg.tPeriod, ZK_TIME_REQUEST_INTERVAL_SEC) * 1000UL;
+    heartbeat_period_ms = zk_get_effective_period_sec(zk_dev_cfg.hPeriod, ZK_HEARTBEAT_INTERVAL_SEC) * 1000UL;
 
     if (zk_reboot_pending == BOOL_TRUE && Timer_PassedDelay(zk_reboot_tick, 500))
     {
@@ -2210,29 +2232,38 @@ void zk_mqtt_session_process(void)
             return;
         }
 
-        if (zk_report_tick == 0 ||
-            Timer_PassedDelay(zk_report_tick, zk_get_effective_period_sec(zk_dev_cfg.uPeriod, ZK_UPLOAD_INTERVAL_SEC) * 1000UL))
+        if (Timer_PassedDelay(zk_report_tick, report_period_ms))
         {
             if (zk_publish_runtime_report(ZK_CT_CYCLIC) == 0)
             {
                 zk_report_tick = now;
             }
+            else
+            {
+                zk_log_periodic_send_failure("cyclic report");
+            }
             return;
         }
 
-        if (zk_time_request_tick == 0 ||
-            Timer_PassedDelay(zk_time_request_tick, zk_get_effective_period_sec(zk_dev_cfg.tPeriod, ZK_TIME_REQUEST_INTERVAL_SEC) * 1000UL))
+        if (Timer_PassedDelay(zk_time_request_tick, time_request_period_ms))
         {
             if (zk_publish_time_request() == 0)
             {
                 zk_time_request_tick = now;
             }
+            else
+            {
+                zk_log_periodic_send_failure("time request");
+            }
             return;
         }
 
-        if (Timer_PassedDelay(zk_heartbeat_tick, zk_get_effective_period_sec(zk_dev_cfg.hPeriod, ZK_HEARTBEAT_INTERVAL_SEC) * 1000UL))
+        if (Timer_PassedDelay(zk_heartbeat_tick, heartbeat_period_ms))
         {
-            (void)zk_publish_heartbeat_packet();
+            if (zk_publish_heartbeat_packet() != 0)
+            {
+                zk_log_periodic_send_failure("heartbeat");
+            }
             return;
         }
 
@@ -2332,6 +2363,7 @@ int zk_parse_login_response(const char *json_str, zk_login_response_t *response)
 boolean_en zk_mqtt_accept_login_ack(const zk_message_header_t *header)
 {
     const zk_mqtt_config_t *cfg;
+    uint32 now;
 
     if (header == NULL)
     {
@@ -2350,10 +2382,9 @@ boolean_en zk_mqtt_accept_login_ack(const zk_message_header_t *header)
         strcmp(header->sn, cfg->imei) == 0 &&
         (header->id[0] == '\0' || strcmp(header->id, ZK_LOGIN_REQUEST_ID) == 0))
     {
+        now = Timer_GetTickCount();
         zk_login_state = ZK_LOGIN_STATE_ONLINE;
-        zk_heartbeat_tick = Timer_GetTickCount();
-        zk_report_tick = 0;
-        zk_time_request_tick = 0;
+        zk_sync_online_period_timers(now);
         return BOOL_TRUE;
     }
     return BOOL_FALSE;
@@ -2685,9 +2716,7 @@ static boolean_en zk_json_pick_config_string(cJSON *object,
 
 static void zk_reset_config_period_timers(void)
 {
-    zk_report_tick = Timer_GetTickCount();
-    zk_time_request_tick = Timer_GetTickCount();
-    zk_heartbeat_tick = Timer_GetTickCount();
+    zk_sync_online_period_timers(Timer_GetTickCount());
 }
 
 static int zk_apply_gis_config(cJSON *gis, zk_device_config_t *config)

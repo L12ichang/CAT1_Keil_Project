@@ -193,6 +193,26 @@ class Phase4LoginHeartbeatTests(unittest.TestCase):
         self.assertIn("memset(&rtc, 0, sizeof(rtc));", sys_rtc_source)
         self.assertIn("rtc.ready = BOOL_TRUE;", sys_rtc_source)
 
+    def test_login_ack_starts_period_timers_without_immediate_first_run(self):
+        mqtt_source = read_text("Core/Src/LampProtocolLib/mqtt_zk_protocol.c")
+        login_ack = mqtt_source[
+            mqtt_source.index("boolean_en zk_mqtt_accept_login_ack"):
+            mqtt_source.index("boolean_en zk_mqtt_accept_heartbeat_ack")
+        ]
+        session = mqtt_source[
+            mqtt_source.index("void zk_mqtt_session_process"):
+            mqtt_source.index("static void zk_copy_json_string")
+        ]
+
+        self.assertIn("static void zk_sync_online_period_timers(uint32 now)", mqtt_source)
+        self.assertIn("zk_sync_online_period_timers(now);", login_ack)
+        self.assertNotIn("zk_report_tick = 0;", login_ack)
+        self.assertNotIn("zk_time_request_tick = 0;", login_ack)
+        self.assertIn("Timer_PassedDelay(zk_report_tick, report_period_ms)", session)
+        self.assertIn("Timer_PassedDelay(zk_time_request_tick, time_request_period_ms)", session)
+        self.assertNotIn("zk_report_tick == 0", session)
+        self.assertNotIn("zk_time_request_tick == 0", session)
+
     def test_patrol_uses_pending_flag_not_immediate_publish(self):
         mqtt_source = read_text("Core/Src/LampProtocolLib/mqtt_zk_protocol.c")
         ctrl_handler = mqtt_source[

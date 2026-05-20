@@ -58,9 +58,9 @@ class ZkPublishBackpressureTests(unittest.TestCase):
             "Timer_PassedDelay(zk_change_report_tick",
             "zk_patrol_report_pending == BOOL_TRUE",
             "zk_publish_runtime_report(ZK_CT_CHANGE)",
-            "zk_report_tick == 0",
-            "zk_time_request_tick == 0",
-            "zk_heartbeat_tick",
+            "Timer_PassedDelay(zk_report_tick, report_period_ms)",
+            "Timer_PassedDelay(zk_time_request_tick, time_request_period_ms)",
+            "Timer_PassedDelay(zk_heartbeat_tick, heartbeat_period_ms)",
         ]
         positions = [session.index(item) for item in order]
         self.assertEqual(positions, sorted(positions))
@@ -82,6 +82,10 @@ class ZkPublishBackpressureTests(unittest.TestCase):
             session.index("zk_publish_time_request()"),
             session.index("zk_time_request_tick = now;"),
         )
+        self.assertNotIn("zk_report_tick == 0", session)
+        self.assertNotIn("zk_time_request_tick == 0", session)
+        self.assertIn('zk_log_periodic_send_failure("cyclic report");', session)
+        self.assertIn('zk_log_periodic_send_failure("time request");', session)
 
     def test_pending_slots_are_lightweight_and_reset_with_session(self):
         source = read_source()
@@ -108,6 +112,24 @@ class ZkPublishBackpressureTests(unittest.TestCase):
         ):
             self.assertIn(flag, reset)
         self.assertIn("zk_change_report_tick = 0;", reset)
+
+    def test_login_ack_starts_full_period_windows_before_periodic_work(self):
+        source = read_source()
+        login_ack = block(source, "boolean_en zk_mqtt_accept_login_ack", "boolean_en zk_mqtt_accept_heartbeat_ack")
+        timer_sync = block(source, "static void zk_sync_online_period_timers", "static int zk_get_run_status_code")
+
+        self.assertIn("uint32 now;", login_ack)
+        self.assertIn("now = Timer_GetTickCount();", login_ack)
+        self.assertIn("zk_sync_online_period_timers(now);", login_ack)
+        self.assertNotIn("zk_report_tick = 0;", login_ack)
+        self.assertNotIn("zk_time_request_tick = 0;", login_ack)
+
+        for assignment in (
+            "zk_report_tick = now;",
+            "zk_time_request_tick = now;",
+            "zk_heartbeat_tick = now;",
+        ):
+            self.assertIn(assignment, timer_sync)
 
     def test_busy_protection_clears_local_publish_slot_after_three_failures(self):
         source = read_source()
