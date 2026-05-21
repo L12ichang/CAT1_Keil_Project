@@ -1,0 +1,47 @@
+# Keil MDK Project & User files
+*.uvgui.*
+*.uvguix.*
+*.uvoptx
+*.uvopt
+
+# Keil MDK Build Artifacts (Intermediate files)
+# Typically these are in Listings/ or Objects/ folders
+Listings/
+Objects/
+DebugConfig/
+RTE/
+
+# ARM Compiler / Keil intermediate extensions
+*.o
+*.obj
+*.d
+*.crf
+*.dep
+*.lnp
+*.map
+*.lst
+*.htm
+*.sct
+*._ia
+*.bak
+*.i
+*.axf
+*.elf
+
+# J-Link / Debugger files
+JLinkLog.txt
+*.dbgconf
+EventRecorderStub.scvd
+
+# Firmware Products (Explicitly allowed)
+# User wants to include compiled firmware
+!*.bin
+!*.hex
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# VS Code / IDE settings (optional but recommended to ignore)
+.vscode/
+.history/

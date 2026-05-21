@@ -2601,6 +2601,26 @@ static void zk_add_rtc_prop(cJSON *dt_root)
     cJSON_AddStringToObject(dt_root, "RTC", text);
 }
 
+static void zk_add_factory_prop(cJSON *dt_root)
+{
+    cJSON *item;
+
+    item = zk_cjson_create_tx_object("Factory");
+    if (item == NULL)
+    {
+        return;
+    }
+    cJSON_AddNumberToObject(item, "MID", MID);
+    cJSON_AddNumberToObject(item, "SET_OUTCUR", SET_OUTCUR);
+    cJSON_AddNumberToObject(item, "HWMAX_OUTCUR", HWMAX_OUTCUR);
+    cJSON_AddNumberToObject(item, "OUTPUT_CUR_SENSOR", OUTPUT_CUR_SENSOR);
+    cJSON_AddNumberToObject(item, "OP_PWM_OFFSET", OP_PWM_OFFSET);
+    cJSON_AddNumberToObject(item, "INNRE_TEMP_PRO_EN", INNRE_TEMP_PRO_EN);
+    cJSON_AddNumberToObject(item, "INNRE_TEMP_PRO", INNRE_TEMP_PRO);
+    cJSON_AddNumberToObject(item, "CX", CX);
+    cJSON_AddItemToObject(dt_root, "Factory", item);
+}
+
 static int zk_add_property_to_dt(cJSON *dt_root, const char *name)
 {
     if (strcmp(name, "DevInfo") == 0)
@@ -2642,6 +2662,10 @@ static int zk_add_property_to_dt(cJSON *dt_root, const char *name)
     else if (strcmp(name, "RTC") == 0)
     {
         zk_add_rtc_prop(dt_root);
+    }
+    else if (strcmp(name, "Factory") == 0)
+    {
+        zk_add_factory_prop(dt_root);
     }
     else if (strcmp(name, "Svr") == 0)
     {
@@ -2712,6 +2736,140 @@ static boolean_en zk_json_pick_config_string(cJSON *object,
     value[value_size - 1] = '\0';
     *err = 0;
     return BOOL_TRUE;
+}
+
+static void zk_factory_buf_set_u16be(u8 *factory_buf, u16 offset, u16 value)
+{
+    factory_buf[offset] = (u8)(value >> 8);
+    factory_buf[offset + 1] = (u8)(value & 0xFFu);
+}
+
+static int zk_apply_factory_config(cJSON *factory, u8 *factory_buf, int *changed)
+{
+    int value;
+    int err;
+
+    if (factory == NULL || factory_buf == NULL || changed == NULL)
+    {
+        return 4;
+    }
+    if (!cJSON_IsObject(factory))
+    {
+        return 4;
+    }
+
+    *changed = 0;
+
+    if (zk_json_pick_config_number(factory, "MID", &value, &err) == BOOL_TRUE)
+    {
+        if (err != 0)
+        {
+            return err;
+        }
+        if (value <= 0 || value >= 0xFF)
+        {
+            return 3;
+        }
+        factory_buf[0x05] = (u8)value;
+        *changed = 1;
+    }
+    if (zk_json_pick_config_number(factory, "SET_OUTCUR", &value, &err) == BOOL_TRUE)
+    {
+        if (err != 0)
+        {
+            return err;
+        }
+        if (value <= 0 || value >= 0xFFFF)
+        {
+            return 3;
+        }
+        zk_factory_buf_set_u16be(factory_buf, 0x10, (u16)value);
+        *changed = 1;
+    }
+    if (zk_json_pick_config_number(factory, "HWMAX_OUTCUR", &value, &err) == BOOL_TRUE)
+    {
+        if (err != 0)
+        {
+            return err;
+        }
+        if (value <= 0 || value >= 0xFFFF)
+        {
+            return 3;
+        }
+        zk_factory_buf_set_u16be(factory_buf, 0x12, (u16)value);
+        *changed = 1;
+    }
+    if (zk_json_pick_config_number(factory, "OUTPUT_CUR_SENSOR", &value, &err) == BOOL_TRUE)
+    {
+        if (err != 0)
+        {
+            return err;
+        }
+        if (value <= 0 || value >= 0xFFFF)
+        {
+            return 3;
+        }
+        zk_factory_buf_set_u16be(factory_buf, 0x14, (u16)value);
+        *changed = 1;
+    }
+    if (zk_json_pick_config_number(factory, "OP_PWM_OFFSET", &value, &err) == BOOL_TRUE)
+    {
+        if (err != 0)
+        {
+            return err;
+        }
+        if (value < 0 || value > 1000)
+        {
+            return 3;
+        }
+        zk_factory_buf_set_u16be(factory_buf, 0x16, (u16)value);
+        *changed = 1;
+    }
+    if (zk_json_pick_config_number(factory, "INNRE_TEMP_PRO_EN", &value, &err) == BOOL_TRUE)
+    {
+        if (err != 0)
+        {
+            return err;
+        }
+        if (value < 0 || value > 1)
+        {
+            return 3;
+        }
+        factory_buf[0x18] = (u8)value;
+        *changed = 1;
+    }
+    if (zk_json_pick_config_number(factory, "INNRE_TEMP_PRO", &value, &err) == BOOL_TRUE)
+    {
+        if (err != 0)
+        {
+            return err;
+        }
+        if (value < 0 || value > 127)
+        {
+            return 3;
+        }
+        factory_buf[0x19] = (u8)value;
+        *changed = 1;
+    }
+    if (zk_json_pick_config_number(factory, "CX", &value, &err) == BOOL_TRUE)
+    {
+        if (err != 0)
+        {
+            return err;
+        }
+        if (value <= 0 || value >= 0xFF)
+        {
+            return 3;
+        }
+        factory_buf[0x1E] = (u8)value;
+        *changed = 1;
+    }
+
+    if (*changed == 0)
+    {
+        return 1;
+    }
+    return 0;
 }
 
 static void zk_reset_config_period_timers(void)
@@ -3090,13 +3248,16 @@ boolean_en zk_handle_property_write(cJSON *root, const zk_message_header_t *head
     cJSON *sense;
     cJSON *svr;
     cJSON *rtc;
+    cJSON *factory;
     zk_device_config_t candidate;
     RtcTime_t rtc_value;
+    u8 factory_buf[128];
     int err;
     int handled;
     int persist_needed;
     int reset_period_timers;
     int update_rtc;
+    int factory_changed;
 
     if (root == NULL || header == NULL)
     {
@@ -3119,6 +3280,7 @@ boolean_en zk_handle_property_write(cJSON *root, const zk_message_header_t *head
     sense = cJSON_GetObjectItem(dt, "Sense");
     svr = cJSON_GetObjectItem(dt, "Svr");
     rtc = cJSON_GetObjectItem(dt, "RTC");
+    factory = cJSON_GetObjectItem(dt, "Factory");
 
     handled = 0;
     if (gis != NULL)
@@ -3141,6 +3303,10 @@ boolean_en zk_handle_property_write(cJSON *root, const zk_message_header_t *head
     {
         handled = 1;
     }
+    if (factory != NULL)
+    {
+        handled = 1;
+    }
     if (handled == 0)
     {
         zk_publish_simple_response(header, 1);
@@ -3151,6 +3317,8 @@ boolean_en zk_handle_property_write(cJSON *root, const zk_message_header_t *head
     persist_needed = (gis != NULL || dim != NULL || sense != NULL || svr != NULL) ? 1 : 0;
     reset_period_timers = (svr != NULL) ? 1 : 0;
     update_rtc = (rtc != NULL) ? 1 : 0;
+    memcpy(factory_buf, sys_data.fa_Parambuf, sizeof(factory_buf));
+    factory_changed = 0;
 
     if (gis != NULL && (err = zk_apply_gis_config(gis, &candidate)) != 0)
     {
@@ -3177,6 +3345,11 @@ boolean_en zk_handle_property_write(cJSON *root, const zk_message_header_t *head
         zk_publish_simple_response(header, err);
         return BOOL_TRUE;
     }
+    if (factory != NULL && (err = zk_apply_factory_config(factory, factory_buf, &factory_changed)) != 0)
+    {
+        zk_publish_simple_response(header, err);
+        return BOOL_TRUE;
+    }
 
     if (persist_needed != 0)
     {
@@ -3194,6 +3367,12 @@ boolean_en zk_handle_property_write(cJSON *root, const zk_message_header_t *head
     if (update_rtc != 0)
     {
         zk_set_local_rtc(&rtc_value);
+    }
+    if (factory_changed != 0)
+    {
+        memcpy(sys_data.fa_Parambuf, factory_buf, sizeof(factory_buf));
+        factory_user_load_data();
+        sys_data_store();
     }
 
     zk_publish_simple_response(header, 0);
