@@ -153,6 +153,7 @@ int zk_publish_response_with_dt(const zk_message_header_t *request,
                                 int err_code,
                                 zk_response_dt_builder_t builder,
                                 void *ctx);
+int zk_publish_alarm_report(uint16 alarm_id, u8 status, uint32 value, uint32 threshold);
 void zk_mqtt_session_process(void);
 void zk_runtime_stats_init(void);
 void zk_runtime_counter_process(void);

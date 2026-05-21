@@ -1848,6 +1848,16 @@
               <FilePath>..\Core\Src\LampProtocolLib\mqtt_zk_protocol.c</FilePath>
             </File>
             <File>
+              <FileName>zk_alarm.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\LampProtocolLib\zk_alarm.c</FilePath>
+            </File>
+            <File>
+              <FileName>zk_runtime_stats.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\LampProtocolLib\zk_runtime_stats.c</FilePath>
+            </File>
+            <File>
               <FileName>zk_work_plan.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\LampProtocolLib\zk_work_plan.c</FilePath>

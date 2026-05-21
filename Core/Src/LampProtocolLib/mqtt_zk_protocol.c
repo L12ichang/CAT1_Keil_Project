@@ -1,4 +1,6 @@
 #include "mqtt_zk_protocol.h"
+#include "zk_runtime_stats.h"
+#include "zk_alarm.h"
 #include "Portable.h"
 #include "TcpClient.h"
 #include "net_dim.h"
@@ -23,7 +25,7 @@ extern uint8 IMEI[18];
 extern uint8 simCardICCID[22];
 extern u8 online;
 extern char firm_name_buffer[256];
-extern u32 dangeo_out;
+
 
 static zk_mqtt_config_t zk_mqtt_cfg;
 static zk_device_config_t zk_dev_cfg;
@@ -64,35 +66,18 @@ static uint32 zk_control_restore_tick = 0;
 static uint32 zk_control_restore_delay_ms = 0;
 static int zk_control_restore_brightness = 0;
 
-/* 运行时间统计：非阻塞、低频更新（秒级），周期低频写Flash */
-static uint32 zk_boot_run_seconds;              /* 本次上电累计运行秒数 */
-static uint32 zk_boot_light_seconds;            /* 本次上电累计亮灯秒数（仅dim_level>0时累加） */
-static uint32 zk_total_run_base_seconds;        /* 历史总运行秒数 */
-static uint32 zk_total_light_base_seconds;      /* 历史总亮灯秒数 */
-static uint32 zk_runtime_last_tick;             /* 上次统计tick */
-static uint32 zk_runtime_flash_seq;
-static uint32 zk_runtime_last_save_tick;
-static boolean_en zk_runtime_loaded = BOOL_FALSE;
-static boolean_en zk_runtime_powerdown_saved = BOOL_FALSE;
 static uint32 zk_signal_query_tick;
 static char zk_signal_qeng_cmd[] = "AT+QENG=\"servingcell\"\r\n";
 static char zk_signal_qeng_resp[] = "OK";
 
 #define ZK_CNCTRL_SUPPORTED_CNS 1
 #define ZK_CNCTRL_LAST_MAX_SEC  (24UL * 60UL * 60UL)
-#define ZK_ALARM_POWER_DOWN_INDEX 7U
 #define ZK_SEND_BUSY_CLEAR_THRESHOLD 3U
 #define ZK_CHANGE_REPORT_SETTLE_MS 3000UL
 #define ZK_PROPERTY_FLASH_MAGIC 0x5A4B5052UL
 #define ZK_PROPERTY_FLASH_VERSION 1U
 #define ZK_PROPERTY_FLASH_MAIN_ADDR (DATAROM_STARTADDR + FLASH_PAGE_SIZE)
 #define ZK_PROPERTY_FLASH_BACKUP_ADDR (BAKDATAROM_STARTADDR + FLASH_PAGE_SIZE)
-#define ZK_RUNTIME_FLASH_MAGIC 0x5A4B5254UL
-#define ZK_RUNTIME_FLASH_VERSION 1U
-#define ZK_RUNTIME_FLASH_OFFSET 0x200UL
-#define ZK_RUNTIME_FLASH_MAIN_ADDR (ZK_PROPERTY_FLASH_MAIN_ADDR + ZK_RUNTIME_FLASH_OFFSET)
-#define ZK_RUNTIME_FLASH_BACKUP_ADDR (ZK_PROPERTY_FLASH_BACKUP_ADDR + ZK_RUNTIME_FLASH_OFFSET)
-#define ZK_RUNTIME_SAVE_INTERVAL_MS (6UL * 60UL * 60UL * 1000UL)
 #define ZK_SIGNAL_QUERY_INTERVAL_MS (4UL * 60UL * 1000UL)
 #define ZK_FLASH_SAVE_ERROR 99
 
@@ -123,46 +108,9 @@ typedef struct
     u32 checksum;
 } zk_property_flash_record_t;
 
-typedef struct
-{
-    u32 magic;
-    u16 version;
-    u16 size;
-    u32 seq;
-    u32 total_run_seconds;
-    u32 total_light_seconds;
-    u32 checksum;
-} zk_runtime_flash_record_t;
-
-typedef struct
-{
-    uint16 alm_id;
-    u8 pending;
-    u8 pending_status;
-    u8 reported;
-    u8 one_shot;
-    uint32 value;
-    uint32 threshold;
-} zk_alarm_state_t;
-
-static zk_alarm_state_t zk_alarm_states[] =
-{
-    {ZK_ALARM_OVER_VOLTAGE, 0, 0, 0, 0, 0, 3200},
-    {ZK_ALARM_UNDER_VOLTAGE, 0, 0, 0, 0, 0, 800},
-    {ZK_ALARM_OVER_CURRENT, 0, 0, 0, 0, 0, 0},
-    {ZK_ALARM_UNDER_CURRENT, 0, 0, 0, 0, 0, 0},
-    {ZK_ALARM_LIGHT_ON_FAIL, 0, 0, 0, 0, 0, 0},
-    {ZK_ALARM_LEAK_CURRENT, 0, 0, 0, 0, 0, 30},
-    {ZK_ALARM_DEVICE_FAULT, 0, 0, 0, 0, 0, 0},
-    {ZK_ALARM_POWER_DOWN, 0, 0, 0, 1, 0, 70},
-};
-#define ZK_ALARM_STATE_COUNT (sizeof(zk_alarm_states) / sizeof(zk_alarm_states[0]))
-
 static u32 zk_property_flash_seq = 0;
 
 static void zk_apply_brightness(int brightness);
-static void zk_alarm_reset_states(void);
-static boolean_en zk_alarm_process(void);
 
 static void *ZK_Cjson_Malloc(size_t size)
 {
@@ -584,6 +532,7 @@ static boolean_en zk_ota_is_busy(void)
     return BOOL_FALSE;
 }
 
+/** 根据IMEI计算MQTT登录密码：对IMEI分三段做CRC16取反后拼接为12位HEX */
 void zk_mqtt_generate_password(const char *imei, char *password)
 {
     uint16 p0;
@@ -751,148 +700,6 @@ static boolean_en zk_property_flash_store_config(const zk_device_config_t *confi
     return BOOL_FALSE;
 }
 
-static u16 zk_runtime_flash_checksum(zk_runtime_flash_record_t *record)
-{
-    return crc16_modbus_get((unsigned char *)record,
-                            sizeof(*record) - sizeof(record->checksum));
-}
-
-static boolean_en zk_runtime_record_valid(zk_runtime_flash_record_t *record)
-{
-    if (record->magic != ZK_RUNTIME_FLASH_MAGIC ||
-        record->version != ZK_RUNTIME_FLASH_VERSION ||
-        record->size != sizeof(*record))
-    {
-        return BOOL_FALSE;
-    }
-    return ((u16)record->checksum == zk_runtime_flash_checksum(record)) ? BOOL_TRUE : BOOL_FALSE;
-}
-
-static boolean_en zk_runtime_flash_read_record(u32 addr,
-                                               zk_runtime_flash_record_t *record)
-{
-    hw_flash_read_bytes(addr, (u8 *)record, sizeof(*record));
-    return zk_runtime_record_valid(record);
-}
-
-static void zk_runtime_record_from_current(zk_runtime_flash_record_t *record,
-                                           u32 seq)
-{
-    memset(record, 0, sizeof(*record));
-    record->magic = ZK_RUNTIME_FLASH_MAGIC;
-    record->version = ZK_RUNTIME_FLASH_VERSION;
-    record->size = (u16)sizeof(*record);
-    record->seq = seq;
-    record->total_run_seconds = zk_total_run_base_seconds + zk_boot_run_seconds;
-    record->total_light_seconds = zk_total_light_base_seconds + zk_boot_light_seconds;
-    record->checksum = zk_runtime_flash_checksum(record);
-}
-
-static boolean_en zk_runtime_flash_write_record(u32 addr,
-                                                zk_runtime_flash_record_t *record)
-{
-    hw_flash_write_bytes(addr, (u8 *)record, sizeof(*record));
-    return user_flash_check(addr, (u8 *)record, sizeof(*record));
-}
-
-static boolean_en zk_runtime_flash_store_current(void)
-{
-    zk_runtime_flash_record_t record;
-    u32 next_seq;
-    boolean_en main_ok;
-    boolean_en backup_ok;
-
-    next_seq = zk_runtime_flash_seq + 1U;
-    if (next_seq == 0U)
-    {
-        next_seq = 1U;
-    }
-
-    zk_runtime_record_from_current(&record, next_seq);
-    main_ok = zk_runtime_flash_write_record(ZK_RUNTIME_FLASH_MAIN_ADDR, &record);
-    backup_ok = zk_runtime_flash_write_record(ZK_RUNTIME_FLASH_BACKUP_ADDR, &record);
-    if (main_ok == BOOL_TRUE || backup_ok == BOOL_TRUE)
-    {
-        zk_runtime_flash_seq = next_seq;
-        return BOOL_TRUE;
-    }
-    return BOOL_FALSE;
-}
-
-static void zk_runtime_save_process(uint32 now)
-{
-    if (Timer_PassedDelay(zk_runtime_last_save_tick, ZK_RUNTIME_SAVE_INTERVAL_MS) == BOOL_TRUE)
-    {
-        (void)zk_runtime_flash_store_current();
-        zk_runtime_last_save_tick = now;
-    }
-
-    if (power_down_flag != 0)
-    {
-        if (zk_runtime_powerdown_saved == BOOL_FALSE)
-        {
-            (void)zk_runtime_flash_store_current();
-            zk_runtime_last_save_tick = now;
-            zk_runtime_powerdown_saved = BOOL_TRUE;
-        }
-    }
-    else
-    {
-        zk_runtime_powerdown_saved = BOOL_FALSE;
-    }
-}
-
-void zk_runtime_stats_init(void)
-{
-    zk_runtime_flash_record_t main_record;
-    zk_runtime_flash_record_t backup_record;
-    zk_runtime_flash_record_t *selected;
-    boolean_en main_ok;
-    boolean_en backup_ok;
-
-    if (zk_runtime_loaded == BOOL_TRUE)
-    {
-        return;
-    }
-
-    main_ok = zk_runtime_flash_read_record(ZK_RUNTIME_FLASH_MAIN_ADDR, &main_record);
-    backup_ok = zk_runtime_flash_read_record(ZK_RUNTIME_FLASH_BACKUP_ADDR, &backup_record);
-
-    selected = NULL;
-    if (main_ok == BOOL_TRUE && backup_ok == BOOL_TRUE)
-    {
-        selected = (main_record.seq >= backup_record.seq) ? &main_record : &backup_record;
-    }
-    else if (main_ok == BOOL_TRUE)
-    {
-        selected = &main_record;
-    }
-    else if (backup_ok == BOOL_TRUE)
-    {
-        selected = &backup_record;
-    }
-
-    if (selected != NULL)
-    {
-        zk_runtime_flash_seq = selected->seq;
-        zk_total_run_base_seconds = selected->total_run_seconds;
-        zk_total_light_base_seconds = selected->total_light_seconds;
-    }
-    else
-    {
-        zk_runtime_flash_seq = 0;
-        zk_total_run_base_seconds = 0;
-        zk_total_light_base_seconds = 0;
-    }
-
-    zk_boot_run_seconds = 0;
-    zk_boot_light_seconds = 0;
-    zk_runtime_last_tick = Timer_GetTickCount();
-    zk_runtime_last_save_tick = zk_runtime_last_tick;
-    zk_runtime_powerdown_saved = BOOL_FALSE;
-    zk_runtime_loaded = BOOL_TRUE;
-}
-
 static void zk_device_config_refresh_iccid_field(zk_device_config_t *config)
 {
     if (config == NULL)
@@ -954,6 +761,7 @@ void zk_device_config_refresh_iccid(void)
     zk_device_config_refresh_iccid_field(&zk_dev_cfg);
 }
 
+/** 初始化MQTT连接配置：加载IMEI、生成ClientId/Username/Password、订阅和发布Topic */
 boolean_en zk_mqtt_init(void)
 {
     char imei[16];
@@ -1479,44 +1287,6 @@ boolean_en zk_dispatch_message(cJSON *root, const zk_message_header_t *header)
     return BOOL_FALSE;
 }
 
-/* 运行时间非阻塞统计：秒级更新RAM，6小时或掉电时低频持久化 */
-void zk_runtime_counter_process(void)
-{
-    uint32 now;
-    uint32 elapsed_ms;
-    uint32 elapsed_seconds;
-
-    if (zk_runtime_loaded != BOOL_TRUE)
-    {
-        zk_runtime_stats_init();
-    }
-
-    now = Timer_GetTickCount();
-    if (zk_runtime_last_tick == 0)
-    {
-        zk_runtime_last_tick = now;
-        return;
-    }
-
-    elapsed_ms = now - zk_runtime_last_tick;
-    if (elapsed_ms < 1000UL)
-    {
-        zk_runtime_save_process(now);
-        return;                             /* 不到1秒不处理，降低CPU开销 */
-    }
-
-    elapsed_seconds = elapsed_ms / 1000UL;
-    zk_boot_run_seconds += elapsed_seconds;
-    zk_runtime_last_tick += elapsed_seconds * 1000UL;
-
-    /* 仅当灯亮时累加亮灯时间（dim_level>0表示灯亮） */
-    if (dim_level > 0U)
-    {
-        zk_boot_light_seconds += elapsed_seconds;
-    }
-
-    zk_runtime_save_process(now);
-}
 
 static boolean_en zk_signal_query_process(uint32 now)
 {
@@ -1543,20 +1313,28 @@ static boolean_en zk_signal_query_process(uint32 now)
     return BOOL_TRUE;
 }
 
+/** 添加运行时统计时间组到DT（调用前确保 zk_runtime_counter_process 已周期性执行） */
 static void zk_add_runtime_time_groups(cJSON *dt_root)
 {
     cJSON *run_tm;
     cJSON *light_tm;
     cJSON *light_total;
     cJSON *light_run;
-    uint32 run_minutes;                     /* 本次上电运行分钟 */
-    uint32 light_run_minutes;               /* 本次上电亮灯分钟 */
+    uint32 run_minutes;
+    uint32 light_run_minutes;
+    uint32 total_run;
+    uint32 total_light;
+    uint32 boot_run;
+    uint32 boot_light;
 
-    /* 先更新统计，确保上报的是最新累计值 */
-    zk_runtime_counter_process();
+    /* 通过访问函数获取最新统计值（zk_runtime_counter_process 周期更新RAM） */
+    boot_run = zk_runtime_get_boot_run_seconds();
+    boot_light = zk_runtime_get_boot_light_seconds();
+    total_run = zk_runtime_get_total_run_seconds();
+    total_light = zk_runtime_get_total_light_seconds();
 
-    run_minutes = zk_boot_run_seconds / 60U;
-    light_run_minutes = zk_boot_light_seconds / 60U;
+    run_minutes = boot_run / 60U;
+    light_run_minutes = boot_light / 60U;
 
     run_tm = zk_cjson_create_tx_object("RunTm");
     light_tm = zk_cjson_create_tx_object("LightTm");
@@ -1567,14 +1345,14 @@ static void zk_add_runtime_time_groups(cJSON *dt_root)
         return;
     }
 
-    /* RunTm.tTime = Flash历史累计 + 本次上电累计，单位分钟 */
-    cJSON_AddNumberToObject(run_tm, "tTime", (double)((zk_total_run_base_seconds + zk_boot_run_seconds) / 60U));
+    /* RunTm.tTime = 历史累计 + 本次上电累计，单位分钟 */
+    cJSON_AddNumberToObject(run_tm, "tTime", (double)(total_run / 60U));
     /* RunTm.rTime = 本次上电运行分钟 */
     cJSON_AddNumberToObject(run_tm, "rTime", (double)run_minutes);
     cJSON_AddItemToObject(dt_root, "RunTm", run_tm);
 
-    /* LightTm.tLtTime = Flash历史亮灯累计 + 本次亮灯累计，单位分钟 */
-    cJSON_AddItemToArray(light_total, cJSON_CreateNumber((double)((zk_total_light_base_seconds + zk_boot_light_seconds) / 60U)));
+    /* LightTm.tLtTime = 历史亮灯累计 + 本次亮灯累计，单位分钟 */
+    cJSON_AddItemToArray(light_total, cJSON_CreateNumber((double)(total_light / 60U)));
     /* LightTm.rLtTime = 本次上电亮灯分钟（关灯后保持历史值不归零） */
     cJSON_AddItemToArray(light_run, cJSON_CreateNumber((double)light_run_minutes));
     cJSON_AddItemToObject(light_tm, "tLtTime", light_total);
@@ -1779,114 +1557,7 @@ static int zk_publish_time_request(void)
     return 0;
 }
 
-static void zk_alarm_reset_states(void)
-{
-    uint32 i;
-
-    for (i = 0; i < ZK_ALARM_STATE_COUNT; ++i)
-    {
-        zk_alarm_states[i].pending = 0;
-        zk_alarm_states[i].pending_status = 0;
-        zk_alarm_states[i].reported = 0;
-        zk_alarm_states[i].value = 0;
-    }
-}
-
-static uint32 zk_alarm_current_threshold(uint32 percent)
-{
-    if (SET_OUTCUR == 0)
-    {
-        return 0;
-    }
-    return ((uint32)SET_OUTCUR * percent) / 100U;
-}
-
-static uint32 zk_alarm_temperature_value(void)
-{
-    signed short temp;
-
-    temp = Ntctemp.Ntctemp;
-    if (temp <= 0)
-    {
-        return 0;
-    }
-    return (uint32)((temp + 5) / 10);
-}
-
-static uint32 zk_alarm_temperature_threshold(void)
-{
-    if (INNRE_TEMP_PRO <= 0)
-    {
-        return 0;
-    }
-    return (uint32)INNRE_TEMP_PRO;
-}
-
-static void zk_alarm_update_level(zk_alarm_state_t *alarm, u8 active, uint32 value, uint32 threshold)
-{
-    if (alarm == NULL)
-    {
-        return;
-    }
-
-    alarm->value = value;
-    alarm->threshold = threshold;
-
-    if (active)
-    {
-        if (alarm->pending && alarm->pending_status == 0)
-        {
-            alarm->pending = 0;
-        }
-        if (alarm->reported == 0)
-        {
-            alarm->pending = 1;
-            alarm->pending_status = 1;
-        }
-    }
-    else
-    {
-        if (alarm->pending && alarm->pending_status != 0)
-        {
-            alarm->pending = 0;
-        }
-        if (alarm->reported != 0)
-        {
-            alarm->pending = 1;
-            alarm->pending_status = 0;
-        }
-    }
-}
-
-static void zk_alarm_update_power_down(void)
-{
-    zk_alarm_state_t *alarm;
-
-    alarm = &zk_alarm_states[ZK_ALARM_POWER_DOWN_INDEX];
-    alarm->value = ac_voltage_8209;
-    alarm->threshold = 70;
-    if (power_down_flag != 0 && alarm->pending == 0)
-    {
-        alarm->pending = 1;
-        alarm->pending_status = 1;
-    }
-}
-
-static void zk_alarm_collect_sources(void)
-{
-    zk_alarm_update_level(&zk_alarm_states[0], Error_3_OV ? 1 : 0, ac_voltage_8209, 3200);
-    zk_alarm_update_level(&zk_alarm_states[1], Error_4_LV ? 1 : 0, ac_voltage_8209, 800);
-    zk_alarm_update_level(&zk_alarm_states[2], Error_1_OL ? 1 : 0, Io_value, zk_alarm_current_threshold(150));
-    zk_alarm_update_level(&zk_alarm_states[3], Error_Out_LV ? 1 : 0, Io_value, zk_alarm_current_threshold(80));
-    zk_alarm_update_level(&zk_alarm_states[4], Error_0_linght ? 1 : 0, Po_value, 0);
-    zk_alarm_update_level(&zk_alarm_states[5], danger_current_warn ? 1 : 0, dangeo_out, 30);
-    zk_alarm_update_level(&zk_alarm_states[6], driver_temperarure_warn ? 1 : 0,
-                          zk_alarm_temperature_value(),
-                          zk_alarm_temperature_threshold());
-    zk_alarm_update_power_down();
-}
-
-static int zk_publish_alarm_report(uint16 alarm_id, u8 status, uint32 value, uint32 threshold)
+int zk_publish_alarm_report(uint16 alarm_id, u8 status, uint32 value, uint32 threshold)
 {
     zk_message_header_t header;
     cJSON *root;
@@ -1943,47 +1614,6 @@ static int zk_publish_alarm_report(uint16 alarm_id, u8 status, uint32 value, uin
 
     cJSON_Delete(root);
     return 0;
-}
-
-static boolean_en zk_alarm_publish_pending(void)
-{
-    uint32 i;
-    u8 status;
-
-    for (i = 0; i < ZK_ALARM_STATE_COUNT; ++i)
-    {
-        if (zk_alarm_states[i].pending == 0)
-        {
-            continue;
-        }
-
-        status = zk_alarm_states[i].pending_status ? 1 : 0;
-        if (zk_publish_alarm_report(zk_alarm_states[i].alm_id,
-                                    status,
-                                    zk_alarm_states[i].value,
-                                    zk_alarm_states[i].threshold) == 0)
-        {
-            zk_alarm_states[i].pending = 0;
-            if (zk_alarm_states[i].one_shot && status != 0)
-            {
-                power_down_flag = 0;
-                zk_alarm_states[i].reported = 0;
-            }
-            else
-            {
-                zk_alarm_states[i].reported = status;
-            }
-        }
-        return BOOL_TRUE;
-    }
-
-    return BOOL_FALSE;
-}
-
-static boolean_en zk_alarm_process(void)
-{
-    zk_alarm_collect_sources();
-    return zk_alarm_publish_pending();
 }
 
 static int zk_publish_ota_progress_now(uint32 progress)

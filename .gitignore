@@ -27,7 +27,7 @@ RTE/
 *.i
 *.axf
 *.elf
-
+*.idx
 # J-Link / Debugger files
 JLinkLog.txt
 *.dbgconf

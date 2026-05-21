@@ -36,7 +36,7 @@ class ZkPublishBackpressureTests(unittest.TestCase):
         login = block(source, "int zk_publish_login_packet", "int zk_publish_heartbeat_packet")
         heartbeat = block(source, "int zk_publish_heartbeat_packet", "int zk_publish_error_response")
         runtime = block(source, "static int zk_publish_runtime_report", "static int zk_publish_time_request")
-        time_request = block(source, "static int zk_publish_time_request", "static void zk_alarm_reset_states")
+        time_request = block(source, "static int zk_publish_time_request", "int zk_publish_alarm_report")
         ota_progress = block(source, "static int zk_publish_ota_progress_now", "int zk_publish_ota_progress")
         ota_error = block(source, "static int zk_publish_ota_error_now", "int zk_publish_ota_error")
 
