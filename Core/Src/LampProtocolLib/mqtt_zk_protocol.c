@@ -1,6 +1,8 @@
 #include "mqtt_zk_protocol.h"
 #include "zk_runtime_stats.h"
 #include "zk_alarm.h"
+#include "zk_property.h"
+#include "zk_protocol_internal.h"
 #include "Portable.h"
 #include "TcpClient.h"
 #include "net_dim.h"
@@ -13,9 +15,7 @@
 #include "danger_current_check.h"
 #include "sys_pow_drop_check.h"
 #include "sys_temp_over_protect.h"
-#include "factory_user_data.h"
 #include "sys_data.h"
-#include "hw_flash.h"
 #include "ntc.h"
 #include "main.h"
 #include <stdio.h>
@@ -28,7 +28,6 @@ extern char firm_name_buffer[256];
 
 
 static zk_mqtt_config_t zk_mqtt_cfg;
-static zk_device_config_t zk_dev_cfg;
 static zk_login_state_en zk_login_state = ZK_LOGIN_STATE_IDLE;
 static uint32 zk_login_tick = 0;
 static uint32 zk_heartbeat_tick = 0;
@@ -74,42 +73,7 @@ static char zk_signal_qeng_resp[] = "OK";
 #define ZK_CNCTRL_LAST_MAX_SEC  (24UL * 60UL * 60UL)
 #define ZK_SEND_BUSY_CLEAR_THRESHOLD 3U
 #define ZK_CHANGE_REPORT_SETTLE_MS 3000UL
-#define ZK_PROPERTY_FLASH_MAGIC 0x5A4B5052UL
-#define ZK_PROPERTY_FLASH_VERSION 1U
-#define ZK_PROPERTY_FLASH_MAIN_ADDR (DATAROM_STARTADDR + FLASH_PAGE_SIZE)
-#define ZK_PROPERTY_FLASH_BACKUP_ADDR (BAKDATAROM_STARTADDR + FLASH_PAGE_SIZE)
 #define ZK_SIGNAL_QUERY_INTERVAL_MS (4UL * 60UL * 1000UL)
-#define ZK_FLASH_SAVE_ERROR 99
-
-typedef struct
-{
-    u32 magic;
-    u16 version;
-    u16 size;
-    u32 seq;
-    s32 lng;
-    s32 lat;
-    s32 zone;
-    s32 cns;
-    s32 dimTp;
-    s32 polar;
-    s32 dlmt;
-    s32 ulmt;
-    s32 rti;
-    s32 rtPwr;
-    s32 di;
-    s32 sBri;
-    s32 sBriTm;
-    char svrIp[32];
-    s32 svrPort;
-    s32 uPeriod;
-    s32 hPeriod;
-    s32 tPeriod;
-    u32 checksum;
-} zk_property_flash_record_t;
-
-static u32 zk_property_flash_seq = 0;
-
 static void zk_apply_brightness(int brightness);
 
 static void *ZK_Cjson_Malloc(size_t size)
@@ -193,7 +157,7 @@ static void zk_cjson_log_tx_pool_exhausted(const char *context)
     zk_cjson_tx_exhausted_logged = BOOL_TRUE;
 }
 
-static cJSON *zk_cjson_create_tx_object(const char *context)
+cJSON *zk_cjson_create_tx_object(const char *context)
 {
     cJSON *object;
 
@@ -205,7 +169,7 @@ static cJSON *zk_cjson_create_tx_object(const char *context)
     return object;
 }
 
-static cJSON *zk_cjson_create_tx_array(const char *context)
+cJSON *zk_cjson_create_tx_array(const char *context)
 {
     cJSON *array;
 
@@ -265,7 +229,7 @@ static boolean_en zk_load_imei(char *imei, int imei_size)
     return BOOL_TRUE;
 }
 //获取rtc时间
-static void zk_get_time_text(char *buf, int buf_size)
+void zk_get_time_text(char *buf, int buf_size)
 {
     if (apprtc_RtcTime.ready == BOOL_TRUE &&
         apprtc_RtcTime.year >= 2020 &&
@@ -335,7 +299,7 @@ static long zk_rtc_to_unix_seconds(const RtcTime_t *rtc)
     return (((days * 24L) + rtc->hour) * 60L + rtc->min) * 60L + rtc->sec;
 }
 
-static boolean_en zk_parse_rtc_text(const char *text, RtcTime_t *rtc)
+boolean_en zk_parse_rtc_text(const char *text, RtcTime_t *rtc)
 {
     unsigned int y;
     unsigned int mo;
@@ -370,7 +334,7 @@ static boolean_en zk_parse_rtc_text(const char *text, RtcTime_t *rtc)
     return BOOL_TRUE;
 }
 
-static const char *zk_json_get_rtc_time_text(cJSON *node)
+const char *zk_json_get_rtc_time_text(cJSON *node)
 {
     cJSON *time_node;
 
@@ -393,7 +357,7 @@ static const char *zk_json_get_rtc_time_text(cJSON *node)
     return NULL;
 }
 
-static void zk_set_local_rtc(const RtcTime_t *rtc)
+void zk_set_local_rtc(const RtcTime_t *rtc)
 {
     if (rtc == NULL)
     {
@@ -457,6 +421,11 @@ static void zk_sync_online_period_timers(uint32 now)
     zk_report_tick = now;
     zk_time_request_tick = now;
     zk_heartbeat_tick = now;
+}
+
+void zk_reset_config_period_timers(void)
+{
+    zk_sync_online_period_timers(Timer_GetTickCount());
 }
 
 static int zk_get_run_status_code(void)
@@ -553,212 +522,6 @@ void zk_mqtt_generate_password(const char *imei, char *password)
     p1 = (uint16)(~crc16_modbus_get((unsigned char *)(imei + 5), 5));
     p2 = (uint16)(~crc16_modbus_get((unsigned char *)(imei + 10), 5));
     snprintf(password, 13, "%04X%04X%04X", p2, p0, p1);
-}
-
-static u16 zk_property_flash_checksum(zk_property_flash_record_t *record)
-{
-    return crc16_modbus_get((unsigned char *)record,
-                            sizeof(*record) - sizeof(record->checksum));
-}
-
-static void zk_property_record_from_config(zk_property_flash_record_t *record,
-                                           const zk_device_config_t *config,
-                                           u32 seq)
-{
-    memset(record, 0, sizeof(*record));
-    record->magic = ZK_PROPERTY_FLASH_MAGIC;
-    record->version = ZK_PROPERTY_FLASH_VERSION;
-    record->size = (u16)sizeof(*record);
-    record->seq = seq;
-    record->lng = (s32)config->lng;
-    record->lat = (s32)config->lat;
-    record->zone = config->zone;
-    record->cns = config->cns;
-    record->dimTp = config->dimTp;
-    record->polar = config->polar;
-    record->dlmt = config->dlmt;
-    record->ulmt = config->ulmt;
-    record->rti = config->rti;
-    record->rtPwr = config->rtPwr;
-    record->di = config->di;
-    record->sBri = config->sBri;
-    record->sBriTm = config->sBriTm;
-    strncpy(record->svrIp, config->svrIp, sizeof(record->svrIp) - 1);
-    record->svrPort = config->svrPort;
-    record->uPeriod = config->uPeriod;
-    record->hPeriod = config->hPeriod;
-    record->tPeriod = config->tPeriod;
-    record->checksum = zk_property_flash_checksum(record);
-}
-
-static boolean_en zk_property_record_valid(zk_property_flash_record_t *record)
-{
-    if (record->magic != ZK_PROPERTY_FLASH_MAGIC ||
-        record->version != ZK_PROPERTY_FLASH_VERSION ||
-        record->size != sizeof(*record))
-    {
-        return BOOL_FALSE;
-    }
-    return ((u16)record->checksum == zk_property_flash_checksum(record)) ? BOOL_TRUE : BOOL_FALSE;
-}
-
-static void zk_property_record_to_config(zk_device_config_t *config,
-                                         zk_property_flash_record_t *record)
-{
-    config->lng = record->lng;
-    config->lat = record->lat;
-    config->zone = record->zone;
-    config->cns = record->cns;
-    config->dimTp = record->dimTp;
-    config->polar = record->polar;
-    config->dlmt = record->dlmt;
-    config->ulmt = record->ulmt;
-    config->rti = record->rti;
-    config->rtPwr = record->rtPwr;
-    config->di = record->di;
-    config->sBri = record->sBri;
-    config->sBriTm = record->sBriTm;
-    strncpy(config->svrIp, record->svrIp, sizeof(config->svrIp) - 1);
-    config->svrIp[sizeof(config->svrIp) - 1] = '\0';
-    config->svrPort = record->svrPort;
-    config->uPeriod = record->uPeriod;
-    config->hPeriod = record->hPeriod;
-    config->tPeriod = record->tPeriod;
-}
-
-static boolean_en zk_property_flash_read_record(u32 addr,
-                                                zk_property_flash_record_t *record)
-{
-    hw_flash_read_bytes(addr, (u8 *)record, sizeof(*record));
-    return zk_property_record_valid(record);
-}
-
-static boolean_en zk_property_flash_write_record(u32 addr,
-                                                 zk_property_flash_record_t *record)
-{
-    hw_flash_write_bytes(addr, (u8 *)record, sizeof(*record));
-    return user_flash_check(addr, (u8 *)record, sizeof(*record));
-}
-
-static boolean_en zk_property_flash_load(zk_device_config_t *config)
-{
-    zk_property_flash_record_t main_record;
-    zk_property_flash_record_t backup_record;
-    zk_property_flash_record_t *selected;
-    boolean_en main_ok;
-    boolean_en backup_ok;
-
-    main_ok = zk_property_flash_read_record(ZK_PROPERTY_FLASH_MAIN_ADDR, &main_record);
-    backup_ok = zk_property_flash_read_record(ZK_PROPERTY_FLASH_BACKUP_ADDR, &backup_record);
-
-    selected = NULL;
-    if (main_ok == BOOL_TRUE && backup_ok == BOOL_TRUE)
-    {
-        selected = (main_record.seq >= backup_record.seq) ? &main_record : &backup_record;
-    }
-    else if (main_ok == BOOL_TRUE)
-    {
-        selected = &main_record;
-    }
-    else if (backup_ok == BOOL_TRUE)
-    {
-        selected = &backup_record;
-    }
-
-    if (selected == NULL)
-    {
-        zk_property_flash_seq = 0;
-        return BOOL_FALSE;
-    }
-
-    zk_property_record_to_config(config, selected);
-    zk_property_flash_seq = selected->seq;
-    return BOOL_TRUE;
-}
-
-static boolean_en zk_property_flash_store_config(const zk_device_config_t *config)
-{
-    zk_property_flash_record_t record;
-    u32 next_seq;
-    boolean_en main_ok;
-    boolean_en backup_ok;
-
-    next_seq = zk_property_flash_seq + 1U;
-    if (next_seq == 0U)
-    {
-        next_seq = 1U;
-    }
-
-    zk_property_record_from_config(&record, config, next_seq);
-    main_ok = zk_property_flash_write_record(ZK_PROPERTY_FLASH_MAIN_ADDR, &record);
-    backup_ok = zk_property_flash_write_record(ZK_PROPERTY_FLASH_BACKUP_ADDR, &record);
-    if (main_ok == BOOL_TRUE || backup_ok == BOOL_TRUE)
-    {
-        zk_property_flash_seq = next_seq;
-        return BOOL_TRUE;
-    }
-    return BOOL_FALSE;
-}
-
-static void zk_device_config_refresh_iccid_field(zk_device_config_t *config)
-{
-    if (config == NULL)
-    {
-        return;
-    }
-    zk_copy_digits(config->iccid, sizeof(config->iccid), (const char *)simCardICCID, 20);
-    if (strlen(config->iccid) == 0)
-    {
-        strcpy(config->iccid, NB_ICCID_DEFAULT);
-    }
-}
-
-static void zk_device_config_set_defaults(zk_device_config_t *config)
-{
-    memset(config, 0, sizeof(*config));
-    config->protId = 100;
-    strcpy(config->clas, "MS-SLC-01");
-    strcpy(config->prottp, "iX7-075SC028-4G");
-    config->hver = 100;
-    config->sver = APP_VERSION;
-    strcpy(config->mver, "BC28GJAR01A01");
-    zk_device_config_refresh_iccid_field(config);
-    config->lng = 120000000;
-    config->lat = 30000000;
-    config->zone = 8;
-    config->cns = 1;
-    config->dimTp = 0;
-    config->polar = 0;
-    config->dlmt = 1000;
-    config->ulmt = 9000;
-    config->rti = 0;
-    config->rtPwr = 200;
-    config->di = 1;
-    config->sBri = 80;
-    config->sBriTm = 5;
-    strncpy(config->svrIp, ZK_MQTT_SERVER_IP, sizeof(config->svrIp) - 1);
-    config->svrPort = ZK_MQTT_SERVER_PORT;
-    config->uPeriod = ZK_UPLOAD_INTERVAL_SEC;
-    config->hPeriod = ZK_HEARTBEAT_INTERVAL_SEC;
-    config->tPeriod = ZK_TIME_REQUEST_INTERVAL_SEC;
-    config->commMain = 1;
-    config->commSub = 1;
-    config->commSAuto = 0;
-    config->spreadOffset = 6000;
-    config->spreadWindow = 60;
-    config->spreadInterval = 10;
-}
-
-void zk_device_config_init(void)
-{
-    zk_device_config_set_defaults(&zk_dev_cfg);
-    (void)zk_property_flash_load(&zk_dev_cfg);
-    zk_device_config_refresh_iccid();
-}
-
-void zk_device_config_refresh_iccid(void)
-{
-    zk_device_config_refresh_iccid_field(&zk_dev_cfg);
 }
 
 /** 初始化MQTT连接配置：加载IMEI、生成ClientId/Username/Password、订阅和发布Topic */
@@ -870,10 +633,17 @@ uint16 zk_mqtt_next_packet_id(void)
 
 int zk_build_qmt_open_cmd(char *buf, int buf_size)
 {
+    const zk_device_config_t *dev_cfg;
+
+    dev_cfg = zk_device_config_get();
+    if (dev_cfg == NULL)
+    {
+        return -1;
+    }
     return snprintf(buf, buf_size, "AT+QMTOPEN=%d,\"%s\",%d\r\n",
                     ZK_MQTT_CLIENT_IDX,
-                    zk_dev_cfg.svrIp[0] != '\0' ? zk_dev_cfg.svrIp : ZK_MQTT_SERVER_IP,
-                    zk_dev_cfg.svrPort > 0 ? zk_dev_cfg.svrPort : ZK_MQTT_SERVER_PORT);
+                    dev_cfg->svrIp[0] != '\0' ? dev_cfg->svrIp : ZK_MQTT_SERVER_IP,
+                    dev_cfg->svrPort > 0 ? dev_cfg->svrPort : ZK_MQTT_SERVER_PORT);
 }
 
 int zk_build_qmt_conn_cmd(char *buf, int buf_size)
@@ -922,7 +692,7 @@ int zk_build_qmt_sub_upgrade_cmd(char *buf, int buf_size)
                     ZK_MQTT_SUB_QOS);
 }
 
-static cJSON *zk_create_root_from_header(const zk_message_header_t *header, int with_er, int er_code)
+cJSON *zk_create_root_from_header(const zk_message_header_t *header, int with_er, int er_code)
 {
     cJSON *root;
     char tm[20];
@@ -1002,7 +772,7 @@ static int zk_send_payload(const char *payload, uint16 length, const char *topic
     return (result == NB_ERROR_NONE) ? 0 : -1;
 }
 
-static int zk_send_json_root(cJSON *root, const char *topic)
+int zk_send_json_root(cJSON *root, const char *topic)
 {
     int len;
 
@@ -1025,7 +795,7 @@ static int zk_send_json_root(cJSON *root, const char *topic)
     return zk_send_payload(zk_tx_buf, (uint16)len, topic);
 }
 
-static void zk_schedule_simple_response(const zk_message_header_t *request, int err_code)
+void zk_schedule_simple_response(const zk_message_header_t *request, int err_code)
 {
     if (request == NULL)
     {
@@ -1036,7 +806,7 @@ static void zk_schedule_simple_response(const zk_message_header_t *request, int 
     zk_response_pending = BOOL_TRUE;
 }
 
-static int zk_publish_simple_response_now(const zk_message_header_t *request, int err_code)
+int zk_publish_simple_response_now(const zk_message_header_t *request, int err_code)
 {
     cJSON *root;
     int ret;
@@ -1051,7 +821,7 @@ static int zk_publish_simple_response_now(const zk_message_header_t *request, in
     return ret;
 }
 
-static int zk_publish_simple_response(const zk_message_header_t *request, int err_code)
+int zk_publish_simple_response(const zk_message_header_t *request, int err_code)
 {
     if (zk_publish_simple_response_now(request, err_code) == 0)
     {
@@ -1089,6 +859,7 @@ void zk_fill_message_header(zk_message_header_t *header,
 int zk_make_login_packet(char *buf, int buf_size)
 {
     zk_message_header_t header;
+    const zk_device_config_t *dev_cfg;
 
     if (zk_mqtt_get_config() == NULL)
     {
@@ -1100,6 +871,11 @@ int zk_make_login_packet(char *buf, int buf_size)
         return -1;
     }
     zk_device_config_refresh_iccid();
+    dev_cfg = zk_device_config_get();
+    if (dev_cfg == NULL)
+    {
+        return -1;
+    }
     /* 登录上报：DevInfo.prodtp按协议使用prodtp字段名，Dim包含dimTp调光方式 */
     return snprintf(buf, buf_size,
                     "{\"SN\":\"%s\",\"TM\":\"%s\",\"SV\":\"%s\",\"ID\":\"%s\",\"CT\":\"%s\","
@@ -1113,26 +889,26 @@ int zk_make_login_packet(char *buf, int buf_size)
                     header.sv,
                     header.id,
                     header.ct,
-                    zk_dev_cfg.protId,
-                    zk_dev_cfg.clas,
-                    zk_dev_cfg.prottp,
-                    zk_dev_cfg.hver,
-                    zk_dev_cfg.sver,
-                    zk_dev_cfg.mver,
-                    zk_dev_cfg.iccid,
-                    zk_dev_cfg.lng,
-                    zk_dev_cfg.lat,
-                    zk_dev_cfg.zone,
-                    zk_dev_cfg.cns,
-                    zk_dev_cfg.dimTp,
-                    zk_dev_cfg.polar,
-                    zk_dev_cfg.dlmt,
-                    zk_dev_cfg.ulmt,
-                    zk_dev_cfg.rti,
-                    zk_dev_cfg.rtPwr,
-                    zk_dev_cfg.di,
-                    zk_dev_cfg.sBri,
-                    zk_dev_cfg.sBriTm);
+                    dev_cfg->protId,
+                    dev_cfg->clas,
+                    dev_cfg->prottp,
+                    dev_cfg->hver,
+                    dev_cfg->sver,
+                    dev_cfg->mver,
+                    dev_cfg->iccid,
+                    dev_cfg->lng,
+                    dev_cfg->lat,
+                    dev_cfg->zone,
+                    dev_cfg->cns,
+                    dev_cfg->dimTp,
+                    dev_cfg->polar,
+                    dev_cfg->dlmt,
+                    dev_cfg->ulmt,
+                    dev_cfg->rti,
+                    dev_cfg->rtPwr,
+                    dev_cfg->di,
+                    dev_cfg->sBri,
+                    dev_cfg->sBriTm);
 }
 
 int zk_make_heartbeat_packet(char *buf, int buf_size)
@@ -1360,7 +1136,7 @@ static void zk_add_runtime_time_groups(cJSON *dt_root)
     cJSON_AddItemToObject(dt_root, "LightTm", light_tm);
 }
 
-static void zk_add_run_status_group(cJSON *dt_root)
+void zk_add_run_status_group(cJSON *dt_root)
 {
     cJSON *run_status;
     cJSON *sts;
@@ -1381,7 +1157,7 @@ static void zk_add_run_status_group(cJSON *dt_root)
     cJSON_AddItemToObject(dt_root, "RunSts", run_status);
 }
 
-static void zk_add_ele_info_group(cJSON *dt_root)
+void zk_add_ele_info_group(cJSON *dt_root)
 {
     cJSON *ele_info;
     cJSON *e;
@@ -1427,7 +1203,7 @@ static void zk_add_ele_info_group(cJSON *dt_root)
     cJSON_AddItemToObject(dt_root, "EleInfo", ele_info);
 }
 
-static void zk_add_per_sts_group(cJSON *dt_root)
+void zk_add_per_sts_group(cJSON *dt_root)
 {
     cJSON *per_sts;
 
@@ -1441,7 +1217,7 @@ static void zk_add_per_sts_group(cJSON *dt_root)
     cJSON_AddItemToObject(dt_root, "PerSts", per_sts);
 }
 
-static void zk_add_signal_group(cJSON *dt_root)
+void zk_add_signal_group(cJSON *dt_root)
 {
     cJSON *signal;
     s32 rsrp;
@@ -1773,12 +1549,18 @@ void zk_mqtt_session_process(void)
     uint32 report_period_ms;
     uint32 time_request_period_ms;
     uint32 heartbeat_period_ms;
+    const zk_device_config_t *dev_cfg;
 
     now = Timer_GetTickCount();
+    dev_cfg = zk_device_config_get();
+    if (dev_cfg == NULL)
+    {
+        return;
+    }
     zk_control_restore_process();
-    report_period_ms = zk_get_effective_period_sec(zk_dev_cfg.uPeriod, ZK_UPLOAD_INTERVAL_SEC) * 1000UL;
-    time_request_period_ms = zk_get_effective_period_sec(zk_dev_cfg.tPeriod, ZK_TIME_REQUEST_INTERVAL_SEC) * 1000UL;
-    heartbeat_period_ms = zk_get_effective_period_sec(zk_dev_cfg.hPeriod, ZK_HEARTBEAT_INTERVAL_SEC) * 1000UL;
+    report_period_ms = zk_get_effective_period_sec(dev_cfg->uPeriod, ZK_UPLOAD_INTERVAL_SEC) * 1000UL;
+    time_request_period_ms = zk_get_effective_period_sec(dev_cfg->tPeriod, ZK_TIME_REQUEST_INTERVAL_SEC) * 1000UL;
+    heartbeat_period_ms = zk_get_effective_period_sec(dev_cfg->hPeriod, ZK_HEARTBEAT_INTERVAL_SEC) * 1000UL;
 
     if (zk_reboot_pending == BOOL_TRUE && Timer_PassedDelay(zk_reboot_tick, 500))
     {
@@ -2052,963 +1834,6 @@ boolean_en zk_mqtt_accept_heartbeat_ack(const zk_message_header_t *header)
     return BOOL_FALSE;
 }
 
-static boolean_en zk_json_get_number(cJSON *object, const char *key, int *value)
-{
-    cJSON *node;
-
-    if (object == NULL)
-    {
-        return BOOL_FALSE;
-    }
-    node = cJSON_GetObjectItem(object, key);
-    if (node != NULL && cJSON_IsNumber(node))
-    {
-        *value = node->valueint;
-        return BOOL_TRUE;
-    }
-    if (node != NULL && cJSON_IsBool(node))
-    {
-        *value = cJSON_IsTrue(node) ? 1 : 0;
-        return BOOL_TRUE;
-    }
-    return BOOL_FALSE;
-}
-
-static boolean_en zk_json_get_string(cJSON *object, const char *key, char *value, int value_size)
-{
-    cJSON *node;
-
-    if (object == NULL || value == NULL || value_size <= 1)
-    {
-        return BOOL_FALSE;
-    }
-    node = cJSON_GetObjectItem(object, key);
-    if (node == NULL || !cJSON_IsString(node) || node->valuestring == NULL)
-    {
-        return BOOL_FALSE;
-    }
-    strncpy(value, node->valuestring, value_size - 1);
-    value[value_size - 1] = '\0';
-    return BOOL_TRUE;
-}
-
-static void zk_add_dev_info_prop(cJSON *dt_root)
-{
-    cJSON *item;
-
-    item = zk_cjson_create_tx_object("DevInfo");
-    if (item == NULL)
-    {
-        return;
-    }
-    cJSON_AddNumberToObject(item, "protId", zk_dev_cfg.protId);
-    cJSON_AddStringToObject(item, "SN", zk_mqtt_cfg.imei);
-    cJSON_AddStringToObject(item, "clas", zk_dev_cfg.clas);
-    cJSON_AddStringToObject(item, "prodtp", zk_dev_cfg.prottp); /* JSON字段按协议使用prodtp */
-    cJSON_AddNumberToObject(item, "hver", zk_dev_cfg.hver);
-    cJSON_AddNumberToObject(item, "sver", zk_dev_cfg.sver);
-    cJSON_AddItemToObject(dt_root, "DevInfo", item);
-}
-
-static void zk_add_mdl_info_prop(cJSON *dt_root)
-{
-    cJSON *item;
-
-    item = zk_cjson_create_tx_object("MdlInfo");
-    if (item == NULL)
-    {
-        return;
-    }
-    cJSON_AddStringToObject(item, "mver", zk_dev_cfg.mver);
-    cJSON_AddStringToObject(item, "iccid", zk_dev_cfg.iccid);
-    cJSON_AddItemToObject(dt_root, "MdlInfo", item);
-}
-
-static void zk_add_gis_prop(cJSON *dt_root)
-{
-    cJSON *item;
-
-    item = zk_cjson_create_tx_object("Gis");
-    if (item == NULL)
-    {
-        return;
-    }
-    cJSON_AddNumberToObject(item, "lng", zk_dev_cfg.lng);
-    cJSON_AddNumberToObject(item, "lat", zk_dev_cfg.lat);
-    cJSON_AddNumberToObject(item, "zone", zk_dev_cfg.zone);
-    cJSON_AddItemToObject(dt_root, "Gis", item);
-}
-
-static void zk_add_dim_prop(cJSON *dt_root)
-{
-    cJSON *array;
-    cJSON *item;
-
-    array = zk_cjson_create_tx_array("Dim");
-    item = zk_cjson_create_tx_object("Dim.item");
-    if (array == NULL || item == NULL)
-    {
-        return;
-    }
-    cJSON_AddNumberToObject(item, "cns", zk_dev_cfg.cns);
-    cJSON_AddNumberToObject(item, "dimTp", zk_dev_cfg.dimTp);
-    cJSON_AddNumberToObject(item, "polar", zk_dev_cfg.polar);
-    cJSON_AddNumberToObject(item, "dlmt", zk_dev_cfg.dlmt);
-    cJSON_AddNumberToObject(item, "ulmt", zk_dev_cfg.ulmt);
-    cJSON_AddNumberToObject(item, "rti", zk_dev_cfg.rti);
-    cJSON_AddNumberToObject(item, "rtPwr", zk_dev_cfg.rtPwr);
-    cJSON_AddItemToArray(array, item);
-    cJSON_AddItemToObject(dt_root, "Dim", array);
-}
-
-static void zk_add_sense_prop(cJSON *dt_root)
-{
-    cJSON *item;
-
-    item = zk_cjson_create_tx_object("Sense");
-    if (item == NULL)
-    {
-        return;
-    }
-    cJSON_AddNumberToObject(item, "di", zk_dev_cfg.di);
-    cJSON_AddNumberToObject(item, "sBri", zk_dev_cfg.sBri);
-    cJSON_AddNumberToObject(item, "sBriTm", zk_dev_cfg.sBriTm);
-    cJSON_AddItemToObject(dt_root, "Sense", item);
-}
-
-static void zk_add_spread_prop(cJSON *dt_root)
-{
-    cJSON *item;
-
-    item = zk_cjson_create_tx_object("Spread");
-    if (item == NULL)
-    {
-        return;
-    }
-    cJSON_AddNumberToObject(item, "offset", zk_dev_cfg.spreadOffset);
-    cJSON_AddNumberToObject(item, "window", zk_dev_cfg.spreadWindow);
-    cJSON_AddNumberToObject(item, "interval", zk_dev_cfg.spreadInterval);
-    cJSON_AddItemToObject(dt_root, "Spread", item);
-}
-
-static void zk_add_comm_prop(cJSON *dt_root)
-{
-    cJSON *item;
-
-    item = zk_cjson_create_tx_object("Comm");
-    if (item == NULL)
-    {
-        return;
-    }
-    cJSON_AddNumberToObject(item, "main", zk_dev_cfg.commMain);
-    cJSON_AddNumberToObject(item, "sub", zk_dev_cfg.commSub);
-    cJSON_AddNumberToObject(item, "sAuto", zk_dev_cfg.commSAuto);
-    cJSON_AddItemToObject(dt_root, "Comm", item);
-}
-
-static void zk_add_svr_prop(cJSON *dt_root)
-{
-    cJSON *item;
-
-    item = zk_cjson_create_tx_object("Svr");
-    if (item == NULL)
-    {
-        return;
-    }
-    cJSON_AddStringToObject(item, "svrIp", zk_dev_cfg.svrIp);
-    cJSON_AddNumberToObject(item, "svrPort", zk_dev_cfg.svrPort);
-    cJSON_AddNumberToObject(item, "uPeriod", zk_dev_cfg.uPeriod);
-    cJSON_AddNumberToObject(item, "hPeriod", zk_dev_cfg.hPeriod);
-    cJSON_AddNumberToObject(item, "tPeriod", zk_dev_cfg.tPeriod);
-    cJSON_AddItemToObject(dt_root, "Svr", item);
-}
-
-static void zk_add_rtc_prop(cJSON *dt_root)
-{
-    char text[20];
-
-    zk_get_time_text(text, sizeof(text));
-    cJSON_AddStringToObject(dt_root, "RTC", text);
-}
-
-static void zk_add_factory_prop(cJSON *dt_root)
-{
-    cJSON *item;
-
-    item = zk_cjson_create_tx_object("Factory");
-    if (item == NULL)
-    {
-        return;
-    }
-    cJSON_AddNumberToObject(item, "MID", MID);
-    cJSON_AddNumberToObject(item, "SET_OUTCUR", SET_OUTCUR);
-    cJSON_AddNumberToObject(item, "HWMAX_OUTCUR", HWMAX_OUTCUR);
-    cJSON_AddNumberToObject(item, "OUTPUT_CUR_SENSOR", OUTPUT_CUR_SENSOR);
-    cJSON_AddNumberToObject(item, "OP_PWM_OFFSET", OP_PWM_OFFSET);
-    cJSON_AddNumberToObject(item, "INNRE_TEMP_PRO_EN", INNRE_TEMP_PRO_EN);
-    cJSON_AddNumberToObject(item, "INNRE_TEMP_PRO", INNRE_TEMP_PRO);
-    cJSON_AddNumberToObject(item, "CX", CX);
-    cJSON_AddItemToObject(dt_root, "Factory", item);
-}
-
-static int zk_add_property_to_dt(cJSON *dt_root, const char *name)
-{
-    if (strcmp(name, "DevInfo") == 0)
-    {
-        zk_add_dev_info_prop(dt_root);
-    }
-    else if (strcmp(name, "MdlInfo") == 0)
-    {
-        zk_add_mdl_info_prop(dt_root);
-    }
-    else if (strcmp(name, "Gis") == 0)
-    {
-        zk_add_gis_prop(dt_root);
-    }
-    else if (strcmp(name, "Dim") == 0)
-    {
-        zk_add_dim_prop(dt_root);
-    }
-    else if (strcmp(name, "Sense") == 0)
-    {
-        zk_add_sense_prop(dt_root);
-    }
-    else if (strcmp(name, "RunSts") == 0)
-    {
-        zk_add_run_status_group(dt_root);
-    }
-    else if (strcmp(name, "EleInfo") == 0)
-    {
-        zk_add_ele_info_group(dt_root);
-    }
-    else if (strcmp(name, "PerSts") == 0)
-    {
-        zk_add_per_sts_group(dt_root);
-    }
-    else if (strcmp(name, "Signal") == 0)
-    {
-        zk_add_signal_group(dt_root);
-    }
-    else if (strcmp(name, "RTC") == 0)
-    {
-        zk_add_rtc_prop(dt_root);
-    }
-    else if (strcmp(name, "Factory") == 0)
-    {
-        zk_add_factory_prop(dt_root);
-    }
-    else if (strcmp(name, "Svr") == 0)
-    {
-        zk_add_svr_prop(dt_root);
-    }
-    else if (strcmp(name, "Comm") == 0)
-    {
-        zk_add_comm_prop(dt_root);
-    }
-    else if (strcmp(name, "Spread") == 0)
-    {
-        zk_add_spread_prop(dt_root);
-    }
-    else
-    {
-        return 1;
-    }
-    return 0;
-}
-
-static boolean_en zk_json_pick_config_number(cJSON *object,
-                                             const char *key,
-                                             int *value,
-                                             int *err)
-{
-    cJSON *node;
-
-    node = cJSON_GetObjectItem(object, key);
-    if (node == NULL)
-    {
-        return BOOL_FALSE;
-    }
-    if (cJSON_IsNumber(node))
-    {
-        *value = node->valueint;
-        *err = 0;
-        return BOOL_TRUE;
-    }
-    if (cJSON_IsBool(node))
-    {
-        *value = cJSON_IsTrue(node) ? 1 : 0;
-        *err = 0;
-        return BOOL_TRUE;
-    }
-    *err = 2;
-    return BOOL_TRUE;
-}
-
-static boolean_en zk_json_pick_config_string(cJSON *object,
-                                             const char *key,
-                                             char *value,
-                                             int value_size,
-                                             int *err)
-{
-    cJSON *node;
-
-    node = cJSON_GetObjectItem(object, key);
-    if (node == NULL)
-    {
-        return BOOL_FALSE;
-    }
-    if (!cJSON_IsString(node) || node->valuestring == NULL)
-    {
-        *err = 2;
-        return BOOL_TRUE;
-    }
-    strncpy(value, node->valuestring, value_size - 1);
-    value[value_size - 1] = '\0';
-    *err = 0;
-    return BOOL_TRUE;
-}
-
-static void zk_factory_buf_set_u16be(u8 *factory_buf, u16 offset, u16 value)
-{
-    factory_buf[offset] = (u8)(value >> 8);
-    factory_buf[offset + 1] = (u8)(value & 0xFFu);
-}
-
-static int zk_apply_factory_config(cJSON *factory, u8 *factory_buf, int *changed)
-{
-    int value;
-    int err;
-
-    if (factory == NULL || factory_buf == NULL || changed == NULL)
-    {
-        return 4;
-    }
-    if (!cJSON_IsObject(factory))
-    {
-        return 4;
-    }
-
-    *changed = 0;
-
-    if (zk_json_pick_config_number(factory, "MID", &value, &err) == BOOL_TRUE)
-    {
-        if (err != 0)
-        {
-            return err;
-        }
-        if (value <= 0 || value >= 0xFF)
-        {
-            return 3;
-        }
-        factory_buf[0x05] = (u8)value;
-        *changed = 1;
-    }
-    if (zk_json_pick_config_number(factory, "SET_OUTCUR", &value, &err) == BOOL_TRUE)
-    {
-        if (err != 0)
-        {
-            return err;
-        }
-        if (value <= 0 || value >= 0xFFFF)
-        {
-            return 3;
-        }
-        zk_factory_buf_set_u16be(factory_buf, 0x10, (u16)value);
-        *changed = 1;
-    }
-    if (zk_json_pick_config_number(factory, "HWMAX_OUTCUR", &value, &err) == BOOL_TRUE)
-    {
-        if (err != 0)
-        {
-            return err;
-        }
-        if (value <= 0 || value >= 0xFFFF)
-        {
-            return 3;
-        }
-        zk_factory_buf_set_u16be(factory_buf, 0x12, (u16)value);
-        *changed = 1;
-    }
-    if (zk_json_pick_config_number(factory, "OUTPUT_CUR_SENSOR", &value, &err) == BOOL_TRUE)
-    {
-        if (err != 0)
-        {
-            return err;
-        }
-        if (value <= 0 || value >= 0xFFFF)
-        {
-            return 3;
-        }
-        zk_factory_buf_set_u16be(factory_buf, 0x14, (u16)value);
-        *changed = 1;
-    }
-    if (zk_json_pick_config_number(factory, "OP_PWM_OFFSET", &value, &err) == BOOL_TRUE)
-    {
-        if (err != 0)
-        {
-            return err;
-        }
-        if (value < 0 || value > 1000)
-        {
-            return 3;
-        }
-        zk_factory_buf_set_u16be(factory_buf, 0x16, (u16)value);
-        *changed = 1;
-    }
-    if (zk_json_pick_config_number(factory, "INNRE_TEMP_PRO_EN", &value, &err) == BOOL_TRUE)
-    {
-        if (err != 0)
-        {
-            return err;
-        }
-        if (value < 0 || value > 1)
-        {
-            return 3;
-        }
-        factory_buf[0x18] = (u8)value;
-        *changed = 1;
-    }
-    if (zk_json_pick_config_number(factory, "INNRE_TEMP_PRO", &value, &err) == BOOL_TRUE)
-    {
-        if (err != 0)
-        {
-            return err;
-        }
-        if (value < 0 || value > 127)
-        {
-            return 3;
-        }
-        factory_buf[0x19] = (u8)value;
-        *changed = 1;
-    }
-    if (zk_json_pick_config_number(factory, "CX", &value, &err) == BOOL_TRUE)
-    {
-        if (err != 0)
-        {
-            return err;
-        }
-        if (value <= 0 || value >= 0xFF)
-        {
-            return 3;
-        }
-        factory_buf[0x1E] = (u8)value;
-        *changed = 1;
-    }
-
-    if (*changed == 0)
-    {
-        return 1;
-    }
-    return 0;
-}
-
-static void zk_reset_config_period_timers(void)
-{
-    zk_sync_online_period_timers(Timer_GetTickCount());
-}
-
-static int zk_apply_gis_config(cJSON *gis, zk_device_config_t *config)
-{
-    int value;
-    int err;
-
-    if (gis == NULL || !cJSON_IsObject(gis))
-    {
-        return 4;
-    }
-    if (zk_json_pick_config_number(gis, "lng", &value, &err) == BOOL_TRUE)
-    {
-        if (err != 0)
-        {
-            return err;
-        }
-        if (value < -180000000 || value > 180000000)
-        {
-            return 3;
-        }
-        config->lng = value;
-    }
-    if (zk_json_pick_config_number(gis, "lat", &value, &err) == BOOL_TRUE)
-    {
-        if (err != 0)
-        {
-            return err;
-        }
-        if (value < -90000000 || value > 90000000)
-        {
-            return 3;
-        }
-        config->lat = value;
-    }
-    if (zk_json_pick_config_number(gis, "zone", &value, &err) == BOOL_TRUE)
-    {
-        if (err != 0)
-        {
-            return err;
-        }
-        if (value < -12 || value > 12)
-        {
-            return 3;
-        }
-        config->zone = value;
-    }
-    return 0;
-}
-
-static int zk_apply_dim_config(cJSON *dim, zk_device_config_t *config)
-{
-    cJSON *item;
-    int index;
-    int value;
-    int err;
-
-    if (dim == NULL || !cJSON_IsArray(dim) || cJSON_GetArraySize(dim) <= 0)
-    {
-        return 7;
-    }
-    for (index = 0; index < cJSON_GetArraySize(dim); ++index)
-    {
-        item = cJSON_GetArrayItem(dim, index);
-        if (item == NULL || !cJSON_IsObject(item))
-        {
-            return 2;
-        }
-        if (zk_json_pick_config_number(item, "cns", &value, &err) == BOOL_TRUE)
-        {
-            if (err != 0)
-            {
-                return err;
-            }
-            if (value != 1)
-            {
-                return 6;
-            }
-            config->cns = value;
-        }
-        if (zk_json_pick_config_number(item, "dimTp", &value, &err) == BOOL_TRUE)
-        {
-            if (err != 0)
-            {
-                return err;
-            }
-            if (value < 0 || value > 1)
-            {
-                return 3;
-            }
-            config->dimTp = value;
-        }
-        if (zk_json_pick_config_number(item, "polar", &value, &err) == BOOL_TRUE)
-        {
-            if (err != 0)
-            {
-                return err;
-            }
-            if (value < 0 || value > 1)
-            {
-                return 3;
-            }
-            config->polar = value;
-        }
-        if (zk_json_pick_config_number(item, "dlmt", &value, &err) == BOOL_TRUE)
-        {
-            if (err != 0)
-            {
-                return err;
-            }
-            if (value < 500 || value > 2000)
-            {
-                return 3;
-            }
-            config->dlmt = value;
-        }
-        if (zk_json_pick_config_number(item, "ulmt", &value, &err) == BOOL_TRUE)
-        {
-            if (err != 0)
-            {
-                return err;
-            }
-            if (value < 7000 || value > 10000)
-            {
-                return 3;
-            }
-            config->ulmt = value;
-        }
-        if (zk_json_pick_config_number(item, "rti", &value, &err) == BOOL_TRUE)
-        {
-            if (err != 0)
-            {
-                return err;
-            }
-            if (value < 0 || value > 1)
-            {
-                return 3;
-            }
-            config->rti = value;
-        }
-        if (zk_json_pick_config_number(item, "rtPwr", &value, &err) == BOOL_TRUE)
-        {
-            if (err != 0)
-            {
-                return err;
-            }
-            if (value < 0 || value > 1000)
-            {
-                return 3;
-            }
-            config->rtPwr = value;
-        }
-    }
-    return 0;
-}
-
-static int zk_apply_sense_config(cJSON *sense, zk_device_config_t *config)
-{
-    int value;
-    int err;
-
-    if (sense == NULL || !cJSON_IsObject(sense))
-    {
-        return 4;
-    }
-    if (zk_json_pick_config_number(sense, "di", &value, &err) == BOOL_TRUE)
-    {
-        if (err != 0)
-        {
-            return err;
-        }
-        if (value < 0 || value > 1)
-        {
-            return 3;
-        }
-        config->di = value;
-    }
-    if (zk_json_pick_config_number(sense, "sBri", &value, &err) == BOOL_TRUE)
-    {
-        if (err != 0)
-        {
-            return err;
-        }
-        if (value != 0 && (value < 10 || value > 100))
-        {
-            return 3;
-        }
-        config->sBri = value;
-    }
-    if (zk_json_pick_config_number(sense, "sBriTm", &value, &err) == BOOL_TRUE)
-    {
-        if (err != 0)
-        {
-            return err;
-        }
-        if (value < 1 || value > 30)
-        {
-            return 3;
-        }
-        config->sBriTm = value;
-    }
-    return 0;
-}
-
-static int zk_apply_svr_config(cJSON *svr, zk_device_config_t *config)
-{
-    int value;
-    int err;
-    char ip[32];
-
-    if (svr == NULL || !cJSON_IsObject(svr))
-    {
-        return 4;
-    }
-    if (zk_json_pick_config_string(svr, "svrIp", ip, sizeof(ip), &err) == BOOL_TRUE)
-    {
-        if (err != 0)
-        {
-            return err;
-        }
-        strncpy(config->svrIp, ip, sizeof(config->svrIp) - 1);
-        config->svrIp[sizeof(config->svrIp) - 1] = '\0';
-    }
-    if (zk_json_pick_config_number(svr, "svrPort", &value, &err) == BOOL_TRUE)
-    {
-        if (err != 0)
-        {
-            return err;
-        }
-        if (value <= 0 || value > 65535)
-        {
-            return 3;
-        }
-        config->svrPort = value;
-    }
-    if (zk_json_pick_config_number(svr, "uPeriod", &value, &err) == BOOL_TRUE)
-    {
-        if (err != 0)
-        {
-            return err;
-        }
-        if (value < 0 || value > 1800)
-        {
-            return 3;
-        }
-        config->uPeriod = value;
-    }
-    if (zk_json_pick_config_number(svr, "hPeriod", &value, &err) == BOOL_TRUE)
-    {
-        if (err != 0)
-        {
-            return err;
-        }
-        if (value < 0 || value > 1800)
-        {
-            return 3;
-        }
-        config->hPeriod = value;
-    }
-    if (zk_json_pick_config_number(svr, "tPeriod", &value, &err) == BOOL_TRUE)
-    {
-        if (err != 0)
-        {
-            return err;
-        }
-        if (value < 0 || value > 7200)
-        {
-            return 3;
-        }
-        config->tPeriod = value;
-    }
-    return 0;
-}
-
-static int zk_validate_rtc_config(cJSON *rtc, RtcTime_t *rtc_value)
-{
-    const char *time_text;
-
-    if (rtc == NULL || rtc_value == NULL)
-    {
-        return 2;
-    }
-    time_text = zk_json_get_rtc_time_text(rtc);
-    if (time_text == NULL)
-    {
-        return 2;
-    }
-    if (zk_parse_rtc_text(time_text, rtc_value) == BOOL_FALSE)
-    {
-        return 3;
-    }
-    return 0;
-}
-
-boolean_en zk_handle_property_read(cJSON *root, const zk_message_header_t *header)
-{
-    cJSON *dt_in;
-    cJSON *props;
-    cJSON *root_out;
-    cJSON *dt_out;
-    cJSON *item;
-    int index;
-
-    if (root == NULL || header == NULL)
-    {
-        return BOOL_FALSE;
-    }
-    if (strcmp(header->sv, ZK_SV_PROP) != 0 || strcmp(header->ct, ZK_CT_READ) != 0)
-    {
-        return BOOL_FALSE;
-    }
-
-    dt_in = cJSON_GetObjectItem(root, "DT");
-    props = (dt_in != NULL) ? cJSON_GetObjectItem(dt_in, "props") : NULL;
-    if (props == NULL || !cJSON_IsArray(props))
-    {
-        zk_publish_simple_response(header, 5);
-        return BOOL_TRUE;
-    }
-    if (cJSON_GetArraySize(props) <= 0)
-    {
-        zk_publish_simple_response(header, 7);
-        return BOOL_TRUE;
-    }
-
-    root_out = zk_create_root_from_header(header, 1, 0);
-    if (root_out == NULL)
-    {
-        zk_publish_simple_response(header, 12);
-        return BOOL_TRUE;
-    }
-    dt_out = zk_cjson_create_tx_object("DT");
-    if (dt_out == NULL)
-    {
-        cJSON_Delete(root_out);
-        zk_publish_simple_response(header, 12);
-        return BOOL_TRUE;
-    }
-    cJSON_AddItemToObject(root_out, "DT", dt_out);
-
-    for (index = 0; index < cJSON_GetArraySize(props); ++index)
-    {
-        item = cJSON_GetArrayItem(props, index);
-        if (item == NULL || !cJSON_IsString(item) || item->valuestring == NULL)
-        {
-            cJSON_Delete(root_out);
-            zk_publish_simple_response(header, 2);
-            return BOOL_TRUE;
-        }
-        if (zk_add_property_to_dt(dt_out, item->valuestring) != 0)
-        {
-            cJSON_Delete(root_out);
-            zk_publish_simple_response(header, 1);
-            return BOOL_TRUE;
-        }
-    }
-
-    if (zk_send_json_root(root_out, NULL) != 0)
-    {
-        zk_schedule_simple_response(header, 12);
-    }
-    cJSON_Delete(root_out);
-    return BOOL_TRUE;
-}
-
-boolean_en zk_handle_property_write(cJSON *root, const zk_message_header_t *header)
-{
-    cJSON *dt;
-    cJSON *gis;
-    cJSON *dim;
-    cJSON *sense;
-    cJSON *svr;
-    cJSON *rtc;
-    cJSON *factory;
-    zk_device_config_t candidate;
-    RtcTime_t rtc_value;
-    u8 factory_buf[128];
-    int err;
-    int handled;
-    int persist_needed;
-    int reset_period_timers;
-    int update_rtc;
-    int factory_changed;
-
-    if (root == NULL || header == NULL)
-    {
-        return BOOL_FALSE;
-    }
-    if (strcmp(header->sv, ZK_SV_PROP) != 0 || strcmp(header->ct, ZK_CT_WRITE) != 0)
-    {
-        return BOOL_FALSE;
-    }
-
-    dt = cJSON_GetObjectItem(root, "DT");
-    if (dt == NULL || !cJSON_IsObject(dt))
-    {
-        zk_publish_simple_response(header, 5);
-        return BOOL_TRUE;
-    }
-
-    gis = cJSON_GetObjectItem(dt, "Gis");
-    dim = cJSON_GetObjectItem(dt, "Dim");
-    sense = cJSON_GetObjectItem(dt, "Sense");
-    svr = cJSON_GetObjectItem(dt, "Svr");
-    rtc = cJSON_GetObjectItem(dt, "RTC");
-    factory = cJSON_GetObjectItem(dt, "Factory");
-
-    handled = 0;
-    if (gis != NULL)
-    {
-        handled = 1;
-    }
-    if (dim != NULL)
-    {
-        handled = 1;
-    }
-    if (sense != NULL)
-    {
-        handled = 1;
-    }
-    if (svr != NULL)
-    {
-        handled = 1;
-    }
-    if (rtc != NULL)
-    {
-        handled = 1;
-    }
-    if (factory != NULL)
-    {
-        handled = 1;
-    }
-    if (handled == 0)
-    {
-        zk_publish_simple_response(header, 1);
-        return BOOL_TRUE;
-    }
-
-    candidate = zk_dev_cfg;
-    persist_needed = (gis != NULL || dim != NULL || sense != NULL || svr != NULL) ? 1 : 0;
-    reset_period_timers = (svr != NULL) ? 1 : 0;
-    update_rtc = (rtc != NULL) ? 1 : 0;
-    memcpy(factory_buf, sys_data.fa_Parambuf, sizeof(factory_buf));
-    factory_changed = 0;
-
-    if (gis != NULL && (err = zk_apply_gis_config(gis, &candidate)) != 0)
-    {
-        zk_publish_simple_response(header, err);
-        return BOOL_TRUE;
-    }
-    if (dim != NULL && (err = zk_apply_dim_config(dim, &candidate)) != 0)
-    {
-        zk_publish_simple_response(header, err);
-        return BOOL_TRUE;
-    }
-    if (sense != NULL && (err = zk_apply_sense_config(sense, &candidate)) != 0)
-    {
-        zk_publish_simple_response(header, err);
-        return BOOL_TRUE;
-    }
-    if (svr != NULL && (err = zk_apply_svr_config(svr, &candidate)) != 0)
-    {
-        zk_publish_simple_response(header, err);
-        return BOOL_TRUE;
-    }
-    if (rtc != NULL && (err = zk_validate_rtc_config(rtc, &rtc_value)) != 0)
-    {
-        zk_publish_simple_response(header, err);
-        return BOOL_TRUE;
-    }
-    if (factory != NULL && (err = zk_apply_factory_config(factory, factory_buf, &factory_changed)) != 0)
-    {
-        zk_publish_simple_response(header, err);
-        return BOOL_TRUE;
-    }
-
-    if (persist_needed != 0)
-    {
-        if (zk_property_flash_store_config(&candidate) == BOOL_FALSE)
-        {
-            zk_publish_simple_response(header, ZK_FLASH_SAVE_ERROR);
-            return BOOL_TRUE;
-        }
-        zk_dev_cfg = candidate;
-        if (reset_period_timers != 0)
-        {
-            zk_reset_config_period_timers();
-        }
-    }
-    if (update_rtc != 0)
-    {
-        zk_set_local_rtc(&rtc_value);
-    }
-    if (factory_changed != 0)
-    {
-        memcpy(sys_data.fa_Parambuf, factory_buf, sizeof(factory_buf));
-        factory_user_load_data();
-        sys_data_store();
-    }
-
-    zk_publish_simple_response(header, 0);
-    return BOOL_TRUE;
-}
-
 static boolean_en zk_json_pick_number_field(cJSON *object, const char *key, int *value, int *err)
 {
     cJSON *node;
@@ -3256,7 +2081,6 @@ boolean_en zk_handle_control_message(cJSON *root, const zk_message_header_t *hea
     int item_count;
     int restore_brightness;
     int err;
-    zk_device_config_t restore_config;
 
     if (root == NULL || header == NULL)
     {
@@ -3315,14 +2139,12 @@ boolean_en zk_handle_control_message(cJSON *root, const zk_message_header_t *hea
         }
         if (restore_type == 0 || restore_type == 1 || restore_type == 6)
         {
-            zk_device_config_set_defaults(&restore_config);
-            if (zk_property_flash_store_config(&restore_config) == BOOL_FALSE)
+            if (zk_device_config_restore_defaults() == BOOL_FALSE)
             {
                 zk_publish_simple_response(header, ZK_FLASH_SAVE_ERROR);
                 return BOOL_TRUE;
             }
             zk_cancel_control_restore();
-            zk_dev_cfg = restore_config;
             zk_reset_config_period_timers();
         }
         if (restore_type == 5)

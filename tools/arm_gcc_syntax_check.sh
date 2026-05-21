@@ -13,7 +13,8 @@ if [[ "$#" -eq 0 ]]; then
   set -- \
     "${ROOT_DIR}/Core/Src/LampProtocolLib/mqtt_zk_protocol.c" \
     "${ROOT_DIR}/Core/Src/LampProtocolLib/zk_alarm.c" \
-    "${ROOT_DIR}/Core/Src/LampProtocolLib/zk_runtime_stats.c"
+    "${ROOT_DIR}/Core/Src/LampProtocolLib/zk_runtime_stats.c" \
+    "${ROOT_DIR}/Core/Src/LampProtocolLib/zk_property.c"
 fi
 
 arm-none-eabi-gcc \

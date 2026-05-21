@@ -51,6 +51,7 @@
 #define ZK_CJSON_RX_POOL_SIZE   4096
 #define ZK_CJSON_TX_POOL_SIZE   4096
 #define ZK_PROTOCOL_ONLY        1
+#define ZK_FLASH_SAVE_ERROR     99
 
 typedef enum
 {
@@ -125,6 +126,8 @@ void zk_mqtt_reset_session(void);
 void zk_mqtt_generate_password(const char *imei, char *password);
 void zk_device_config_init(void);
 void zk_device_config_refresh_iccid(void);
+const zk_device_config_t *zk_device_config_get(void);
+boolean_en zk_device_config_restore_defaults(void);
 const zk_mqtt_config_t *zk_mqtt_get_config(void);
 const char *zk_mqtt_get_pub_topic(void);
 const char *zk_mqtt_get_sub_topic(void);

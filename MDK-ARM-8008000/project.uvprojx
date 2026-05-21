@@ -1858,6 +1858,11 @@
               <FilePath>..\Core\Src\LampProtocolLib\zk_runtime_stats.c</FilePath>
             </File>
             <File>
+              <FileName>zk_property.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\LampProtocolLib\zk_property.c</FilePath>
+            </File>
+            <File>
               <FileName>zk_work_plan.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\LampProtocolLib\zk_work_plan.c</FilePath>

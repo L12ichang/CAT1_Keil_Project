@@ -5,17 +5,22 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "Core/Src/LampProtocolLib/mqtt_zk_protocol.c"
+PROPERTY_SOURCE = ROOT / "Core/Src/LampProtocolLib/zk_property.c"
+MQTT_SOURCE = ROOT / "Core/Src/LampProtocolLib/mqtt_zk_protocol.c"
 SYS_DATA = ROOT / "Core/Src/sys_data.h"
 
 
-def read_source() -> str:
-    return SOURCE.read_text(encoding="utf-8", errors="ignore")
+def read_property_source() -> str:
+    return PROPERTY_SOURCE.read_text(encoding="utf-8", errors="ignore")
+
+
+def read_mqtt_source() -> str:
+    return MQTT_SOURCE.read_text(encoding="utf-8", errors="ignore")
 
 
 class ZkPropertyFlashPersistenceTests(unittest.TestCase):
     def test_property_record_uses_existing_parameter_partition_pages(self):
-        source = read_source()
+        source = read_property_source()
         sys_data = SYS_DATA.read_text(encoding="utf-8", errors="ignore")
 
         self.assertIn("#define ZK_PROPERTY_FLASH_MAIN_ADDR (DATAROM_STARTADDR + FLASH_PAGE_SIZE)", source)
@@ -25,10 +30,10 @@ class ZkPropertyFlashPersistenceTests(unittest.TestCase):
         self.assertIn("#define SYS_DATA_ST_EXPECTED_SIZE         408", sys_data)
 
     def test_property_write_saves_flash_before_ram_commit(self):
-        source = read_source()
+        source = read_property_source()
         handler = source[
             source.index("boolean_en zk_handle_property_write"):
-            source.index("static boolean_en zk_json_pick_number_field")
+            len(source)
         ]
 
         self.assertIn("candidate = zk_dev_cfg;", handler)
@@ -41,10 +46,10 @@ class ZkPropertyFlashPersistenceTests(unittest.TestCase):
         )
 
     def test_rtc_write_is_not_part_of_persisted_property_record(self):
-        source = read_source()
+        source = read_property_source()
         handler = source[
             source.index("boolean_en zk_handle_property_write"):
-            source.index("static boolean_en zk_json_pick_number_field")
+            len(source)
         ]
         persist_line = "persist_needed = (gis != NULL || dim != NULL || sense != NULL || svr != NULL) ? 1 : 0;"
 
@@ -53,10 +58,10 @@ class ZkPropertyFlashPersistenceTests(unittest.TestCase):
         self.assertIn("zk_validate_rtc_config(rtc, &rtc_value)", handler)
         self.assertIn("zk_set_local_rtc(&rtc_value);", handler)
         self.assertIn("time_text = zk_json_get_rtc_time_text(rtc);", source)
-        self.assertIn('time_node = cJSON_GetObjectItem(node, "time");', source)
+        self.assertIn('time_node = cJSON_GetObjectItem(node, "time");', read_mqtt_source())
 
     def test_restore_overwrites_property_flash_without_reset(self):
-        source = read_source()
+        source = read_mqtt_source()
         handler = source[
             source.index("boolean_en zk_handle_control_message"):
             source.index("boolean_en zk_handle_request_message")
@@ -66,9 +71,11 @@ class ZkPropertyFlashPersistenceTests(unittest.TestCase):
             handler.index("if (restore_type == 5)")
         ]
 
-        self.assertIn("zk_device_config_set_defaults(&restore_config);", restore_block)
-        self.assertIn("zk_property_flash_store_config(&restore_config)", restore_block)
-        self.assertIn("zk_dev_cfg = restore_config;", restore_block)
+        property_source = read_property_source()
+        self.assertIn("zk_device_config_restore_defaults() == BOOL_FALSE", restore_block)
+        self.assertIn("zk_device_config_set_defaults(&restore_config);", property_source)
+        self.assertIn("zk_property_flash_store_config(&restore_config)", property_source)
+        self.assertIn("zk_dev_cfg = restore_config;", property_source)
         self.assertNotIn("NVIC_SystemReset", restore_block)
 
 

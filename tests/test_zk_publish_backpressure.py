@@ -21,8 +21,8 @@ def block(source: str, start: str, end: str) -> str:
 class ZkPublishBackpressureTests(unittest.TestCase):
     def test_zk_publish_uses_returning_driver_api(self):
         source = read_source()
-        sender = block(source, "static int zk_send_payload", "static int zk_send_json_root")
-        json_sender = block(source, "static int zk_send_json_root", "static void zk_schedule_simple_response")
+        sender = block(source, "static int zk_send_payload", "int zk_send_json_root")
+        json_sender = block(source, "int zk_send_json_root", "void zk_schedule_simple_response")
 
         self.assertIn("result = nbSendTcpData((uint8 *)payload, length);", sender)
         self.assertIn("result = g4Send_MQTT_Data((char *)topic, (char *)payload);", sender)
@@ -90,7 +90,7 @@ class ZkPublishBackpressureTests(unittest.TestCase):
     def test_pending_slots_are_lightweight_and_reset_with_session(self):
         source = read_source()
         reset = block(source, "void zk_mqtt_reset_session", "const zk_mqtt_config_t *zk_mqtt_get_config")
-        response = block(source, "static void zk_schedule_simple_response", "static int zk_publish_simple_response_now")
+        response = block(source, "void zk_schedule_simple_response", "int zk_publish_simple_response_now")
         ota_progress = block(source, "int zk_publish_ota_progress", "static int zk_publish_ota_error_now")
         ota_error = block(source, "int zk_publish_ota_error", "void zk_notify_state_changed")
         notify_change = block(source, "void zk_notify_state_changed", "static void zk_cancel_control_restore")

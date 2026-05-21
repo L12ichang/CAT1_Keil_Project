@@ -164,6 +164,7 @@ class Phase4LoginHeartbeatTests(unittest.TestCase):
 
     def test_time_sync_sources_are_explicit(self):
         mqtt_source = read_text("Core/Src/LampProtocolLib/mqtt_zk_protocol.c")
+        property_source = read_text("Core/Src/LampProtocolLib/zk_property.c")
         json_source = read_text("Core/Src/LampProtocolLib/Json_Protocol.c")
         sys_rtc_source = read_text("Core/Src/sys_aip1302.c")
 
@@ -181,9 +182,9 @@ class Phase4LoginHeartbeatTests(unittest.TestCase):
         self.assertIn("zk_apply_server_time_text(zk_json_get_rtc_time_text(tm_cali))", request_handler)
         self.assertNotIn("zk_apply_server_time_from_header(header)", request_handler)
 
-        rtc_validator = mqtt_source[
-            mqtt_source.index("static int zk_validate_rtc_config"):
-            mqtt_source.index("boolean_en zk_handle_property_read")
+        rtc_validator = property_source[
+            property_source.index("static int zk_validate_rtc_config"):
+            property_source.index("boolean_en zk_handle_property_read")
         ]
         self.assertIn("time_text = zk_json_get_rtc_time_text(rtc);", rtc_validator)
         self.assertIn('cJSON_GetObjectItem(node, "time")', mqtt_source)
