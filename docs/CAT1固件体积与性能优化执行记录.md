@@ -96,3 +96,9 @@ Keil 当前目标为 `program`，使用 Arm Compiler 5（`ARM-ADS` / `V5.06 upda
 - 全工程未发现 `HAL_SPI_*`、`HAL_CRC_*` API 调用，本次关闭 `Core/Inc/stm32f1xx_hal_conf.h` 中的 `HAL_SPI_MODULE_ENABLED` 和 `HAL_CRC_MODULE_ENABLED`。
 - 从 `MDK-ARM-8008000/project.uvprojx` 与 `project.uvoptx` 移除 `stm32f1xx_hal_spi.c`、`stm32f1xx_hal_crc.c` 工程引用，避免未使用 HAL 模块参与 Keil 构建。
 - `HAL_PWR_MODULE_ENABLED` 保持开启，原因是 HAL 基础初始化、RCC/standby 或电源相关路径可能依赖，不能贸然裁剪。
+
+## 11. cJSON 活跃解析路径保护
+
+- `Json_Protocol.c`、`zk_property.c`、`zk_work_plan.c` 已存在 `cJSON_Parse()`、`cJSON_GetObjectItem()` 的主要空指针与类型检查，本次不改变协议结构。
+- `mqtt_zk_protocol.c` 告警配置写入路径补充 `almId` 节点存在性和数字类型检查，避免 `cJSON_GetNumberValue(cJSON_GetObjectItem(...))` 在缺字段时依赖 cJSON 的空指针容错行为。
+- 旧激活链路中的 `cJSON_Print()` 位于未加入 Keil active image 的 legacy `.c` 文件中，本次不迁移或重写，避免扩大风险。

@@ -2419,6 +2419,8 @@ boolean_en zk_handle_alam_message(cJSON *root, const zk_message_header_t *header
         count = cJSON_GetArraySize(alms);
         for (index = 0; index < count; ++index)
         {
+            cJSON *alm_id_node;
+
             alm_item = cJSON_GetArrayItem(alms, index);
             if (alm_item == NULL || !cJSON_IsObject(alm_item))
             {
@@ -2426,7 +2428,13 @@ boolean_en zk_handle_alam_message(cJSON *root, const zk_message_header_t *header
                 break;
             }
 
-            alm_id = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(alm_item, "almId"));
+            alm_id_node = cJSON_GetObjectItem(alm_item, "almId");
+            if (alm_id_node == NULL || !cJSON_IsNumber(alm_id_node))
+            {
+                err = 2;
+                break;
+            }
+            alm_id = (int)cJSON_GetNumberValue(alm_id_node);
             if (alm_id < 10000 || alm_id > 10009)
             {
                 err = 4;
