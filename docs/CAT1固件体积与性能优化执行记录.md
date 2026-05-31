@@ -115,3 +115,50 @@ Keil 当前目标为 `program`，使用 Arm Compiler 5（`ARM-ADS` / `V5.06 upda
 - `common.h` 增加 `APP_PERF_PROFILE_ENABLE`，默认 `0`。
 - `main.c` 增加 `APP_PROFILE_CALL()` 包装宏；生产关闭时展开为原函数调用，不新增计时开销、不改变调用顺序。
 - 调试开启时记录 `tcpClientProcess()`、`_4G_configModule_machine()`、`send_AT_Command_machine()`、`nbSendTcpData_sm()`、`sys_bl0942_process()`、`_4G_OTA_machine()`、`mcu_copy_firmware_machine()`、`zk_work_plan_process()`、`json_process()` 的最大耗时到 `app_perf_max_tick[]`，供调试器查看。
+
+## 14. 最终验证结果
+
+| 验证项 | 结果 | 说明 |
+| --- | --- | --- |
+| `git diff --check` | 通过 | 无空白错误 |
+| `bash tools/arm_gcc_syntax_check.sh` | 通过 | host 侧 ARM GCC 语法检查通过 |
+| `python3 -m unittest discover -s tests -v` | 通过 | 90 项测试通过 |
+| `bash tests/run_mqtt_protocol_tests.sh` | 通过 | 48 项 MQTT/协议测试通过 |
+| `python3 tools/check_keil_app_image.py --project MDK-ARM-8008000/project.uvprojx --skip-freshness` | 通过 | App 基址、Flash 合约、`sys_data_st=408` 检查通过 |
+
+Keil 输出状态：本机仍未生成 `MDK-ARM-8008000/out/cat1.sct`、`cat1.map`、`cat1.bin`、`cat1.hex`，因此 Code/RO/RW/ZI 与 bin/hex 大小无法在本机补齐。需要在 Keil 中 Rebuild 后，用 `out/cat1.map` 和输出文件大小补录体积对比。
+
+## 15. 已完成与跳过项
+
+已完成：
+
+- Release Size / map 输出配置核对。
+- 生产日志和 hex dump 宏开关。
+- UART3 DMA printf 完成标志与发送长度修复。
+- 旧 HTTP 激活链路残留 include 隔离，OTA HTTP 流程未改动。
+- HAL SPI / CRC 模块裁剪，HAL PWR 保留。
+- 活跃 cJSON 告警写入解析路径空指针和类型保护。
+- 低风险浮点换算改整数：ADC、输出电压/电流/功率、PWM 比例、BL0942 3% 修正。
+- Flash 写前比较。
+- UART2 / BL0942 接收边界保护。
+- BL0942 除零保护。
+- CAT1 UART 接收队列丢包计数。
+- 可选主循环性能统计。
+
+跳过或保留：
+
+- Keil 实机 Rebuild、Code/RO/RW/ZI、bin/hex 体积对比：本机无 Keil 构建环境且 `out/` 产物缺失。
+- BL0942 容性无功补偿核心浮点算法：计量算法风险高，第一轮保留。
+- `zk_sunriset.c` 日出日落浮点算法：工作计划功能依赖，默认保留。
+- MicroLIB 独立实验：当前已启用 MicroLIB，本次不混入额外实验。
+
+## 16. 回退命令
+
+- 回退到优化前：`git checkout optimize/firmware-size-performance && git reset --hard baseline-before-size-perf-optimization`
+- 回退日志优化：`git revert 112696d`
+- 回退 Flash/UART2/BL0942 安全优化：`git revert ac1b1fd`
+- 回退旧 HTTP include 隔离：`git revert f787970`
+- 回退 HAL 裁剪：`git revert 4fcd64d`
+- 回退 cJSON 保护：`git revert d2ac7bc`
+- 回退浮点替换：`git revert f31c3df`
+- 回退 profiling：`git revert cbbfd2a`
