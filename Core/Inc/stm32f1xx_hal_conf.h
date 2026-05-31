@@ -40,7 +40,8 @@
 /*#define HAL_CAN_LEGACY_MODULE_ENABLED   */
 /*#define HAL_CEC_MODULE_ENABLED   */
 /*#define HAL_CORTEX_MODULE_ENABLED   */
-#define HAL_CRC_MODULE_ENABLED   
+/* CAT.1 active image does not call HAL CRC APIs; keep disabled to reduce ROM. */
+/*#define HAL_CRC_MODULE_ENABLED   */
 /*#define HAL_DAC_MODULE_ENABLED   */
 #define HAL_DMA_MODULE_ENABLED   
 /*#define HAL_ETH_MODULE_ENABLED   */
@@ -63,7 +64,8 @@
 /*#define HAL_MMC_MODULE_ENABLED   */
 /*#define HAL_SDRAM_MODULE_ENABLED   */
 /*#define HAL_SMARTCARD_MODULE_ENABLED   */
-#define HAL_SPI_MODULE_ENABLED   
+/* CAT.1 active image does not use SPI peripheral APIs; keep disabled to reduce ROM. */
+/*#define HAL_SPI_MODULE_ENABLED   */
 /*#define HAL_SRAM_MODULE_ENABLED   */
 #define HAL_TIM_MODULE_ENABLED   
 #define HAL_UART_MODULE_ENABLED   

@@ -90,3 +90,9 @@ Keil 当前目标为 `program`，使用 Arm Compiler 5（`ARM-ADS` / `V5.06 upda
 - `app_active.h`、`http_active.h` 已是默认 inline stub，未定义 legacy implementation 宏时不执行旧 HTTP 激活状态机。
 - 本次移除 `main.c`、`sys_tick.c`、`NbDriver.c` 中不需要的 `http_active.h`/`app_active.h` 残留 include；`sys_tick.c` 仅保留 `app_active.h`，用于当前空 timer stub，避免影响已有测试约束。
 - `Core/Src/LampProtocolLib/ota.c` 未改动，`AT+QHTTPCFG`、`AT+QHTTPURL`、`AT+QHTTPGETEX`、`AT+QHTTPREADFILE` OTA 下载流程未删除。
+
+## 10. HAL SPI / CRC 裁剪
+
+- 全工程未发现 `HAL_SPI_*`、`HAL_CRC_*` API 调用，本次关闭 `Core/Inc/stm32f1xx_hal_conf.h` 中的 `HAL_SPI_MODULE_ENABLED` 和 `HAL_CRC_MODULE_ENABLED`。
+- 从 `MDK-ARM-8008000/project.uvprojx` 与 `project.uvoptx` 移除 `stm32f1xx_hal_spi.c`、`stm32f1xx_hal_crc.c` 工程引用，避免未使用 HAL 模块参与 Keil 构建。
+- `HAL_PWR_MODULE_ENABLED` 保持开启，原因是 HAL 基础初始化、RCC/standby 或电源相关路径可能依赖，不能贸然裁剪。
