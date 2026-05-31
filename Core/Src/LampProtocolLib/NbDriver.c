@@ -14,7 +14,6 @@
 #include "common.h"
 #include "ota.h"
 #include "type.h"
-#include "http_active.h"
 #include "mqtt_zk_protocol.h"
 extern QUEUE  usartRecvQueue;//�������ݽ��ն���
 #define RECV_BUF_LENGTH 600

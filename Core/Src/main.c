@@ -52,8 +52,6 @@
 #include "sys_Vo_Io.h"
 #include "data_backup.h"
 #include "offline_Time_controlled_dimming.h"
-#include "http_active.h"
-#include "app_active.h"
 #include "json_protocol.h"
 #include "zk_work_plan.h"
 

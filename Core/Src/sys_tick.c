@@ -31,7 +31,6 @@
 #include "danger_current_check.h"
 #include "sys_Vo_Io.h"
 #include "offline_Time_controlled_dimming.h"
-#include "http_active.h"
 #include "app_active.h"
 static u16 volatile _tick_h = 0; //让定时器揍够32位
 static u32 _tick = 0;

@@ -83,3 +83,10 @@ Keil 当前目标为 `program`，使用 Arm Compiler 5（`ARM-ADS` / `V5.06 upda
 - `Core/Src/LampProtocolLib/Portable.c`：增加 `volatile uint32 usart_queue_drop_count`，队列满导致 `enqueue()` 失败时仅计数，不打印、不改变正常收包逻辑。
 
 验证重点：Flash 地址不变，`sys_data_st` 仍为 408 字节，BL0942 正常数据路径计算不变，异常无电压/无电流数据不触发除零。
+
+## 9. 旧 HTTP 激活链路隔离核对
+
+- `Core/Src/gateway/app_active.c`、`Core/Src/LampProtocolLib/http_active.c` 当前未加入 `MDK-ARM-8008000/project.uvprojx`，不会进入 Keil active image。
+- `app_active.h`、`http_active.h` 已是默认 inline stub，未定义 legacy implementation 宏时不执行旧 HTTP 激活状态机。
+- 本次移除 `main.c`、`sys_tick.c`、`NbDriver.c` 中不需要的 `http_active.h`/`app_active.h` 残留 include；`sys_tick.c` 仅保留 `app_active.h`，用于当前空 timer stub，避免影响已有测试约束。
+- `Core/Src/LampProtocolLib/ota.c` 未改动，`AT+QHTTPCFG`、`AT+QHTTPURL`、`AT+QHTTPGETEX`、`AT+QHTTPREADFILE` OTA 下载流程未删除。
