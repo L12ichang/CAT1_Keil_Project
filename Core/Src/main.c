@@ -61,6 +61,44 @@ static void MX_GPIO_Init(void);
 extern  u8   OTA_ENABLE_state;
 extern  void resetNbModule_machine(void);
 
+#if APP_PERF_PROFILE_ENABLE
+typedef enum
+{
+    APP_PERF_TCP_CLIENT,
+    APP_PERF_4G_CONFIG,
+    APP_PERF_AT_COMMAND,
+    APP_PERF_NB_SEND,
+    APP_PERF_BL0942,
+    APP_PERF_OTA,
+    APP_PERF_COPY_FW,
+    APP_PERF_ZK_PLAN,
+    APP_PERF_JSON,
+    APP_PERF_COUNT
+} app_perf_slot_en;
+
+volatile u32 app_perf_max_tick[APP_PERF_COUNT];
+
+static void app_perf_profile_update(app_perf_slot_en slot, u32 start_tick)
+{
+    u32 elapsed = sys_tick_get_tick() - start_tick;
+
+    if(elapsed > app_perf_max_tick[slot])
+    {
+        app_perf_max_tick[slot] = elapsed;
+    }
+}
+
+#define APP_PROFILE_CALL(slot, call_expr)            \
+    do                                               \
+    {                                                \
+        u32 app_perf_start_tick = sys_tick_get_tick(); \
+        call_expr;                                   \
+        app_perf_profile_update((slot), app_perf_start_tick); \
+    } while (0)
+#else
+#define APP_PROFILE_CALL(slot, call_expr) do { call_expr; } while (0)
+#endif
+
 
 #if APP_HEX_LOG_ENABLE
 void printf_buf(u8* buf, u16 length)
@@ -219,15 +257,15 @@ int main(void)
     sys_temp_over_protect_process();
     if(OTA_ENABLE_IS_SET()==BOOL_FALSE)
     {
-        tcpClientProcess();
+        APP_PROFILE_CALL(APP_PERF_TCP_CLIENT, tcpClientProcess());
     }
     resetNbModule_machine();
-    _4G_configModule_machine();
-    send_AT_Command_machine();
-    nbSendTcpData_sm();
-    sys_bl0942_process();
-    _4G_OTA_machine();
-    mcu_copy_firmware_machine();
+    APP_PROFILE_CALL(APP_PERF_4G_CONFIG, _4G_configModule_machine());
+    APP_PROFILE_CALL(APP_PERF_AT_COMMAND, send_AT_Command_machine());
+    APP_PROFILE_CALL(APP_PERF_NB_SEND, nbSendTcpData_sm());
+    APP_PROFILE_CALL(APP_PERF_BL0942, sys_bl0942_process());
+    APP_PROFILE_CALL(APP_PERF_OTA, _4G_OTA_machine());
+    APP_PROFILE_CALL(APP_PERF_COPY_FW, mcu_copy_firmware_machine());
     if( OTA_ENABLE_state==0)//OTAʱ���رմ˳����Ӱ��OTA����
     {
          if(init_printf==BOOL_FALSE && timer_for_printf==0)
@@ -252,9 +290,13 @@ int main(void)
     error_report_process();
     sys_pwm_process();
     sys_temp_low_protect_process();
+#if APP_PERF_PROFILE_ENABLE
+    APP_PROFILE_CALL(APP_PERF_ZK_PLAN, zk_work_plan_process());
+#else
     zk_work_plan_process();
+#endif
 
-    json_process ();
+    APP_PROFILE_CALL(APP_PERF_JSON, json_process());
   }
 }
 
