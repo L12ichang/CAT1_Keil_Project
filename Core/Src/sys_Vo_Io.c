@@ -489,8 +489,15 @@ void error_report_process(void)
     {
                timer_ad=1;
           //   printf(" OUTPUT_CUR_SENSOR=%d\n",OUTPUT_CUR_SENSOR);
-               Vo_value= (u32)((float)ADC_Value2*39.75/0.75/100);   //  电压单位0.1V   参考电压3.3V    39K+0.75K ，上报时会除以100按0.1V为单位上报  电压检测偏大0.001  //*((float)1-0.01)
-               Io_value = (u32)((float)ADC_Value4/OUTPUT_CUR_SENSOR/8.34*1000);      //  电流单位mA     参考电压3.3V    50毫欧/8.3333倍    100W以下 
+               Vo_value= ((u32)ADC_Value2*53U)/100U;   //  电压单位0.1V   参考电压3.3V    39K+0.75K ，上报时会除以100按0.1V为单位上报  电压检测偏大0.001  //*((float)1-0.01)
+               if(OUTPUT_CUR_SENSOR == 0)
+               {
+                   Io_value = 0;
+               }
+               else
+               {
+                   Io_value = ((u32)ADC_Value4*100000U)/((u32)OUTPUT_CUR_SENSOR*834U);      //  电流单位mA     参考电压3.3V    50毫欧/8.3333倍    100W以下
+               }
 
   
         
@@ -524,7 +531,7 @@ void error_report_process(void)
                      Vo_value-=10;
                    }
                 }*/
-               Po_value =(u32)((float)(Vo_value)*Io_value/1000);   //单位0.1W
+               Po_value = ((u32)Vo_value*Io_value)/1000U;   //单位0.1W
         
 //             printf(" ADC_Value4=%d\n",ADC_Value4);
 //             printf(" Vo_value=%dV\n",Vo_value/10);

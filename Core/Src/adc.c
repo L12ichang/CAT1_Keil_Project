@@ -316,10 +316,10 @@ void adc_process(void)
              adc_average[i] = first_order_filter(i,adc_buf[i]);
             
         }  
-        ADC_Value1 = ((float)adc_average[ADC_CH08_NTC]/4095)*3300;  //滤波后的实际电压,单位是mV 
-		ADC_Value2 = ((float)adc_average[ADC_CH09_VO]/4095)*3300;  
-        ADC_Value3 = ((float)adc_average[ADC_CH04_VO]/4095)*3300;  
-        ADC_Value4 = ((float)adc_average[ADC_CH06_VO]/4095)*3300;
+        ADC_Value1 = ((uint32_t)adc_average[ADC_CH08_NTC] * 3300U) / 4095U;  //滤波后的实际电压,单位是mV
+		ADC_Value2 = ((uint32_t)adc_average[ADC_CH09_VO] * 3300U) / 4095U;
+        ADC_Value3 = ((uint32_t)adc_average[ADC_CH04_VO] * 3300U) / 4095U;
+        ADC_Value4 = ((uint32_t)adc_average[ADC_CH06_VO] * 3300U) / 4095U;
         
         if(adc_timer>100)
         { 

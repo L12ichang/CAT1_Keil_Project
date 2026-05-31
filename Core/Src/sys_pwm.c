@@ -80,20 +80,26 @@ extern u8  fa_test_EN;
         // printf("duty3=%u\n", (u16)duty);
        // printf("SET_OUTCUR=%d,HWMAX_OUTCUR=%d,SENSOR=%d\n",SET_OUTCUR,HWMAX_OUTCUR,OUTPUT_CUR_SENSOR);
    
-      float temp;
+      u32 pwm_value;
      //  printf("fa_test_EN=%d\n",fa_test_EN) ;
       if(fa_test_EN==0)
       {
-             
-         temp=(float)persent*SET_OUTCUR/HWMAX_OUTCUR;
-      }  
+         if(HWMAX_OUTCUR == 0)
+         {
+             pwm_value = 0;
+         }
+         else
+         {
+             pwm_value = (u32)(((u64)persent * (u32)SET_OUTCUR * (u32)PWM_USEFUL_RANGE) / ((u32)HWMAX_OUTCUR * 100U));
+         }
+      }
       else   //产测模式
       {
-        temp= persent;
+        pwm_value = ((u32)persent * (u32)PWM_USEFUL_RANGE) / 100U;
       }
       //   printf("last2persent=%f\n",temp);
 
-      hw_set_pwm((u16)(temp*PWM_USEFUL_RANGE/100));
+      hw_set_pwm((u16)pwm_value);
 }
 
 void sys_pwm_timer(void)

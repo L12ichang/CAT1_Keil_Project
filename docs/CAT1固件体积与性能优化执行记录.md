@@ -102,3 +102,10 @@ Keil 当前目标为 `program`，使用 Arm Compiler 5（`ARM-ADS` / `V5.06 upda
 - `Json_Protocol.c`、`zk_property.c`、`zk_work_plan.c` 已存在 `cJSON_Parse()`、`cJSON_GetObjectItem()` 的主要空指针与类型检查，本次不改变协议结构。
 - `mqtt_zk_protocol.c` 告警配置写入路径补充 `almId` 节点存在性和数字类型检查，避免 `cJSON_GetNumberValue(cJSON_GetObjectItem(...))` 在缺字段时依赖 cJSON 的空指针容错行为。
 - 旧激活链路中的 `cJSON_Print()` 位于未加入 Keil active image 的 legacy `.c` 文件中，本次不迁移或重写，避免扩大风险。
+
+## 12. 低风险浮点替换
+
+- `adc.c`：ADC 原始值到 mV 的 `raw / 4095 * 3300` 换算改为整数乘除，结果单位不变。
+- `sys_Vo_Io.c`：输出电压 `39.75 / 0.75 / 100` 化简为 `* 53 / 100`；输出电流 ` / 8.34 * 1000` 改为 `* 100000 / 834`，并增加 `OUTPUT_CUR_SENSOR == 0` 保护。
+- `sys_pwm.c`：PWM 输出比例计算改为整数路径；正常模式保留 `persent * SET_OUTCUR / HWMAX_OUTCUR * PWM_USEFUL_RANGE / 100` 的等价含义，产测模式保留按百分比直接输出。
+- `zk_sunriset.c` 和 BL0942 容性无功补偿核心仍保留浮点算法，原因是这两处属于计划/计量算法，第一轮不做高风险重写。
