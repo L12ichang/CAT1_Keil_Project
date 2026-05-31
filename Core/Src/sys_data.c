@@ -87,8 +87,12 @@ boolean_en data_store_data(u8* buf, u16 size, u32 addr_main)
     {
       return BOOL_FALSE;
     }
-     hw_flash_write_bytes(addr_main, buf, size);
-    // *(uint32_t *)0x400220D0=0x1; 
+    if(memcmp((const void *)addr_main, buf, size) == 0)
+    {
+      return BOOL_TRUE;
+    }
+    hw_flash_write_bytes(addr_main, buf, size);
+    // *(uint32_t *)0x400220D0=0x1;
     return BOOL_TRUE;
 }
 

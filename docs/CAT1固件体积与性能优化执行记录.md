@@ -73,3 +73,13 @@ Keil 当前目标为 `program`，使用 Arm Compiler 5（`ARM-ADS` / `V5.06 upda
 - `HAL_DMA_TxCpltCallback()` 在 `dma == &hdma_usart3_tx` 时清除 `_flag_txing`，避免 DMA 发送完成后仍等待超时。
 
 验证方式：host 侧语法检查和协议测试；上板调试时分别用 `APP_LOG_ENABLE=0/1`、`APP_HEX_LOG_ENABLE=0/1` 验证生产关闭与调试打开行为。
+
+## 8. Flash / UART2 / BL0942 稳定性优化
+
+- `Core/Src/sys_data.c`：`data_store_data()` 写 Flash 前先 `memcmp()` 当前 Flash 内容，数据未变化时直接返回成功，减少重复擦写；主区和备份区调用路径不变。
+- `Core/Src/hw_uart2.c`：BL0942 接收中断在 `_index >= _rx_length` 时立即置 `BL0942_STATE_READ_READY`，不再继续向 `_buffer + _index` 申请下一字节，避免越界接收。
+- `Core/Src/sys_bl0942.c`：`ac_power_S == 0` 时不再计算 `ac_pf = ... / ac_power_S`，异常电参下将 `ac_pf`、`Z_ac_current` 置 0；同时对小电流修正减 7 的路径增加下限保护，避免无符号下溢。
+- `Core/Src/sys_bl0942.c`：把 3% 功率修正从浮点乘法改成 `* 97 / 100` 的整数计算，保持取整方向一致，减少运行时浮点开销。
+- `Core/Src/LampProtocolLib/Portable.c`：增加 `volatile uint32 usart_queue_drop_count`，队列满导致 `enqueue()` 失败时仅计数，不打印、不改变正常收包逻辑。
+
+验证重点：Flash 地址不变，`sys_data_st` 仍为 408 字节，BL0942 正常数据路径计算不变，异常无电压/无电流数据不触发除零。

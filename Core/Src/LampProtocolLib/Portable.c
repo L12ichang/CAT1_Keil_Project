@@ -82,15 +82,19 @@ void resetNbModule_machine(void)
 QUEUE  usartRecvQueue;
  uint8 uartSendingFlag = 0;
 uint8 CREG_common[11]="AT+CREG?\r\n";
+volatile uint32 usart_queue_drop_count = 0;
 
 void usartSendData(uint8 *pBuf, uint16 length)
 {  
    UART_SEND(pBuf, length);
 }
 
-void saveUsartByte(uint8 byte) 
-{  
-    enqueue(&usartRecvQueue, byte); 
+void saveUsartByte(uint8 byte)
+{
+    if(enqueue(&usartRecvQueue, byte) == 0)
+    {
+        usart_queue_drop_count++;
+    }
 }
 
 //system time

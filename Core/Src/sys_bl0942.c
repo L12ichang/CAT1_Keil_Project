@@ -527,10 +527,18 @@ void sys_bl0942_process(void)
                     //更换贝岭计量芯片
                    // UPDATE_AC_POWER(ac_powerpa);
 
-                    ac_pf = (ac_powerpa*100)/ac_power_S;
-                    if(ac_pf>99)
+                    if(ac_power_S == 0)
                     {
-                         ac_pf=99;
+                        ac_pf = 0;
+                        Z_ac_current = 0;
+                    }
+                    else
+                    {
+                        ac_pf = (ac_powerpa*100)/ac_power_S;
+                        if(ac_pf>99)
+                        {
+                             ac_pf=99;
+                        }
                     }
                     //更换贝岭计量芯片
                    // UPDATE_AC_POWERFACTOR(ac_pf);
@@ -610,7 +618,13 @@ void sys_bl0942_process(void)
   
                  }*/
 
- #if 0   // 普通容性无功补偿算法  占用0.5KROM 耗时53us       
+                  if(ac_power_S == 0)
+                  {
+                      Z_ac_current = 0;
+                  }
+                  else
+                  {
+ #if 0   // 普通容性无功补偿算法  占用0.5KROM 耗时53us
            //extern  u32 sys_tick_get_tick(void);
                   // u32 t1=    sys_tick_get_tick();
                  float  operation_tmp0;
@@ -655,25 +669,39 @@ void sys_bl0942_process(void)
                      
                   if(MID==3) //100W 输入功率和电流偏大 的处理
                   {
-                     ac_powerpa=(u16)( (float)ac_powerpa*(1.0f-0.03));
-                     if(ac_powerpa>500&&ac_powerpa<5000)    //小于50W 电流减10mA 
+                     ac_powerpa=(u16)((u32)ac_powerpa*97U/100U);
+                     if(ac_powerpa>500&&ac_powerpa<5000)    //小于50W 电流减10mA
                      {
-                         Z_ac_current-=7;
+                         if(Z_ac_current > 7)
+                         {
+                             Z_ac_current-=7;
+                         }
+                         else
+                         {
+                             Z_ac_current=0;
+                         }
                      }
 
                   }
                  if(MID==2) //75W 输入功率和电流偏大 的处理
                  {
-                       ac_powerpa=(u16)( (float)ac_powerpa*(1.0f-0.03));
-                     if(ac_powerpa>500&&ac_powerpa<5000)    //小于12W大于5W 电流减20mA 
+                       ac_powerpa=(u16)((u32)ac_powerpa*97U/100U);
+                     if(ac_powerpa>500&&ac_powerpa<5000)    //小于12W大于5W 电流减20mA
                      {
-                         Z_ac_current-=7;
+                         if(Z_ac_current > 7)
+                         {
+                             Z_ac_current-=7;
+                         }
+                         else
+                         {
+                             Z_ac_current=0;
+                         }
                      }
-  
-                 }     
 
-                     
-  #endif  
+                 }
+
+  #endif
+                  }
 
                 //计量数据更新完一次
                  bl0942data_ready=1;

@@ -71,10 +71,13 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
                 {
                     _buffer[_index++] = (char)huart->Instance->DR;
                 }
-                 HAL_UART_Receive_IT(&huart2, (uint8_t*)_buffer + _index, 1);
-                if(_index == _rx_length)
+                if(_index >= _rx_length)
                 {
                     _bl0942_state = BL0942_STATE_READ_READY;
+                }
+                else
+                {
+                    HAL_UART_Receive_IT(&huart2, (uint8_t*)_buffer + _index, 1);
                 }
             }
       
