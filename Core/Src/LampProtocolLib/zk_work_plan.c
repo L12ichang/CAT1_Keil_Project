@@ -1,4 +1,5 @@
 #include "zk_work_plan.h"
+#include "zk_sunriset.h"
 #include "hw_flash.h"
 #include "sys_aip1302.h"
 #include <stdio.h>
@@ -7,7 +8,7 @@
 #define ZK_PLAN_FLASH_MAIN_ADDR     ((u32)0x08006000)
 #define ZK_PLAN_FLASH_BACKUP_ADDR   ((u32)0x08007800)
 #define ZK_PLAN_FLASH_MAGIC         ((u32)0x5a4b504c)
-#define ZK_PLAN_FLASH_VERSION       1
+#define ZK_PLAN_FLASH_VERSION       2
 
 typedef struct __attribute__((packed))
 {
@@ -45,7 +46,8 @@ typedef struct __attribute__((packed))
     u8 priority;
     u8 week_mask;
     u8 job_count;
-    u8 reserved;
+    s8 setoffset;       /* 日落偏移量（分钟），负值=日落前，仅 type=2 有效 */
+    s8 riseoffset;      /* 日出偏移量（分钟），负值=日出前，仅 type=2 有效 */
     zk_plan_datetime_t start;
     zk_plan_datetime_t end;
     zk_plan_job_t jobs[ZK_PLAN_MAX_JOBS];
@@ -443,6 +445,23 @@ static int zk_plan_parse_time_text(const char *text, u16 *minute)
     return 0;
 }
 
+static int zk_plan_parse_duration(cJSON *node, u16 *minute)
+{
+    int value;
+
+    if (node == NULL || !cJSON_IsNumber(node))
+    {
+        return 2;
+    }
+    value = node->valueint;
+    if (value < 1 || value > 780)
+    {
+        return 3;
+    }
+    *minute = (u16)value;
+    return 0;
+}
+
 static int zk_plan_parse_cns(cJSON *job, u8 *cns_mask)
 {
     cJSON *cns;
@@ -489,11 +508,11 @@ static int zk_plan_parse_cns(cJSON *job, u8 *cns_mask)
     return 0;
 }
 
-static int zk_plan_parse_job(cJSON *job, zk_plan_job_t *out)
+static int zk_plan_parse_job(cJSON *job, zk_plan_job_t *out, u8 plan_type)
 {
-    cJSON *time_array;
+    cJSON *schedule_array;
     cJSON *bri_array;
-    cJSON *time_item;
+    cJSON *schedule_item;
     cJSON *bri_item;
     cJSON *timetp;
     int count;
@@ -501,6 +520,7 @@ static int zk_plan_parse_job(cJSON *job, zk_plan_job_t *out)
     int index;
     int err;
     int bri;
+    int use_duration;
 
     if (job == NULL || !cJSON_IsObject(job))
     {
@@ -520,24 +540,29 @@ static int zk_plan_parse_job(cJSON *job, zk_plan_job_t *out)
         {
             return 2;
         }
-        if (timetp->valueint != 0)
+        if (timetp->valueint < 0 || timetp->valueint > 1)
         {
             return 1;
         }
     }
-    out->timetp = 0;
+    out->timetp = (u8)((timetp != NULL) ? timetp->valueint : 0);
+    if (plan_type == 1 && out->timetp != 0)
+    {
+        return 1;
+    }
 
-    time_array = cJSON_GetObjectItem(job, "time");
+    use_duration = (out->timetp == 1) ? 1 : 0;
+    schedule_array = cJSON_GetObjectItem(job, use_duration ? "dTime" : "time");
     bri_array = cJSON_GetObjectItem(job, "bri");
-    if (time_array == NULL || bri_array == NULL)
+    if (schedule_array == NULL || bri_array == NULL)
     {
         return 5;
     }
-    if (!cJSON_IsArray(time_array) || !cJSON_IsArray(bri_array))
+    if (!cJSON_IsArray(schedule_array) || !cJSON_IsArray(bri_array))
     {
         return 2;
     }
-    count = cJSON_GetArraySize(time_array);
+    count = cJSON_GetArraySize(schedule_array);
     bri_count = cJSON_GetArraySize(bri_array);
     if (count <= 0 || bri_count <= 0)
     {
@@ -554,15 +579,26 @@ static int zk_plan_parse_job(cJSON *job, zk_plan_job_t *out)
     out->action_count = (u8)count;
     for (index = 0; index < count; ++index)
     {
-        time_item = cJSON_GetArrayItem(time_array, index);
+        schedule_item = cJSON_GetArrayItem(schedule_array, index);
         bri_item = cJSON_GetArrayItem(bri_array, index);
-        if (time_item == NULL || !cJSON_IsString(time_item) ||
-            time_item->valuestring == NULL || bri_item == NULL ||
-            !cJSON_IsNumber(bri_item))
+        if (bri_item == NULL || !cJSON_IsNumber(bri_item))
         {
             return 2;
         }
-        err = zk_plan_parse_time_text(time_item->valuestring, &out->actions[index].minute);
+        if (use_duration)
+        {
+            err = zk_plan_parse_duration(schedule_item, &out->actions[index].minute);
+        }
+        else
+        {
+            if (schedule_item == NULL || !cJSON_IsString(schedule_item) ||
+                schedule_item->valuestring == NULL)
+            {
+                return 2;
+            }
+            err = zk_plan_parse_time_text(schedule_item->valuestring,
+                                          &out->actions[index].minute);
+        }
         if (err != 0)
         {
             return err;
@@ -620,7 +656,7 @@ static int zk_plan_parse_enabled(cJSON *plan, zk_plan_record_t *out)
     {
         return err;
     }
-    if (value != 1)
+    if (value != 1 && value != 2)
     {
         return 1;
     }
@@ -676,19 +712,48 @@ static int zk_plan_parse_enabled(cJSON *plan, zk_plan_record_t *out)
         return 9;
     }
 
+    /* 解析 setoffset / riseoffset（仅 type=2 有效，缺省为0） */
+    out->setoffset = 0;
+    out->riseoffset = 0;
+    if (out->type == 2)
+    {
+        node = cJSON_GetObjectItem(plan, "setoffset");
+        if (node != NULL)
+        {
+            if (!cJSON_IsNumber(node)) return 2;
+            if (node->valueint < -128 || node->valueint > 127) return 3;
+            out->setoffset = (s8)node->valueint;
+        }
+        node = cJSON_GetObjectItem(plan, "riseoffset");
+        if (node != NULL)
+        {
+            if (!cJSON_IsNumber(node)) return 2;
+            if (node->valueint < -128 || node->valueint > 127) return 3;
+            out->riseoffset = (s8)node->valueint;
+        }
+    }
+
+    /* week：type=1 必填，type=2 可选（缺省=0表示全匹配） */
     node = cJSON_GetObjectItem(plan, "week");
     if (node == NULL)
     {
-        return 5;
+        if (out->type == 1)
+        {
+            return 5;
+        }
+        out->week_mask = 0;
     }
-    if (!cJSON_IsString(node) || node->valuestring == NULL)
+    else
     {
-        return 2;
-    }
-    err = zk_plan_parse_week(node->valuestring, &out->week_mask);
-    if (err != 0)
-    {
-        return err;
+        if (!cJSON_IsString(node) || node->valuestring == NULL)
+        {
+            return 2;
+        }
+        err = zk_plan_parse_week(node->valuestring, &out->week_mask);
+        if (err != 0)
+        {
+            return err;
+        }
     }
 
     jobs = cJSON_GetObjectItem(plan, "jobs");
@@ -713,7 +778,7 @@ static int zk_plan_parse_enabled(cJSON *plan, zk_plan_record_t *out)
     for (index = 0; index < job_count; ++index)
     {
         job = cJSON_GetArrayItem(jobs, index);
-        err = zk_plan_parse_job(job, &out->jobs[index]);
+        err = zk_plan_parse_job(job, &out->jobs[index], out->type);
         if (err != 0)
         {
             return err;
@@ -916,6 +981,12 @@ static int zk_plan_find_current_match_for_cns(zk_plan_match_t *match, int cns)
     int plan_index;
     int job_index;
     int action_index;
+    int effective_minute;   /* 实际执行分钟（考虑日出日落偏移后） */
+    int sr_minute;          /* 日出分钟（当日） */
+    int ss_minute;          /* 日落分钟（当日） */
+    int have_sun;           /* 日出日落计算是否有效 */
+    int offset_minute;
+    int offset_index;
 
     if (match == NULL)
     {
@@ -927,19 +998,39 @@ static int zk_plan_find_current_match_for_cns(zk_plan_match_t *match, int cns)
         return 0;
     }
 
+    /* 尝试获取日出日落（用于 type=2），失败时 type=2 跳过 */
+    sr_minute = 0;
+    ss_minute = 0;
+    have_sun = (zk_sunriset_get(&sr_minute, &ss_minute) == 0) ? 1 : 0;
+
     zk_plan_current_datetime(&now);
     minute = (u16)(now.hour * 60U + now.min);
     for (plan_index = 0; plan_index < ZK_PLAN_MAX_COUNT; ++plan_index)
     {
         plan = &zk_plan_store.plans[plan_index];
-        if (plan->valid != 1 || plan->en != 1 || plan->type != 1)
+        if (plan->valid != 1 || plan->en != 1)
         {
             continue;
         }
-        if (!zk_plan_date_active(plan, &now) || !zk_plan_week_active(plan, &now))
+        if (plan->type != 1 && plan->type != 2)
         {
             continue;
         }
+        if (!zk_plan_date_active(plan, &now))
+        {
+            continue;
+        }
+        /* type=1 校验星期掩码，type=2 不校验（week_mask=0 表示全匹配） */
+        if (plan->type == 1 && !zk_plan_week_active(plan, &now))
+        {
+            continue;
+        }
+        /* type=2 且无法计算日出日落时跳过 */
+        if (plan->type == 2 && have_sun == 0)
+        {
+            continue;
+        }
+
         for (job_index = 0; job_index < plan->job_count && job_index < ZK_PLAN_MAX_JOBS; ++job_index)
         {
             job = &plan->jobs[job_index];
@@ -951,9 +1042,29 @@ static int zk_plan_find_current_match_for_cns(zk_plan_match_t *match, int cns)
             for (action_index = 0; action_index < job->action_count && action_index < ZK_PLAN_MAX_ACTIONS; ++action_index)
             {
                 action = &job->actions[action_index];
-                if (action->minute != minute)
+
+                /* 计算绝对分钟数：timetp=0 为时间点，timetp=1 为日落后时间段。 */
+                if (plan->type == 2 && job->timetp == 1)
                 {
-                    if (((action->minute + 1) % 1440) != minute)
+                    offset_minute = 0;
+                    for (offset_index = 0; offset_index < action_index; ++offset_index)
+                    {
+                        offset_minute += (int)job->actions[offset_index].minute;
+                    }
+                    effective_minute = ss_minute + (int)plan->setoffset + offset_minute;
+                }
+                else
+                {
+                    effective_minute = action->minute;
+                }
+
+                /* 归一化到 [0, 1440) */
+                while (effective_minute < 0)    effective_minute += 1440;
+                while (effective_minute >= 1440) effective_minute -= 1440;
+
+                if ((u16)effective_minute != minute)
+                {
+                    if (((u16)(effective_minute + 1) % 1440) != minute)
                     {
                         continue;
                     }
@@ -1013,7 +1124,7 @@ static cJSON *zk_plan_record_to_json(const zk_plan_record_t *record)
     cJSON *jobs;
     cJSON *job_json;
     cJSON *cns;
-    cJSON *time_array;
+    cJSON *schedule_array;
     cJSON *bri_array;
     char text[20];
     char week[8];
@@ -1041,6 +1152,11 @@ static cJSON *zk_plan_record_to_json(const zk_plan_record_t *record)
     cJSON_AddStringToObject(plan, "eDate", text);
     zk_plan_format_week(record->week_mask, week);
     cJSON_AddStringToObject(plan, "week", week);
+    if (record->type == 2)
+    {
+        cJSON_AddNumberToObject(plan, "setoffset", record->setoffset);
+        cJSON_AddNumberToObject(plan, "riseoffset", record->riseoffset);
+    }
 
     jobs = cJSON_CreateArray();
     if (jobs == NULL)
@@ -1055,9 +1171,9 @@ static cJSON *zk_plan_record_to_json(const zk_plan_record_t *record)
 
         job_json = cJSON_CreateObject();
         cns = cJSON_CreateArray();
-        time_array = cJSON_CreateArray();
+        schedule_array = cJSON_CreateArray();
         bri_array = cJSON_CreateArray();
-        if (job_json == NULL || cns == NULL || time_array == NULL || bri_array == NULL)
+        if (job_json == NULL || cns == NULL || schedule_array == NULL || bri_array == NULL)
         {
             if (job_json != NULL)
             {
@@ -1067,9 +1183,9 @@ static cJSON *zk_plan_record_to_json(const zk_plan_record_t *record)
             {
                 cJSON_Delete(cns);
             }
-            if (time_array != NULL)
+            if (schedule_array != NULL)
             {
-                cJSON_Delete(time_array);
+                cJSON_Delete(schedule_array);
             }
             if (bri_array != NULL)
             {
@@ -1090,11 +1206,20 @@ static cJSON *zk_plan_record_to_json(const zk_plan_record_t *record)
         cJSON_AddNumberToObject(job_json, "timetp", job->timetp);
         for (action_index = 0; action_index < job->action_count && action_index < ZK_PLAN_MAX_ACTIONS; ++action_index)
         {
-            zk_plan_format_time(job->actions[action_index].minute, text, sizeof(text));
-            cJSON_AddItemToArray(time_array, cJSON_CreateString(text));
+            if (job->timetp == 1)
+            {
+                cJSON_AddItemToArray(schedule_array,
+                                     cJSON_CreateNumber(job->actions[action_index].minute));
+            }
+            else
+            {
+                zk_plan_format_time(job->actions[action_index].minute, text, sizeof(text));
+                cJSON_AddItemToArray(schedule_array, cJSON_CreateString(text));
+            }
             cJSON_AddItemToArray(bri_array, cJSON_CreateNumber(job->actions[action_index].bri));
         }
-        cJSON_AddItemToObject(job_json, "time", time_array);
+        cJSON_AddItemToObject(job_json, (job->timetp == 1) ? "dTime" : "time",
+                              schedule_array);
         cJSON_AddItemToObject(job_json, "bri", bri_array);
         cJSON_AddItemToArray(jobs, job_json);
     }
@@ -1121,6 +1246,32 @@ static int zk_plan_build_nid_dt(cJSON *dt, void *ctx)
             cJSON_AddItemToArray(array, cJSON_CreateNumber(zk_plan_store.plans[index].id));
         }
     }
+    return 0;
+}
+
+static int zk_plan_build_sunriset_dt(cJSON *dt, void *ctx)
+{
+    cJSON *array;
+    int sr_minute;
+    int ss_minute;
+    char text[6];
+
+    (void)ctx;
+    if (zk_sunriset_get(&sr_minute, &ss_minute) != 0)
+    {
+        return -1;
+    }
+
+    array = cJSON_CreateArray();
+    if (array == NULL)
+    {
+        return -1;
+    }
+    snprintf(text, sizeof(text), "%02u:%02u", (u16)sr_minute / 60U, (u16)sr_minute % 60U);
+    cJSON_AddItemToArray(array, cJSON_CreateString(text));
+    snprintf(text, sizeof(text), "%02u:%02u", (u16)ss_minute / 60U, (u16)ss_minute % 60U);
+    cJSON_AddItemToArray(array, cJSON_CreateString(text));
+    cJSON_AddItemToObject(dt, "sr", array);
     return 0;
 }
 
@@ -1210,6 +1361,10 @@ static int zk_plan_handle_read(cJSON *dt, const zk_message_header_t *header)
         if (strcmp(do_node->valuestring, "nid") == 0)
         {
             return zk_plan_publish_dt_response(header, zk_plan_build_nid_dt, NULL);
+        }
+        if (strcmp(do_node->valuestring, "sr") == 0)
+        {
+            return zk_plan_publish_dt_response(header, zk_plan_build_sunriset_dt, NULL);
         }
         return 1;
     }

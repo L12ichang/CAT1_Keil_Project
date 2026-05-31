@@ -40,6 +40,9 @@ typedef struct
     s32 uPeriod;
     s32 hPeriod;
     s32 tPeriod;
+    s32 almValue[10];       /* 告警触发阈值，索引=almId-10000 */
+    s32 almRecValue[10];    /* 告警恢复阈值 */
+    s32 almEn[10];          /* 告警使能标志 */
     u32 checksum;
 } zk_property_flash_record_t;
 
@@ -103,6 +106,10 @@ static void zk_property_record_from_config(zk_property_flash_record_t *record,
     record->uPeriod = config->uPeriod;
     record->hPeriod = config->hPeriod;
     record->tPeriod = config->tPeriod;
+    /* 保存告警阈值配置 */
+    memcpy(record->almValue, config->almValue, sizeof(record->almValue));
+    memcpy(record->almRecValue, config->almRecValue, sizeof(record->almRecValue));
+    memcpy(record->almEn, config->almEn, sizeof(record->almEn));
     record->checksum = zk_property_flash_checksum(record);
 }
 
@@ -139,6 +146,10 @@ static void zk_property_record_to_config(zk_device_config_t *config,
     config->uPeriod = record->uPeriod;
     config->hPeriod = record->hPeriod;
     config->tPeriod = record->tPeriod;
+    /* 从Flash恢复告警阈值配置 */
+    memcpy(config->almValue, record->almValue, sizeof(config->almValue));
+    memcpy(config->almRecValue, record->almRecValue, sizeof(config->almRecValue));
+    memcpy(config->almEn, record->almEn, sizeof(config->almEn));
 }
 
 static boolean_en zk_property_flash_read_record(u32 addr,
@@ -263,6 +274,17 @@ static void zk_device_config_set_defaults(zk_device_config_t *config)
     config->spreadOffset = 6000;
     config->spreadWindow = 60;
     config->spreadInterval = 10;
+    /* 设置告警阈值默认值："设备出厂配置"即默认阈值 */
+    config->almValue[0] = 3200;  config->almRecValue[0] = 2640;  config->almEn[0] = 1;  /* 10000-过压 */
+    config->almValue[1] = 800;   config->almRecValue[1] = 820;   config->almEn[1] = 1;  /* 10001-欠压 */
+    config->almValue[2] = 0;     config->almRecValue[2] = 0;     config->almEn[2] = 1;  /* 10002-过流（动态按额定电流%计算） */
+    config->almValue[3] = 0;     config->almRecValue[3] = 0;     config->almEn[3] = 1;  /* 10003-欠流（动态按额定电流%计算） */
+    config->almValue[4] = 0;     config->almRecValue[4] = 0;     config->almEn[4] = 1;  /* 10004-开灯异常 */
+    config->almValue[5] = 0;     config->almRecValue[5] = 0;     config->almEn[5] = 0;  /* 10005-关灯异常（未接入） */
+    config->almValue[6] = 0;     config->almRecValue[6] = 0;     config->almEn[6] = 0;  /* 10006-灯杆倾斜（未接入） */
+    config->almValue[7] = 30;    config->almRecValue[7] = 20;    config->almEn[7] = 1;  /* 10007-漏电 */
+    config->almValue[8] = 0;     config->almRecValue[8] = 0;     config->almEn[8] = 1;  /* 10008-设备故障（动态按NTC温度） */
+    config->almValue[9] = 70;    config->almRecValue[9] = 80;    config->almEn[9] = 1;  /* 10009-失电 */
 }
 
 void zk_device_config_init(void)
@@ -293,6 +315,20 @@ boolean_en zk_device_config_restore_defaults(void)
         return BOOL_FALSE;
     }
     zk_dev_cfg = restore_config;
+    return BOOL_TRUE;
+}
+
+boolean_en zk_device_config_commit(const zk_device_config_t *config)
+{
+    if (config == NULL)
+    {
+        return BOOL_FALSE;
+    }
+    if (zk_property_flash_store_config(config) == BOOL_FALSE)
+    {
+        return BOOL_FALSE;
+    }
+    zk_dev_cfg = *config;
     return BOOL_TRUE;
 }
 
@@ -515,6 +551,17 @@ static int zk_add_property_to_dt(cJSON *dt_root, const char *name)
     else if (strcmp(name, "Spread") == 0)
     {
         zk_add_spread_prop(dt_root);
+    }
+    /* RunTm/LightTm: 共享运行时统计组构建函数（内部同时生成 RunTm + LightTm 两个属性组）
+     * 无论请求其中哪一个，DT中都会同时包含两者，因统计数据需一次计算获取，额外返回相关数据无副作用 */
+    else if (strcmp(name, "RunTm") == 0 || strcmp(name, "LightTm") == 0)
+    {
+        zk_add_runtime_time_groups(dt_root);
+    }
+    else if (strcmp(name, "Angle") == 0)
+    {
+        /* Angle: 当前无倾角传感器硬件，返回 x/y/z=0 表示设备支持此属性但无有效数据 */
+        zk_add_angle_group(dt_root);
     }
     else
     {

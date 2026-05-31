@@ -21,5 +21,7 @@ void zk_add_run_status_group(cJSON *dt_root);
 void zk_add_ele_info_group(cJSON *dt_root);
 void zk_add_per_sts_group(cJSON *dt_root);
 void zk_add_signal_group(cJSON *dt_root);
+void zk_add_runtime_time_groups(cJSON *dt_root);
+void zk_add_angle_group(cJSON *dt_root);
 
 #endif

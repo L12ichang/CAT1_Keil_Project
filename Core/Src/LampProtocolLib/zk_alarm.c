@@ -1,4 +1,5 @@
 #include "zk_alarm.h"
+#include "zk_property.h"
 #include "common.h"
 #include "mqtt_zk_protocol.h"
 #include "sys_Vo_Io.h"
@@ -12,7 +13,7 @@
 /* dangeo_out 定义于 danger_current_check.c */
 extern u32 dangeo_out;
 
-#define ZK_ALARM_POWER_DOWN_INDEX 7U
+#define ZK_ALARM_POWER_DOWN_INDEX 9U
 
 /* ========== 告警状态结构 ========== */
 typedef struct
@@ -26,17 +27,20 @@ typedef struct
     uint32 threshold;       /* 告警阈值 */
 } zk_alarm_state_t;
 
-/* 告警状态表：每个告警类型的实时状态 */
+/* 告警状态表：每个告警类型的实时状态
+ * 阈值初始填0，运行时从zk_device_config_get()加载 */
 static zk_alarm_state_t zk_alarm_states[] =
 {
-    {ZK_ALARM_OVER_VOLTAGE, 0, 0, 0, 0, 0, 3200},
-    {ZK_ALARM_UNDER_VOLTAGE, 0, 0, 0, 0, 0, 800},
+    {ZK_ALARM_OVER_VOLTAGE, 0, 0, 0, 0, 0, 0},
+    {ZK_ALARM_UNDER_VOLTAGE, 0, 0, 0, 0, 0, 0},
     {ZK_ALARM_OVER_CURRENT, 0, 0, 0, 0, 0, 0},
     {ZK_ALARM_UNDER_CURRENT, 0, 0, 0, 0, 0, 0},
     {ZK_ALARM_LIGHT_ON_FAIL, 0, 0, 0, 0, 0, 0},
-    {ZK_ALARM_LEAK_CURRENT, 0, 0, 0, 0, 0, 30},
+    {ZK_ALARM_LIGHT_OFF_FAIL, 0, 0, 0, 0, 0, 0},       /* 预留：灯具关断失败（暂未接入检测信号） */
+    {ZK_ALARM_POLE_TILT, 0, 0, 0, 0, 0, 0},             /* 预留：灯杆倾斜（暂未接入检测信号） */
+    {ZK_ALARM_LEAK_CURRENT, 0, 0, 0, 0, 0, 0},
     {ZK_ALARM_DEVICE_FAULT, 0, 0, 0, 0, 0, 0},
-    {ZK_ALARM_POWER_DOWN, 0, 0, 0, 1, 0, 70},
+    {ZK_ALARM_POWER_DOWN, 0, 0, 0, 1, 0, 0},
 };
 #define ZK_ALARM_STATE_COUNT (sizeof(zk_alarm_states) / sizeof(zk_alarm_states[0]))
 
@@ -118,10 +122,12 @@ static void zk_alarm_update_level(zk_alarm_state_t *alarm, u8 active, uint32 val
 static void zk_alarm_update_power_down(void)
 {
     zk_alarm_state_t *alarm;
+    const zk_device_config_t *cfg;
 
     alarm = &zk_alarm_states[ZK_ALARM_POWER_DOWN_INDEX];
+    cfg = zk_device_config_get();
     alarm->value = ac_voltage_8209;
-    alarm->threshold = 70;
+    alarm->threshold = (cfg->almValue[9] != 0) ? cfg->almValue[9] : 70;
     if (power_down_flag != 0 && alarm->pending == 0)
     {
         alarm->pending = 1;
@@ -129,19 +135,55 @@ static void zk_alarm_update_power_down(void)
     }
 }
 
-/* 采集所有告警源的实时状态，更新告警状态机 */
+/* 采集所有告警源的实时状态，更新告警状态机
+ * 阈值优先使用平台下发的 alam 配置（almValue），配置为0时回退到默认值 */
 static void zk_alarm_collect_sources(void)
 {
-    zk_alarm_update_level(&zk_alarm_states[0], Error_3_OV ? 1 : 0, ac_voltage_8209, 3200);
-    zk_alarm_update_level(&zk_alarm_states[1], Error_4_LV ? 1 : 0, ac_voltage_8209, 800);
-    zk_alarm_update_level(&zk_alarm_states[2], Error_1_OL ? 1 : 0, Io_value, zk_alarm_current_threshold(150));
-    zk_alarm_update_level(&zk_alarm_states[3], Error_Out_LV ? 1 : 0, Io_value, zk_alarm_current_threshold(80));
-    zk_alarm_update_level(&zk_alarm_states[4], Error_0_linght ? 1 : 0, Po_value, 0);
-    zk_alarm_update_level(&zk_alarm_states[5], danger_current_warn ? 1 : 0, dangeo_out, 30);
-    zk_alarm_update_level(&zk_alarm_states[6], driver_temperarure_warn ? 1 : 0,
-                          zk_alarm_temperature_value(),
-                          zk_alarm_temperature_threshold());
-    zk_alarm_update_power_down();
+    const zk_device_config_t *cfg;
+
+    cfg = zk_device_config_get();
+
+    /* 0-输入过压（almIdx=0） */
+    if (cfg->almEn[0])
+        zk_alarm_update_level(&zk_alarm_states[0],
+            Error_3_OV ? 1 : 0, ac_voltage_8209,
+            (cfg->almValue[0] != 0) ? cfg->almValue[0] : 3200);
+    /* 1-输入欠压（almIdx=1） */
+    if (cfg->almEn[1])
+        zk_alarm_update_level(&zk_alarm_states[1],
+            Error_4_LV ? 1 : 0, ac_voltage_8209,
+            (cfg->almValue[1] != 0) ? cfg->almValue[1] : 800);
+    /* 2-输出过流（almIdx=2） */
+    if (cfg->almEn[2])
+        zk_alarm_update_level(&zk_alarm_states[2],
+            Error_1_OL ? 1 : 0, Io_value,
+            (cfg->almValue[2] != 0) ? cfg->almValue[2] : zk_alarm_current_threshold(150));
+    /* 3-输出低压（almIdx=3） */
+    if (cfg->almEn[3])
+        zk_alarm_update_level(&zk_alarm_states[3],
+            Error_Out_LV ? 1 : 0, Io_value,
+            (cfg->almValue[3] != 0) ? cfg->almValue[3] : zk_alarm_current_threshold(80));
+    /* 4-灯具启动失败（almIdx=4） */
+    if (cfg->almEn[4])
+        zk_alarm_update_level(&zk_alarm_states[4],
+            Error_0_linght ? 1 : 0, Po_value,
+            (cfg->almValue[4] != 0) ? cfg->almValue[4] : 0);
+    /* 5-灯具关断失败（10005）：预留，暂未接入检测信号 */
+    /* 6-灯杆倾斜（10006）：预留，暂未接入检测信号 */
+    /* 7-漏电告警（almIdx=7） */
+    if (cfg->almEn[7])
+        zk_alarm_update_level(&zk_alarm_states[7],
+            danger_current_warn ? 1 : 0, dangeo_out,
+            (cfg->almValue[7] != 0) ? cfg->almValue[7] : 30);
+    /* 8-设备温度告警（almIdx=8） */
+    if (cfg->almEn[8])
+        zk_alarm_update_level(&zk_alarm_states[8],
+            driver_temperarure_warn ? 1 : 0,
+            zk_alarm_temperature_value(),
+            (cfg->almValue[8] != 0) ? cfg->almValue[8] : zk_alarm_temperature_threshold());
+    /* 9-掉电告警（almIdx=9） */
+    if (cfg->almEn[9])
+        zk_alarm_update_power_down();
 }
 
 /* 遍历告警表，发布第一条 pending 的告警（一次只发一条，防止多轮拥塞） */

@@ -251,31 +251,6 @@
   },
   {
     "directory": "/Users/mac/Desktop/CAT1_Keil_Project",
-    "file": "/Users/mac/Desktop/CAT1_Keil_Project/Core/Src/LampProtocolLib/http_active.c",
-    "arguments": [
-      "clang",
-      "-x",
-      "c",
-      "--target=arm-none-eabi",
-      "-mcpu=cortex-m3",
-      "-mthumb",
-      "-std=gnu11",
-      "-DUSE_HAL_DRIVER",
-      "-DSTM32F103xE",
-      "-I/Users/mac/Desktop/CAT1_Keil_Project/Core/Inc",
-      "-I/Users/mac/Desktop/CAT1_Keil_Project/Core/Src",
-      "-I/Users/mac/Desktop/CAT1_Keil_Project/Core/Src/CJSON",
-      "-I/Users/mac/Desktop/CAT1_Keil_Project/Core/Src/LampProtocolLib",
-      "-I/Users/mac/Desktop/CAT1_Keil_Project/Core/Src/gateway",
-      "-I/Users/mac/Desktop/CAT1_Keil_Project/Drivers/STM32F1xx_HAL_Driver/Inc",
-      "-I/Users/mac/Desktop/CAT1_Keil_Project/Drivers/STM32F1xx_HAL_Driver/Inc/Legacy",
-      "-I/Users/mac/Desktop/CAT1_Keil_Project/Drivers/CMSIS/Device/ST/STM32F1xx/Include",
-      "-I/Users/mac/Desktop/CAT1_Keil_Project/Drivers/CMSIS/Include",
-      "/Users/mac/Desktop/CAT1_Keil_Project/Core/Src/LampProtocolLib/http_active.c"
-    ]
-  },
-  {
-    "directory": "/Users/mac/Desktop/CAT1_Keil_Project",
     "file": "/Users/mac/Desktop/CAT1_Keil_Project/Core/Src/LampProtocolLib/hw_gateway.c",
     "arguments": [
       "clang",
@@ -672,31 +647,6 @@
       "-I/Users/mac/Desktop/CAT1_Keil_Project/Drivers/CMSIS/Device/ST/STM32F1xx/Include",
       "-I/Users/mac/Desktop/CAT1_Keil_Project/Drivers/CMSIS/Include",
       "/Users/mac/Desktop/CAT1_Keil_Project/Core/Src/for_iap.c"
-    ]
-  },
-  {
-    "directory": "/Users/mac/Desktop/CAT1_Keil_Project",
-    "file": "/Users/mac/Desktop/CAT1_Keil_Project/Core/Src/gateway/app_active.c",
-    "arguments": [
-      "clang",
-      "-x",
-      "c",
-      "--target=arm-none-eabi",
-      "-mcpu=cortex-m3",
-      "-mthumb",
-      "-std=gnu11",
-      "-DUSE_HAL_DRIVER",
-      "-DSTM32F103xE",
-      "-I/Users/mac/Desktop/CAT1_Keil_Project/Core/Inc",
-      "-I/Users/mac/Desktop/CAT1_Keil_Project/Core/Src",
-      "-I/Users/mac/Desktop/CAT1_Keil_Project/Core/Src/CJSON",
-      "-I/Users/mac/Desktop/CAT1_Keil_Project/Core/Src/LampProtocolLib",
-      "-I/Users/mac/Desktop/CAT1_Keil_Project/Core/Src/gateway",
-      "-I/Users/mac/Desktop/CAT1_Keil_Project/Drivers/STM32F1xx_HAL_Driver/Inc",
-      "-I/Users/mac/Desktop/CAT1_Keil_Project/Drivers/STM32F1xx_HAL_Driver/Inc/Legacy",
-      "-I/Users/mac/Desktop/CAT1_Keil_Project/Drivers/CMSIS/Device/ST/STM32F1xx/Include",
-      "-I/Users/mac/Desktop/CAT1_Keil_Project/Drivers/CMSIS/Include",
-      "/Users/mac/Desktop/CAT1_Keil_Project/Core/Src/gateway/app_active.c"
     ]
   },
   {

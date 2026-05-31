@@ -63,21 +63,18 @@ void hw_bl0942_uart_read(u8 * buf, u8 length)
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   if (huart->Instance == USART2)
-  {     //printf("(char)huart->Instance->DR=%02x\r\n",(char)huart->Instance->DR);
+  {
       
           if(_bl0942_state == BL0942_STATE_READ_RX)
             {        
                 if(_index < _rx_length)
                 {
                     _buffer[_index++] = (char)huart->Instance->DR;
-                    
-                  //  printf("(char)huart->Instance->DR=%02x\r\n",(char)huart->Instance->DR);
                 }
                  HAL_UART_Receive_IT(&huart2, (uint8_t*)_buffer + _index, 1);
                 if(_index == _rx_length)
                 {
                     _bl0942_state = BL0942_STATE_READ_READY;
-                  //  printf("_bl0942_state = BL0942_STATE_READ_READY;\r\n");
                 }
             }
       
@@ -140,7 +137,6 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   if (huart->Instance == USART2)
   {
-    //printf("rx2_buffer\n");
     if (rx_index < sizeof(rx2_buffer))
     {
       rx2_buffer[rx_index++] = (char)huart->Instance->DR;

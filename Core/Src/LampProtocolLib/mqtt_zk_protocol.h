@@ -19,6 +19,7 @@
 #define ZK_SV_RQST              "rqst"
 #define ZK_SV_OTA               "ota"
 #define ZK_SV_PLAN              "plan"
+#define ZK_SV_ALAM             "alam"
 #define ZK_CT_LOGIN             "L"
 #define ZK_CT_HEARTBEAT         "H"
 #define ZK_CT_WRITE             "W"
@@ -106,6 +107,10 @@ typedef struct
     int spreadOffset;
     int spreadWindow;
     int spreadInterval;
+    /* 告警阈值配置（按 almId-10000 索引，共10组：10000~10009） */
+    int almValue[10];      /* 告警触发阈值 */
+    int almRecValue[10];   /* 告警恢复阈值 */
+    int almEn[10];         /* 告警使能标志：1=启用，0=禁用 */
 } zk_device_config_t;
 
 typedef struct
@@ -171,6 +176,7 @@ boolean_en zk_handle_control_message(cJSON *root, const zk_message_header_t *hea
 boolean_en zk_handle_request_message(cJSON *root, const zk_message_header_t *header);
 boolean_en zk_handle_ota_message(cJSON *root, const zk_message_header_t *header);
 boolean_en zk_handle_plan_message(cJSON *root, const zk_message_header_t *header);
+boolean_en zk_handle_alam_message(cJSON *root, const zk_message_header_t *header);
 void zk_notify_state_changed(void);
 void zk_apply_plan_brightness(int brightness);
 int zk_publish_ota_progress(uint32 progress);

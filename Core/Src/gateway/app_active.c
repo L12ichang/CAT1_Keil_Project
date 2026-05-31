@@ -7,7 +7,7 @@
 #include "common.h"
 #include "sys_data.h"
 #include "http_active.h"
-#include "app_active.h"
+#define APP_ACTIVE_LEGACY_IMPLEMENTATION
 /* 旧HTTP激活主流程已停用；保留timer/状态标志供CAT.1状态机兼容调用。 */
 #define  GET_TOKEN_CYCLE            (u32)25920000  //72小时
 

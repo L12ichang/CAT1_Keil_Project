@@ -15,32 +15,21 @@ typedef enum
     
 }http_congfig_state_en;
 
-extern  http_congfig_state_en  http_congfig_state;
+#ifndef HTTP_ACTIVE_LEGACY_IMPLEMENTATION
+static inline void http_post_fsm(void)
+{
+}
 
+static inline void http_congfig_fsm(void)
+{
+}
 
-
-void  http_post_fsm(void);
-void  http_congfig_fsm(void);
-void  http_post(char* urlbuf,char* bodystr);
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+static inline void http_post(char* urlbuf, char* bodystr)
+{
+    (void)urlbuf;
+    (void)bodystr;
+}
+#endif
 
 
 

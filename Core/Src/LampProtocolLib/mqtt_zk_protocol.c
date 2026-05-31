@@ -1055,6 +1055,10 @@ boolean_en zk_dispatch_message(cJSON *root, const zk_message_header_t *header)
     {
         return BOOL_TRUE;
     }
+    if (zk_handle_alam_message(root, header))
+    {
+        return BOOL_TRUE;
+    }
     if (strcmp(header->ct, ZK_CT_WRITE) == 0 || strcmp(header->ct, ZK_CT_READ) == 0)
     {
         zk_publish_error_response(header, 1);
@@ -1090,7 +1094,7 @@ static boolean_en zk_signal_query_process(uint32 now)
 }
 
 /** 添加运行时统计时间组到DT（调用前确保 zk_runtime_counter_process 已周期性执行） */
-static void zk_add_runtime_time_groups(cJSON *dt_root)
+void zk_add_runtime_time_groups(cJSON *dt_root)
 {
     cJSON *run_tm;
     cJSON *light_tm;
@@ -1236,7 +1240,7 @@ void zk_add_signal_group(cJSON *dt_root)
     cJSON_AddItemToObject(dt_root, "Signal", signal);
 }
 
-static void zk_add_angle_group(cJSON *dt_root)
+void zk_add_angle_group(cJSON *dt_root)
 {
     cJSON *angle;
 
@@ -2234,6 +2238,7 @@ boolean_en zk_handle_request_message(cJSON *root, const zk_message_header_t *hea
         zk_time_request_tick = Timer_GetTickCount();
         return BOOL_TRUE;
     }
+
     zk_publish_simple_response(header, 1);
     return BOOL_TRUE;
 }
@@ -2289,4 +2294,183 @@ boolean_en zk_handle_ota_message(cJSON *root, const zk_message_header_t *header)
     set_OTA_ENABLE();
     zk_publish_simple_response(header, 0);
     return BOOL_TRUE;
+}
+
+boolean_en zk_handle_alam_message(cJSON *root, const zk_message_header_t *header)
+{
+    cJSON *dt;
+    cJSON *alms;
+    cJSON *alm_item;
+    cJSON *out_alms;
+    cJSON *out_alm;
+    cJSON *root_out;
+    cJSON *dt_out;
+    int index;
+    int count;
+    int alm_id;
+    int err;
+    int value;
+    int rec_value;
+    int alm_en;
+    const zk_device_config_t *cfg;
+    zk_device_config_t candidate;
+
+    if (root == NULL || header == NULL)
+    {
+        return BOOL_FALSE;
+    }
+    if (strcmp(header->sv, ZK_SV_ALAM) != 0)
+    {
+        return BOOL_FALSE;
+    }
+
+    dt = cJSON_GetObjectItem(root, "DT");
+
+    /* ---------- CT="R" 读取告警阈值配置 ---------- */
+    if (strcmp(header->ct, ZK_CT_READ) == 0)
+    {
+        alms = (dt != NULL) ? cJSON_GetObjectItem(dt, "alms") : NULL;
+        if (alms == NULL || !cJSON_IsArray(alms) || cJSON_GetArraySize(alms) <= 0)
+        {
+            zk_publish_simple_response(header, 5);
+            return BOOL_TRUE;
+        }
+
+        cfg = zk_device_config_get();
+        root_out = zk_create_root_from_header(header, 1, 0);
+        if (root_out == NULL)
+        {
+            zk_publish_simple_response(header, 12);
+            return BOOL_TRUE;
+        }
+        dt_out = zk_cjson_create_tx_object("DT");
+        if (dt_out == NULL)
+        {
+            cJSON_Delete(root_out);
+            zk_publish_simple_response(header, 12);
+            return BOOL_TRUE;
+        }
+        cJSON_AddItemToObject(root_out, "DT", dt_out);
+
+        out_alms = cJSON_CreateArray();
+        if (out_alms == NULL)
+        {
+            cJSON_Delete(root_out);
+            zk_publish_simple_response(header, 12);
+            return BOOL_TRUE;
+        }
+        cJSON_AddItemToObject(dt_out, "alms", out_alms);
+
+        count = cJSON_GetArraySize(alms);
+        for (index = 0; index < count; ++index)
+        {
+            alm_item = cJSON_GetArrayItem(alms, index);
+            if (alm_item == NULL || !cJSON_IsNumber(alm_item))
+            {
+                continue;
+            }
+            alm_id = cJSON_GetNumberValue(alm_item);
+            if (alm_id < 10000 || alm_id > 10009)
+            {
+                continue;
+            }
+            alm_id -= 10000; /* 转为config数组索引 */
+            out_alm = cJSON_CreateObject();
+            if (out_alm == NULL)
+            {
+                continue;
+            }
+            cJSON_AddNumberToObject(out_alm, "almId", alm_id + 10000);
+            cJSON_AddNumberToObject(out_alm, "almValue", cfg->almValue[alm_id]);
+            cJSON_AddNumberToObject(out_alm, "recValue", cfg->almRecValue[alm_id]);
+            cJSON_AddNumberToObject(out_alm, "almEn", cfg->almEn[alm_id]);
+            cJSON_AddItemToArray(out_alms, out_alm);
+        }
+
+        if (cJSON_GetArraySize(out_alms) <= 0)
+        {
+            cJSON_Delete(root_out);
+            zk_publish_simple_response(header, 4);
+            return BOOL_TRUE;
+        }
+
+        if (zk_send_json_root(root_out, NULL) != 0)
+        {
+            cJSON_Delete(root_out);
+        }
+        return BOOL_TRUE;
+    }
+
+    /* ---------- CT="W" 写入告警阈值配置 ---------- */
+    if (strcmp(header->ct, ZK_CT_WRITE) == 0)
+    {
+        alms = (dt != NULL) ? cJSON_GetObjectItem(dt, "alms") : NULL;
+        if (alms == NULL || !cJSON_IsArray(alms) || cJSON_GetArraySize(alms) <= 0)
+        {
+            zk_publish_simple_response(header, 5);
+            return BOOL_TRUE;
+        }
+
+        /* 先取当前配置副本，在RAM中完成全部校验后再一次性写Flash，
+         * 避免逐条写入导致部分生效和Flash擦写次数放大。 */
+        cfg = zk_device_config_get();
+        candidate = *cfg;
+        err = 0;
+        count = cJSON_GetArraySize(alms);
+        for (index = 0; index < count; ++index)
+        {
+            alm_item = cJSON_GetArrayItem(alms, index);
+            if (alm_item == NULL || !cJSON_IsObject(alm_item))
+            {
+                err = 2;
+                break;
+            }
+
+            alm_id = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(alm_item, "almId"));
+            if (alm_id < 10000 || alm_id > 10009)
+            {
+                err = 4;
+                break;
+            }
+            alm_id -= 10000;
+            /* almValue/recValue/almEn 均为可选字段，不出现则保持原有值 */
+            value = candidate.almValue[alm_id];
+            rec_value = candidate.almRecValue[alm_id];
+            alm_en = candidate.almEn[alm_id];
+
+            {
+                cJSON *node = cJSON_GetObjectItem(alm_item, "almValue");
+                if (node != NULL) { if (!cJSON_IsNumber(node)) { err = 2; break; } value = (int)cJSON_GetNumberValue(node); }
+            }
+            {
+                cJSON *node = cJSON_GetObjectItem(alm_item, "recValue");
+                if (node != NULL) { if (!cJSON_IsNumber(node)) { err = 2; break; } rec_value = (int)cJSON_GetNumberValue(node); }
+            }
+            {
+                cJSON *node = cJSON_GetObjectItem(alm_item, "almEn");
+                if (node != NULL) { if (!cJSON_IsNumber(node) && !cJSON_IsBool(node)) { err = 2; break; } alm_en = cJSON_IsTrue(node) ? 1 : (node->valueint != 0 ? 1 : 0); }
+            }
+
+            candidate.almValue[alm_id] = value;
+            candidate.almRecValue[alm_id] = rec_value;
+            candidate.almEn[alm_id] = alm_en;
+        }
+
+        if (err != 0)
+        {
+            zk_publish_simple_response(header, err);
+            return BOOL_TRUE;
+        }
+
+        if (zk_device_config_commit(&candidate) == BOOL_FALSE)
+        {
+            zk_publish_simple_response(header, 99);
+            return BOOL_TRUE;
+        }
+
+        zk_publish_simple_response(header, 0);
+        return BOOL_TRUE;
+    }
+
+    return BOOL_FALSE;
 }

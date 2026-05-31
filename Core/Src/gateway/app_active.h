@@ -2,36 +2,19 @@
 #define APP_ACTIVE_H_
 #include "common.h"
 
+#ifndef APP_ACTIVE_LEGACY_IMPLEMENTATION
+static inline void app_activate_process(void)
+{
+}
 
+static inline void app_activate_init(void)
+{
+}
 
-extern   boolean_en http_active_ok;
-extern   boolean_en http_enable;
-
-
-void app_activate_process(void);
-void app_activate_init(void);
-
-
-void app_activate_timer(void);
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+static inline void app_activate_timer(void)
+{
+}
+#endif
 
 
 

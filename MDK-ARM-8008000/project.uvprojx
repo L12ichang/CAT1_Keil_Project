@@ -1768,11 +1768,6 @@
               <FilePath>..\Core\Src\LampProtocolLib\App.c</FilePath>
             </File>
             <File>
-              <FileName>app_active.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Core\Src\gateway\app_active.c</FilePath>
-            </File>
-            <File>
               <FileName>net_dim.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\gateway\net_dim.c</FilePath>
@@ -1833,11 +1828,6 @@
               <FilePath>..\Core\Src\CJSON\cJSON.c</FilePath>
             </File>
             <File>
-              <FileName>http_active.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Core\Src\LampProtocolLib\http_active.c</FilePath>
-            </File>
-            <File>
               <FileName>Json_Protocol.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\LampProtocolLib\Json_Protocol.c</FilePath>
@@ -1866,6 +1856,11 @@
               <FileName>zk_work_plan.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\LampProtocolLib\zk_work_plan.c</FilePath>
+            </File>
+            <File>
+              <FileName>zk_sunriset.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\LampProtocolLib\zk_sunriset.c</FilePath>
             </File>
           </Files>
         </Group>

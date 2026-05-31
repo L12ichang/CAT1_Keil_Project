@@ -1,3 +1,4 @@
+#define HTTP_ACTIVE_LEGACY_IMPLEMENTATION
 #include "cJSON.h"
 #include "NbDriver.h"
 #include "Portable.h"

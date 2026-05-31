@@ -41,7 +41,8 @@ class ZkWorkPlanContractTests(unittest.TestCase):
 
         self.assertIn("strlen(text) != 7", source)
         self.assertIn("bri == 0 || (bri >= 10 && bri <= 100)", source)
-        self.assertIn("timetp->valueint != 0", source)
+        self.assertIn("timetp->valueint < 0 || timetp->valueint > 1", source)
+        self.assertIn("plan_type == 1 && out->timetp != 0", source)
         self.assertIn("strncmp(text, \"FFFF\", 4)", source)
 
     def test_plan_read_operations_are_supported(self):
@@ -50,6 +51,8 @@ class ZkWorkPlanContractTests(unittest.TestCase):
         self.assertIn("strcmp(header->ct, ZK_CT_READ)", source)
         self.assertIn("zk_plan_handle_read(dt, header)", source)
         self.assertIn("strcmp(do_node->valuestring, \"nid\")", source)
+        self.assertIn("strcmp(do_node->valuestring, \"sr\")", source)
+        self.assertIn("zk_plan_build_sunriset_dt", source)
         self.assertIn("cJSON_GetObjectItem(dt, \"now\")", source)
         self.assertIn("cJSON_GetObjectItem(dt, \"id\")", source)
 
@@ -71,8 +74,19 @@ class ZkWorkPlanContractTests(unittest.TestCase):
         self.assertIn("cJSON_AddStringToObject(plan, \"sDate\"", source)
         self.assertIn("cJSON_AddStringToObject(plan, \"eDate\"", source)
         self.assertIn("cJSON_AddItemToObject(plan, \"jobs\", jobs)", source)
-        self.assertIn("cJSON_AddItemToObject(job_json, \"time\", time_array)", source)
+        self.assertIn("use_duration ? \"dTime\" : \"time\"", source)
+        self.assertIn("(job->timetp == 1) ? \"dTime\" : \"time\"", source)
         self.assertIn("cJSON_AddItemToObject(job_json, \"bri\", bri_array)", source)
+
+    def test_type2_sunrise_sunset_period_plan_uses_protocol_dtime(self):
+        source = read_text("Core/Src/LampProtocolLib/zk_work_plan.c")
+
+        self.assertIn("zk_sunriset_get(&sr_minute, &ss_minute)", source)
+        self.assertIn("zk_plan_parse_duration", source)
+        self.assertIn("value < 1 || value > 780", source)
+        self.assertIn("schedule_array = cJSON_GetObjectItem(job, use_duration ? \"dTime\" : \"time\")", source)
+        self.assertIn("offset_minute += (int)job->actions[offset_index].minute", source)
+        self.assertNotIn("job->timetp == 2", source)
 
     def test_plan_now_query_uses_protocol_cns_and_empty_dt_when_no_match(self):
         source = read_text("Core/Src/LampProtocolLib/zk_work_plan.c")

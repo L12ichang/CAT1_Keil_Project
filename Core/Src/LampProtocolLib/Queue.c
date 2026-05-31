@@ -25,11 +25,10 @@ uint8 isQueueEmpty(PQUEUE Q)
 
 uint8 enqueue(PQUEUE Q, uint8 val)
 {
-    if (isQueueFull(Q)) 
+    if (isQueueFull(Q))
     {
-        printf(" enqueue-val=Full\n");
         return 0;
-    } else { 
+    } else {
         Q->pBase[Q->rear] = val;
         Q->rear = (Q->rear + 1) % Q->maxsize;
         return 1;
