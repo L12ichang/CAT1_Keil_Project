@@ -53,10 +53,15 @@ void hw_uart3_timer(void)
     }
 }
 
-int dma_printf(const char* format, ...) 
+int dma_printf(const char* format, ...)
 {
+#if !APP_LOG_ENABLE
+    (void)format;
+    return 0;
+#else
     int n;
     va_list args;
+
     _timer = 10;
     while(_flag_txing == BOOL_TRUE)
     {
@@ -67,10 +72,25 @@ int dma_printf(const char* format, ...)
     }
     va_start(args, format);
     n = vsnprintf(dma_buffer, DMA_BUFFER_SIZE - 1, format, args);
-    va_end(args);    
-    HAL_UART_Transmit_DMA(&huart3, (uint8_t *)dma_buffer, strlen(dma_buffer));  //串口发送Senbuff数组
-    _flag_txing = BOOL_TRUE;
+    va_end(args);
+    if(n > 0)
+    {
+        if(n >= DMA_BUFFER_SIZE)
+        {
+            n = DMA_BUFFER_SIZE - 1;
+        }
+
+        if(HAL_UART_Transmit_DMA(&huart3, (uint8_t *)dma_buffer, (uint16_t)n) == HAL_OK)
+        {
+            _flag_txing = BOOL_TRUE;
+        }
+        else
+        {
+            _flag_txing = BOOL_FALSE;
+        }
+    }
     return n;
+#endif
 }
 void USART3_UART_Transmit(uint8_t *pData, uint16_t len)
 {
@@ -109,7 +129,10 @@ u32 debug32b;
 u32 debug32;
 void HAL_DMA_TxCpltCallback(DMA_HandleTypeDef *dma)
 {
-    //++debug8b;
+    if(dma == &hdma_usart3_tx)
+    {
+        _flag_txing = BOOL_FALSE;
+    }
 }
 
 void hw_uart3_init(void)

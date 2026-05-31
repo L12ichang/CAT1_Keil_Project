@@ -63,3 +63,13 @@ Keil 当前目标为 `program`，使用 Arm Compiler 5（`ARM-ADS` / `V5.06 upda
 | App/OTA 地址 | 由 `check_keil_app_image.py` 校验通过 | App 起始地址和 OTA 分区未改动 |
 
 本阶段不修改业务代码，只记录当前 Release Size 约束。由于本机没有 Keil 可执行环境，最终 Code/RO/RW/ZI 仍需在 Keil Rebuild 后由 `out/cat1.map` 补录。
+
+## 7. 日志与 UART3 DMA 优化
+
+- 在 `Core/Src/common.h` 增加 `APP_LOG_ENABLE`、`APP_HEX_LOG_ENABLE`、`LOGE/LOGW/LOGI/LOGD`。默认值均为 `0`，生产构建默认移除调试打印入口。
+- `printf(...)` 默认展开为空语句；调试时可通过编译宏设置 `APP_LOG_ENABLE=1` 恢复 `dma_printf(...)`。
+- `printf_buf()`、`printf_buf_char()`、`printf_buf2()` 受 `APP_HEX_LOG_ENABLE` 控制；生产构建为空实现，避免 OTA payload、串口 payload dump 带来 ROM 字符串和运行耗时。
+- `Core/Src/hw_uart3.c` 中 `dma_printf()` 使用 `vsnprintf()` 返回长度发送，不再额外 `strlen()` 扫描；发送失败时清除 `_flag_txing`。
+- `HAL_DMA_TxCpltCallback()` 在 `dma == &hdma_usart3_tx` 时清除 `_flag_txing`，避免 DMA 发送完成后仍等待超时。
+
+验证方式：host 侧语法检查和协议测试；上板调试时分别用 `APP_LOG_ENABLE=0/1`、`APP_HEX_LOG_ENABLE=0/1` 验证生产关闭与调试打开行为。

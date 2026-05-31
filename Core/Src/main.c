@@ -64,6 +64,7 @@ extern  u8   OTA_ENABLE_state;
 extern  void resetNbModule_machine(void);
 
 
+#if APP_HEX_LOG_ENABLE
 void printf_buf(u8* buf, u16 length)
 {
     u16 i;
@@ -95,6 +96,26 @@ void printf_buf2(const char* str, u8* buf, u16 length)
     }
     printf("\n");
 }
+#else
+void printf_buf(u8* buf, u16 length)
+{
+    (void)buf;
+    (void)length;
+}
+
+void printf_buf_char(u8* buf, u16 length)
+{
+    (void)buf;
+    (void)length;
+}
+
+void printf_buf2(const char* str, u8* buf, u16 length)
+{
+    (void)str;
+    (void)buf;
+    (void)length;
+}
+#endif
 
 u8 timer_for_printf=100;
 boolean_en init_printf=BOOL_FALSE;
