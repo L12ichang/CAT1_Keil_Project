@@ -29,6 +29,23 @@ static u8  _tx_length;
 static u8  _rx_length;
 static hw_bl0942_state_en  _bl0942_state =  BL0942_STATE_IDLE;
 
+static void hw_bl0942_uart_abort_rx(void)
+{
+    (void)HAL_UART_AbortReceive(&huart2);
+    (void)__HAL_UART_FLUSH_DRREGISTER(&huart2);
+}
+
+static void hw_bl0942_uart_start_rx(void)
+{
+    if(_rx_length == 0 || _buffer == 0)
+    {
+        _bl0942_state = BL0942_STATE_READ_READY;
+        return;
+    }
+
+    (void)HAL_UART_Receive_IT(&huart2, (uint8_t*)_buffer, 1);
+}
+
 
 
 hw_bl0942_state_en hw_bl0942_get_state(void)
@@ -53,8 +70,9 @@ void hw_bl0942_uart_read(u8 * buf, u8 length)
     _bl0942_state = BL0942_STATE_READ_TX;
     _buffer = buf;
     _index = 1;
-    _tx_length = 2;    
+    _tx_length = 2;
     _rx_length = length;
+    hw_bl0942_uart_abort_rx();
     HAL_UART_Transmit_IT(&huart2, (uint8_t*)_buffer, 1);
 
 }
@@ -66,10 +84,10 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
   {
       
           if(_bl0942_state == BL0942_STATE_READ_RX)
-            {        
+            {
                 if(_index < _rx_length)
                 {
-                    _buffer[_index++] = (char)huart->Instance->DR;
+                    ++_index;
                 }
                 if(_index >= _rx_length)
                 {
@@ -101,8 +119,9 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
     {
         if(_bl0942_state == BL0942_STATE_READ_TX)
         {
-            _bl0942_state = BL0942_STATE_READ_RX;            
+            _bl0942_state = BL0942_STATE_READ_RX;
             _index = 0;
+            hw_bl0942_uart_start_rx();
         }
         else
         {
