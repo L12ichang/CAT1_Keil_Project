@@ -76,6 +76,8 @@ typedef struct
 static zk_plan_store_t zk_plan_store;
 static boolean_en zk_plan_loaded = BOOL_FALSE;
 
+static int zk_plan_delete(int id);
+
 static u16 zk_last_exec_year = 0;
 static u8 zk_last_exec_mon = 0;
 static u8 zk_last_exec_day = 0;
@@ -320,6 +322,8 @@ static int zk_plan_datetime_valid(const zk_plan_datetime_t *dt)
 
 static int zk_plan_parse_datetime_text(const char *text, zk_plan_datetime_t *dt)
 {
+    u16 year;
+
     if (text == NULL || dt == NULL || strlen(text) != 19)
     {
         return 8;
@@ -330,7 +334,7 @@ static int zk_plan_parse_datetime_text(const char *text, zk_plan_datetime_t *dt)
         return 8;
     }
     memset(dt, 0, sizeof(*dt));
-    if (zk_plan_parse_year(text, &dt->year) != 0 ||
+    if (zk_plan_parse_year(text, &year) != 0 ||
         zk_plan_parse_two_digits(text + 5, &dt->mon) != 0 ||
         zk_plan_parse_two_digits(text + 8, &dt->day) != 0 ||
         zk_plan_parse_two_digits(text + 11, &dt->hour) != 0 ||
@@ -339,6 +343,7 @@ static int zk_plan_parse_datetime_text(const char *text, zk_plan_datetime_t *dt)
     {
         return 8;
     }
+    dt->year = year;
     return zk_plan_datetime_valid(dt) ? 0 : 3;
 }
 
@@ -579,6 +584,8 @@ static int zk_plan_parse_job(cJSON *job, zk_plan_job_t *out, u8 plan_type)
     out->action_count = (u8)count;
     for (index = 0; index < count; ++index)
     {
+        u16 minute;
+
         schedule_item = cJSON_GetArrayItem(schedule_array, index);
         bri_item = cJSON_GetArrayItem(bri_array, index);
         if (bri_item == NULL || !cJSON_IsNumber(bri_item))
@@ -587,7 +594,7 @@ static int zk_plan_parse_job(cJSON *job, zk_plan_job_t *out, u8 plan_type)
         }
         if (use_duration)
         {
-            err = zk_plan_parse_duration(schedule_item, &out->actions[index].minute);
+            err = zk_plan_parse_duration(schedule_item, &minute);
         }
         else
         {
@@ -597,12 +604,13 @@ static int zk_plan_parse_job(cJSON *job, zk_plan_job_t *out, u8 plan_type)
                 return 2;
             }
             err = zk_plan_parse_time_text(schedule_item->valuestring,
-                                          &out->actions[index].minute);
+                                          &minute);
         }
         if (err != 0)
         {
             return err;
         }
+        out->actions[index].minute = minute;
         bri = bri_item->valueint;
         if (!(bri == 0 || (bri >= 10 && bri <= 100)))
         {
