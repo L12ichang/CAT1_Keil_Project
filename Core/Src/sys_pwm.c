@@ -90,7 +90,7 @@ extern u8  fa_test_EN;
          }
          else
          {
-             pwm_value = (u32)(((u64)persent * (u32)SET_OUTCUR * (u32)PWM_USEFUL_RANGE) / ((u32)HWMAX_OUTCUR * 100U));
+             pwm_value = ((u32)persent * (u32)SET_OUTCUR * (u32)PWM_USEFUL_RANGE) / ((u32)HWMAX_OUTCUR * 100U);
          }
       }
       else   //产测模式

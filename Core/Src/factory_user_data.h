@@ -9,6 +9,8 @@ extern u16 HWMAX_OUTCUR_temp;
 extern u16 OUTPUT_CUR_SENSOR_temp;
 extern u16 OP_PWM_OFFSET_temp;
 
+#define FACTORY_OUTCUR_MAX_MA 10000U
+
 typedef struct
 {
     u8 hour;

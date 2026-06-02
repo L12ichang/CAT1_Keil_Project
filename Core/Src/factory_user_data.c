@@ -34,13 +34,13 @@ void fac_128_data_default(void)
       OP_PWM_OFFSET=0x00;
     
     }
-      if(SET_OUTCUR==0xffff||SET_OUTCUR==0x00)
+      if(SET_OUTCUR==0xffff||SET_OUTCUR==0x00||SET_OUTCUR>FACTORY_OUTCUR_MAX_MA)
     {
     
       SET_OUTCUR=2700;
     
     }
-      if(HWMAX_OUTCUR==0xffff||HWMAX_OUTCUR==0x00)
+      if(HWMAX_OUTCUR==0xffff||HWMAX_OUTCUR==0x00||HWMAX_OUTCUR>FACTORY_OUTCUR_MAX_MA)
     {
     
       HWMAX_OUTCUR=4700;

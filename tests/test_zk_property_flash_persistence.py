@@ -60,6 +60,34 @@ class ZkPropertyFlashPersistenceTests(unittest.TestCase):
         self.assertIn("time_text = zk_json_get_rtc_time_text(rtc);", source)
         self.assertIn('time_node = cJSON_GetObjectItem(node, "time");', read_mqtt_source())
 
+    def test_factory_write_reloads_pwm_after_flash_store(self):
+        source = read_property_source()
+        handler = source[
+            source.index("boolean_en zk_handle_property_write"):
+            len(source)
+        ]
+        factory_commit = handler[
+            handler.index("if (factory_changed != 0)"):
+            handler.index("zk_publish_simple_response(header, 0);")
+        ]
+
+        self.assertIn('#include "sys_pwm.h"', source)
+        self.assertIn("memcpy(sys_data.fa_Parambuf, factory_buf, sizeof(factory_buf));", factory_commit)
+        self.assertIn("factory_user_load_data();", factory_commit)
+        self.assertIn("sys_data_store();", factory_commit)
+        self.assertIn("sys_pwm_reload();", factory_commit)
+        self.assertLess(factory_commit.index("sys_data_store();"), factory_commit.index("sys_pwm_reload();"))
+
+    def test_factory_current_range_keeps_pwm_math_u32_safe(self):
+        source = read_property_source()
+        factory_header = (ROOT / "Core/Src/factory_user_data.h").read_text(encoding="utf-8", errors="ignore")
+        factory_source = (ROOT / "Core/Src/factory_user_data.c").read_text(encoding="utf-8", errors="ignore")
+
+        self.assertIn("#define FACTORY_OUTCUR_MAX_MA 10000U", factory_header)
+        self.assertIn("value > FACTORY_OUTCUR_MAX_MA", source)
+        self.assertIn("SET_OUTCUR>FACTORY_OUTCUR_MAX_MA", factory_source)
+        self.assertIn("HWMAX_OUTCUR>FACTORY_OUTCUR_MAX_MA", factory_source)
+
     def test_restore_overwrites_property_flash_without_reset(self):
         source = read_mqtt_source()
         handler = source[

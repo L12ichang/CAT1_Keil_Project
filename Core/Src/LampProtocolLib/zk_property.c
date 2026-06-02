@@ -5,6 +5,7 @@
 #include "crc16_modbus.h"
 #include "factory_user_data.h"
 #include "sys_data.h"
+#include "sys_pwm.h"
 #include "hw_flash.h"
 #include <string.h>
 
@@ -663,7 +664,7 @@ static int zk_apply_factory_config(cJSON *factory, u8 *factory_buf, int *changed
         {
             return err;
         }
-        if (value <= 0 || value >= 0xFFFF)
+        if (value <= 0 || value > FACTORY_OUTCUR_MAX_MA)
         {
             return 3;
         }
@@ -676,7 +677,7 @@ static int zk_apply_factory_config(cJSON *factory, u8 *factory_buf, int *changed
         {
             return err;
         }
-        if (value <= 0 || value >= 0xFFFF)
+        if (value <= 0 || value > FACTORY_OUTCUR_MAX_MA)
         {
             return 3;
         }
@@ -1257,6 +1258,7 @@ boolean_en zk_handle_property_write(cJSON *root, const zk_message_header_t *head
         memcpy(sys_data.fa_Parambuf, factory_buf, sizeof(factory_buf));
         factory_user_load_data();
         sys_data_store();
+        sys_pwm_reload();
     }
 
     zk_publish_simple_response(header, 0);

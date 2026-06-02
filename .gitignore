@@ -35,8 +35,11 @@ EventRecorderStub.scvd
 
 # Firmware Products (Explicitly allowed)
 # User wants to include compiled firmware
-!*.bin
-!*.hex
+# !*.bin   # Disabled: compiled firmware should not be tracked in git
+# !*.hex   # Disabled: compiled firmware should not be tracked in git
+
+# Build logs
+*.log
 
 # OS generated files
 .DS_Store
