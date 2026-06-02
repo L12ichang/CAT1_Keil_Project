@@ -104,8 +104,8 @@ extern u8  fa_test_EN;
         PWM_DBG("[PWM] fac_test mode -> pwm_value=%lu\r\n", pwm_value);
       }
 
-    /* ─── PWM 调试日志：可观察完整计算过程与电子负载对比 ─── */
-    PWM_DBG("══════ PWM Calc ══════\r\n");
+    /* PWM 调试日志：可观察完整计算过程与电子负载对比 */
+    PWM_DBG("====== PWM Calc ======\r\n");
     PWM_DBG("  brightness     = %u %%\r\n", init_persent);
     PWM_DBG("  eff_persent    = %u %%\r\n", persent);
     PWM_DBG("  SET_OUTCUR     = %u mA\r\n", (u16)SET_OUTCUR);
@@ -122,11 +122,11 @@ extern u8  fa_test_EN;
         PWM_DBG("  ratio(SET/HW)  = %lu / 1000\r\n",
                 ((u32)SET_OUTCUR * 1000U) / (u32)HWMAX_OUTCUR);
     }
-    PWM_DBG("  → pwm_value    = %lu / %u\r\n", pwm_value, (u16)PWM_OUT_MAX);
-    PWM_DBG("  → duty         = %lu.%lu %%\r\n",
+    PWM_DBG("  -> pwm_value   = %lu / %u\r\n", pwm_value, (u16)PWM_OUT_MAX);
+    PWM_DBG("  -> duty        = %lu.%lu %%\r\n",
             (pwm_value * 100U) / PWM_OUT_MAX,
             ((pwm_value * 1000U) / PWM_OUT_MAX) % 10U);
-    PWM_DBG("══════════════════════\r\n");
+    PWM_DBG("======================\r\n");
 
     hw_set_pwm((u16)pwm_value);
 }

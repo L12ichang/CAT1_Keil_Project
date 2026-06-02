@@ -11,6 +11,7 @@
 #include "build_date.h"
 #include "sys_aip1302.h"
 #include "factory_user_data.h"
+#include "Json_Protocol.h"
 #include "TcpClient.h"
 #include "mqtt_zk_protocol.h"
 #define STATUS_NOT_CONNECTED 0
@@ -187,7 +188,6 @@ void onNBEvent(uint8 subEvent, uint8 *pData, uint16 length)
 
         case NB_EVENT_DATA:
         //������ʼ--------------------------------------------------------------------------------------------------------------------------------------------------------
-              extern  void app_mqtt_rx(char * rx);//Json������
              app_mqtt_rx((char*)pData);
 
 
