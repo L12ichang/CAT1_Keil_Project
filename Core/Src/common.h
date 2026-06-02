@@ -53,6 +53,10 @@ ver 3. 2022.12.7 dali时序兼容不了新唐，改回来。
 #define APP_PERF_PROFILE_ENABLE 0
 #endif
 
+#ifndef APP_PWM_DEBUG_ENABLE
+#define APP_PWM_DEBUG_ENABLE 0
+#endif
+
 #if APP_LOG_ENABLE
 #define LOG_PRINT(...) dma_printf(__VA_ARGS__)
 #else

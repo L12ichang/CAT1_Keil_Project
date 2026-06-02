@@ -19,6 +19,12 @@
 #define PWM_OFFSET   (u16)(OP_PWM_OFFSET)  //由于光耦的延迟问题增加3%输出
 #define PWM_USEFUL_RANGE    (u16)(PWM_OUT_MAX-PWM_OFFSET)  //
 
+#if APP_PWM_DEBUG_ENABLE
+#define PWM_DBG(...) printf(__VA_ARGS__)
+#else
+#define PWM_DBG(...) do {} while (0)
+#endif
+
 //#define SET_OUTCUR     sys_data.setcur
 //#define HWMAX_OUTCUR   sys_data.hwmaxcur
 
@@ -38,6 +44,9 @@ extern u8  fa_test_EN;
  void pwm_output(u8 persent)   //硬件输出
 {
      u16 pwm;
+     u32 pwm_value;
+     u8 init_persent = persent;
+
       set_percent = persent;
       if( low_temp_detect_is_low(&pwm, persent) == BOOL_TRUE)
       {printf("low_temp_detect_\n");
@@ -45,7 +54,7 @@ extern u8  fa_test_EN;
         {
             persent = pwm; //温度保护取最低那个输出
         }
-      
+
       }
       if( DC_low_voltage_detect_is_low(&pwm,persent)==BOOL_TRUE)
       { printf("DC_low_voltage_detec\n");
@@ -53,10 +62,10 @@ extern u8  fa_test_EN;
         {
             persent = pwm; //温度保护和低压保护，取最低那个输出
         }
-      
+
       }
         if(High_voltage_detect_is_high(&pwm, persent) == BOOL_TRUE)
-        {  
+        {
             printf("high_voltage\n");
               //                log_u16(1,pwm);
             if(pwm<persent)
@@ -65,7 +74,7 @@ extern u8  fa_test_EN;
             }
         }
           if(temp_detect_is_over(&pwm, persent) == BOOL_TRUE)
-        {  
+        {
              printf("high_temp\n");
               //                log_u16(1,pwm);
              printf("persent=%d\n",persent);
@@ -73,20 +82,16 @@ extern u8  fa_test_EN;
             if(pwm<persent)
             {
                 persent = pwm; //温度保护和低压保护，取最低那个输出
-                
+
             }
         }
-      //  printf("lastpersent=%d\n",persent);
-        // printf("duty3=%u\n", (u16)duty);
-       // printf("SET_OUTCUR=%d,HWMAX_OUTCUR=%d,SENSOR=%d\n",SET_OUTCUR,HWMAX_OUTCUR,OUTPUT_CUR_SENSOR);
-   
-      u32 pwm_value;
-     //  printf("fa_test_EN=%d\n",fa_test_EN) ;
+
       if(fa_test_EN==0)
       {
          if(HWMAX_OUTCUR == 0)
          {
              pwm_value = 0;
+             PWM_DBG("[PWM] HWMAX_OUTCUR=0 -> pwm_value=0\r\n");
          }
          else
          {
@@ -96,10 +101,34 @@ extern u8  fa_test_EN;
       else   //产测模式
       {
         pwm_value = ((u32)persent * (u32)PWM_USEFUL_RANGE) / 100U;
+        PWM_DBG("[PWM] fac_test mode -> pwm_value=%lu\r\n", pwm_value);
       }
-      //   printf("last2persent=%f\n",temp);
 
-      hw_set_pwm((u16)pwm_value);
+    /* ─── PWM 调试日志：可观察完整计算过程与电子负载对比 ─── */
+    PWM_DBG("══════ PWM Calc ══════\r\n");
+    PWM_DBG("  brightness     = %u %%\r\n", init_persent);
+    PWM_DBG("  eff_persent    = %u %%\r\n", persent);
+    PWM_DBG("  SET_OUTCUR     = %u mA\r\n", (u16)SET_OUTCUR);
+    PWM_DBG("  HWMAX_OUTCUR   = %u mA\r\n", (u16)HWMAX_OUTCUR);
+    PWM_DBG("  PWM_OFFSET     = %u\r\n", (u16)PWM_OFFSET);
+    PWM_DBG("  PWM_USEFUL_RNG = %u\r\n", (u16)PWM_USEFUL_RANGE);
+    PWM_DBG("  PWM_OUT_MAX    = %u\r\n", (u16)PWM_OUT_MAX);
+    if (HWMAX_OUTCUR > 0 && fa_test_EN == 0)
+    {
+        u32 numerator   = (u32)persent * (u32)SET_OUTCUR * (u32)PWM_USEFUL_RANGE;
+        u32 denominator = (u32)HWMAX_OUTCUR * 100U;
+        PWM_DBG("  numerator      = %lu\r\n", numerator);
+        PWM_DBG("  denominator    = %lu\r\n", denominator);
+        PWM_DBG("  ratio(SET/HW)  = %lu / 1000\r\n",
+                ((u32)SET_OUTCUR * 1000U) / (u32)HWMAX_OUTCUR);
+    }
+    PWM_DBG("  → pwm_value    = %lu / %u\r\n", pwm_value, (u16)PWM_OUT_MAX);
+    PWM_DBG("  → duty         = %lu.%lu %%\r\n",
+            (pwm_value * 100U) / PWM_OUT_MAX,
+            ((pwm_value * 1000U) / PWM_OUT_MAX) % 10U);
+    PWM_DBG("══════════════════════\r\n");
+
+    hw_set_pwm((u16)pwm_value);
 }
 
 void sys_pwm_timer(void)
