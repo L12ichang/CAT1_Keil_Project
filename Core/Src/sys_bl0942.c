@@ -133,11 +133,11 @@ void sys_bl0942_timer(void)
         
        // printf("total_power_this_time=%dmWH\n",(u16)total_power_this_time);
         
-        if(  ++ minute>60)//临时用1小时存一次,后续多小时存储一次
+        if(  ++ minute>=720)//每12小时(720分钟)存一次累积能耗到Flash
         {
           minute  =0;
-         // sys_data.ac_EnergyP+=ac_powerpa/100*30/60;
-            sys_data.ac_EnergyP+=ac_powerpa*10;  //(ac_powerpa/100 结果为mWH )    //上报以0.01WH单位
+            sys_data.ac_EnergyP+=total_power_this_time;  //将本周期累积能耗加入累计值
+            total_power_this_time=0;
           sys_data_store() ;
         }
         
@@ -742,9 +742,20 @@ void sys_bl0942_power_on(void)
 
 void sys_bl0942_power_off(void)
 {
-    
-    sys_bl0942_state = SYS_BL0942_STATE_IDLE; 
-      
+
+    sys_bl0942_state = SYS_BL0942_STATE_IDLE;
+
+}
+
+/************************************
+功能描述：掉电前将本周期累积能耗同步到累计值
+输入参数：无
+输出返回：无
+*************************************/
+void sys_bl0942_power_down_save(void)
+{
+    sys_data.ac_EnergyP += total_power_this_time;
+    total_power_this_time = 0;
 }
 
 void sys_bl0942_init(void)

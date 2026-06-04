@@ -1193,8 +1193,10 @@ void zk_add_ele_info_group(cJSON *dt_root)
     cJSON_AddItemToArray(f, cJSON_CreateNumber((double)ac_pf));
     /* EleInfo.p: BL0942有功功率ac_powerpa原始单位0.01W，平台按原始数字显示W，故/100转为整数W（四舍五入） */
     cJSON_AddItemToArray(p, cJSON_CreateNumber((double)((ac_powerpa + 50U) / 100U)));
-    cJSON_AddItemToArray(r_ec, cJSON_CreateNumber((double)energy_this_time));
-    cJSON_AddItemToArray(t_ec, cJSON_CreateNumber((double)sys_data.ac_EnergyP));
+    /* EleInfo.rEc/tEc: 原始单位0.01Wh，协议要求W·h，故/100转为整数W·h（四舍五入） */
+    /* tEc = flash历史累积 + 本周期RAM累积 = 设备启用至今总能耗 */
+    cJSON_AddItemToArray(r_ec, cJSON_CreateNumber((double)((energy_this_time + 50U) / 100U)));
+    cJSON_AddItemToArray(t_ec, cJSON_CreateNumber((double)((sys_data.ac_EnergyP + total_power_this_time + 50U) / 100U)));
     cJSON_AddItemToObject(ele_info, "e", e);
     cJSON_AddItemToObject(ele_info, "c", c);
     cJSON_AddItemToObject(ele_info, "v", v);
