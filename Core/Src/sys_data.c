@@ -79,6 +79,11 @@ void sys_data_default(void)
 boolean_en flash_store(u8* buf, u16 size, u32 addr_main)
 {
     hw_flash_write_bytes(addr_main, buf, size);
+    if (user_flash_check(addr_main, buf, size) != BOOL_TRUE)
+    {
+        printf("flash_store: verify fail addr=0x%08x size=%u\n", (unsigned int)addr_main, (unsigned int)size);
+        return BOOL_FALSE;
+    }
     return BOOL_TRUE;
 }
 boolean_en data_store_data(u8* buf, u16 size, u32 addr_main)

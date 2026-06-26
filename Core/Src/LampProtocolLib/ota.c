@@ -85,6 +85,9 @@ static void zk_build_ota_url_string(char *buf, u16 buf_size)
 void  _4G_OTA_machine_star(void)
 {
        ota_connect_state=CONNECT_OTA_RESETING;
+       server_big_pick_counter=0;
+       POWERED_DOWN_read_count=0;
+       http_get_timer=0;
 }
 /************************************
 ¹¦ÄÜÃèÊö£ºÆô¶¯·þÎñÆ÷¹Ì¼þÏÂÔØÅäÖÃ
@@ -418,9 +421,21 @@ boolean_en  mcu_copy_firmware_getdata(void)
 /************************************
 ¹¦ÄÜÃèÊö£º¿ªÊ¼×ªÒÆ¹Ì¼þ
 *************************************/
- void  mcu_copy_firmware_star(void) 
+ void  mcu_copy_firmware_star(void)
      {
          MCU_OTA_state=MCU_OTA_STATE_RESETING;
+         server_big_pick_counter=0;
+         save_byete_counter=0;
+         firmware_total_size=0;
+         SERVER_CHECSUM=0;
+         last_server_big_pick=0;
+         last_total_size=0;
+         pfile=0;
+         checsum_temp=0;
+         OTA_DATA_IS_READY=0;
+         OTA_DATA_IS_finish=0;
+         data_state=DATA_STATE_IDLE;
+         tihs_time_SERVER_PICK_SIZE=0;
      }
 
 
@@ -863,19 +878,28 @@ void  mcu_copy_firmware_machine(void)
              }  
              break; 
         case MCU_OTA_MCU_GETDATA:        //ÓÉ½ÓÊÕ´¦ÀíÇÐ»»
-             if(OTA_DATA_IS_READY)       //ÊÕ²»µ½ÖØ·¢´ý×ö       
+             if(OTA_DATA_IS_READY)       //ÊÕ²»µ½ÖØ·¢´ý×ö
              {
                 OTA_DATA_IS_READY=0;
                 printf("3MCU´æ´¢___________________\n");
                 MCU_OTA_state=MCU_OTA_AT_QFREAD_LOOP;
-               printf("tihs_time_SERVER_PICK_SIZE=%d\n",tihs_time_SERVER_PICK_SIZE);   
-             } 
+               printf("tihs_time_SERVER_PICK_SIZE=%d\n",tihs_time_SERVER_PICK_SIZE);
+             }
              else if (OTA_DATA_IS_finish)
              {
                   OTA_DATA_IS_finish=0;
                   MCU_OTA_state=MCU_OTA_AT_QFREAD_LOOP;
              }
-            break;                  
+             else if (Timer_PassedDelay(wait_data_timer, 5000))
+             {
+                  printf("MCU_OTA_MCU_GETDATA timeout, no firmware data received\n");
+                  sys_data.sn = 3;
+                  sys_data_store();
+                  changea_to_MQTT_modle();
+                  last_server_big_pick = 0;
+                  MCU_OTA_state = MCU_OTA__COMPLETE;
+             }
+            break;
              
        case MCU_OTA_AT_QFREAD_LOOP:    
             if(pfile+PICK_SIZE<tihs_time_SERVER_PICK_SIZE)//Ð¡ÓÚ±¾´Î·ÖÆ¬Êý    //  ·Ö½çÏß  pfile UFS ÎÄ¼þÎ»ÖÃ
@@ -961,7 +985,12 @@ void  mcu_copy_firmware_machine(void)
               
           case   MCU_OTA_MCU_FINISH:
                     printf("---------OTA Íê±Ï------\n");
-                    printf("---------ÏµÍ³ÖØÆô-------\n");    
+                    printf("---------ÏµÍ³ÖØÆô-------\n");
+                    last_server_big_pick=0;//ÇåÁã±êÖ¾£¬·ÀÖ¹Ìø×ªÊ§°ÜºóÓ°ÏìÏÂ´ÎOTA
+                    server_big_pick_counter=0;
+                    save_byete_counter=0;
+                    firmware_total_size=0;
+                    SERVER_CHECSUM=0;
                     sbuff= ((u8*)(DATAROM_STARTADDR)) ;
                     printf_buf(sbuff,64);
                     sbuff= ((u8*)(DATAROM_STARTADDR)) ;
@@ -994,7 +1023,7 @@ void  mcu_copy_firmware_machine(void)
      if(dataLength==PICK_SIZE|| (last_server_big_pick && dataLength==(u16)(last_total_size%PICK_SIZE)))
       {  //À¹½Ø"OK\r\n"
             // printf("_________________________________save_byete_counterbingin=%u\n",save_byete_counter);
-             flash_store(stringBuf, dataLength, OTABAKROM_STARTADDR+save_byete_counter );  //-strlen("CONNECT 512\r\n")
+             flash_store(buf, dataLength, OTABAKROM_STARTADDR+save_byete_counter );  //-strlen("CONNECT 512\r\n")
              save_byete_counter+=dataLength;//ÀÛ¼Æ×Ö½Ú£¬µØÖ·¼Ó
               printf("_________________________________save_byete_counter=%u\n",save_byete_counter);
              MCU_OTA_state=MCU_OTA_AT_QFREAD_LOOP;
