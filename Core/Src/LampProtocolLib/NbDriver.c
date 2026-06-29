@@ -43,6 +43,8 @@ static boolean_en imei_ready = BOOL_FALSE;
 static boolean_en iccid_ready = BOOL_FALSE;
 static boolean_en rsrp_ready = BOOL_FALSE;
 static s32 nb_rsrp_dbm10 = 0;
+static char nb_net_reg_status[16] = "";
+static boolean_en nb_net_reg_ready = BOOL_FALSE;
 
 typedef enum
 {
@@ -446,14 +448,44 @@ static void capture_iccid_from_line(const u8 *line)
 static boolean_en capture_rsrp_from_qeng_line(const u8 *line)
 {
     const char *p;
+    const char *state_start;
+    const char *state_end;
     s32 sign;
     s32 value;
+    u8 reg_len;
 
     if (line == 0 ||
         strstr((const char *)line, "+QENG:") == 0 ||
         strstr((const char *)line, "servingcell") == 0)
     {
         return BOOL_FALSE;
+    }
+
+    /* 提取 servingcell 后的注册状态字段，存入静态变量供初始化阶段日志使用 */
+    p = strstr((const char *)line, "servingcell");
+    if (p != 0)
+    {
+        state_start = strchr(p, ',');
+        if (state_start != 0)
+        {
+            ++state_start;
+            while (*state_start == ' ' || *state_start == '\"')
+            {
+                ++state_start;
+            }
+            state_end = state_start;
+            while (*state_end != '\0' && *state_end != '\"' && *state_end != ',')
+            {
+                ++state_end;
+            }
+            reg_len = (u8)(state_end - state_start);
+            if (reg_len > 0 && reg_len < (u8)sizeof(nb_net_reg_status))
+            {
+                memcpy(nb_net_reg_status, state_start, reg_len);
+                nb_net_reg_status[reg_len] = '\0';
+                nb_net_reg_ready = BOOL_TRUE;
+            }
+        }
     }
 
     p = (const char *)line;
@@ -653,6 +685,8 @@ void  _4G_configModule_machine_star(void)
 {
     clear_imei_data();
     clear_iccid_data();
+    nb_net_reg_ready = BOOL_FALSE;
+    memset(nb_net_reg_status, 0, sizeof(nb_net_reg_status));
     connect_state=CONNECT_CONFIG_RESETING;
 }
 
@@ -755,6 +789,10 @@ void _4G_configModule_machine(void)
       case CONNECT_CONFIG_AT_QENG:
              if(send_AT_Command_machine_finish()==TRUE)
              {
+              if (nb_net_reg_ready == BOOL_TRUE)
+              {
+                  printf("[NET] reg=%s\n", nb_net_reg_status);
+              }
               send_AT_Command_machine_star("AT+QMTCFG=\"recv/mode\",0,0,0\r\n",strlen("AT+QMTCFG=\"recv/mode\",0,0,0\r\n"),"OK",20, 1);
               connect_state=CONNECT_CONFIG_AT_RECVMODE;
              }
