@@ -201,9 +201,9 @@ void _4G_OTA_machine(void)
                  send_AT_Command_machine_star(buff, strlen(buff), "CONNECT",20, 0);
               // send_AT_Command_machine_star("AT+QHTTPURL=43,30\r\n", strlen("AT+QHTTPURL=43,30\r\n"), "CONNECT",20, 0);//43
 
-                  ota_connect_state=CONNECT_OTA_AT_QHTTPURL;   
-             }                 
-             break;  
+                  ota_connect_state=CONNECT_OTA_AT_QHTTPURL;
+             }
+             break;
              
          case CONNECT_OTA_AT_QHTTPURL:
              if(send_AT_Command_machine_finish()==TRUE)
@@ -231,12 +231,12 @@ void _4G_OTA_machine(void)
                 {
                     if( server_big_pick_counter==0)
                     { 
-                        send_AT_Command_machine_star("AT+QHTTPGETEX=80,0,20480\r\n",strlen("AT+QHTTPGETEX=80,0,20480\r\n"),"+QHTTPGET: 0,206,",200, 1);//+QHTTPGET: 0,206,20480
+                        send_AT_Command_machine_star("AT+QHTTPGETEX=80,0,20480\r\n",strlen("AT+QHTTPGETEX=80,0,20480\r\n"),"+QHTTPGET: 0,20",200, 1);//仅接收2xx成功码
                     }
 
                     else
                     { 
-                        send_AT_Command_machine_star("AT+QHTTPGETEX=80,-1,20480\r\n",strlen("AT+QHTTPGETEX=80,-1,20480\r\n"),"+QHTTPGET: 0,206,",200, 1);//+QHTTPGET: 0,206,1024
+                        send_AT_Command_machine_star("AT+QHTTPGETEX=80,-1,20480\r\n",strlen("AT+QHTTPGETEX=80,-1,20480\r\n"),"+QHTTPGET: 0,20",200, 1);//仅接收2xx成功码
                     }
                         ota_connect_state=CONNECT_OTA_AT_QHTTPREADFILE;   
                 }  
