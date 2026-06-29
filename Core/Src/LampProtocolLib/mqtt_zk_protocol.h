@@ -29,16 +29,24 @@
 #define ZK_CT_ALARM             "A"
 #define ZK_CT_PROGRESS          "P"
 #define ZK_CT_ERROR             "E"
-#define ZK_ALARM_OVER_VOLTAGE   10000
-#define ZK_ALARM_UNDER_VOLTAGE  10001
-#define ZK_ALARM_OVER_CURRENT   10002
-#define ZK_ALARM_UNDER_CURRENT  10003
-#define ZK_ALARM_LIGHT_ON_FAIL  10004
-#define ZK_ALARM_LIGHT_OFF_FAIL 10005
-#define ZK_ALARM_POLE_TILT      10006
-#define ZK_ALARM_LEAK_CURRENT   10007
-#define ZK_ALARM_DEVICE_FAULT   10008
-#define ZK_ALARM_POWER_DOWN     10009
+#define ZK_ALARM_OVER_VOLTAGE       10000
+#define ZK_ALARM_UNDER_VOLTAGE      10001
+#define ZK_ALARM_OVER_CURRENT       10002
+#define ZK_ALARM_UNDER_CURRENT      10003
+#define ZK_ALARM_LIGHT_ON_FAIL      10004
+#define ZK_ALARM_LIGHT_OFF_FAIL     10005
+#define ZK_ALARM_POLE_TILT          10006
+#define ZK_ALARM_LEAK_CURRENT       10007
+#define ZK_ALARM_DEVICE_FAULT       10008
+#define ZK_ALARM_POWER_DOWN         10009
+#define ZK_ALARM_OUT_OVER_VOLTAGE   10010
+#define ZK_ALARM_OUT_UNDER_VOLTAGE  10011
+#define ZK_ALARM_OUT_OVER_CURRENT   10012
+#define ZK_ALARM_OUT_UNDER_CURRENT  10013
+#define ZK_ALARM_OVER_POWER         10014
+#define ZK_ALARM_TC_OVER_TEMP       10015
+#define ZK_ALARM_CTRL_OVER_TEMP     10016
+#define ZK_ALARM_COUNT              17
 #define ZK_LOGIN_REQUEST_ID     "000001"
 #define ZK_JSON_ID_FIRST_REPORT 2UL
 #define ZK_JSON_ID_MAX          999999UL
@@ -107,10 +115,10 @@ typedef struct
     int spreadOffset;
     int spreadWindow;
     int spreadInterval;
-    /* 告警阈值配置（按 almId-10000 索引，共10组：10000~10009） */
-    int almValue[10];      /* 告警触发阈值 */
-    int almRecValue[10];   /* 告警恢复阈值 */
-    int almEn[10];         /* 告警使能标志：1=启用，0=禁用 */
+    /* 告警阈值配置（按 almId-10000 索引，共17组：10000~10016） */
+    int almValue[17];      /* 告警触发阈值 */
+    int almRecValue[17];   /* 告警恢复阈值 */
+    int almEn[17];         /* 告警使能标志：1=启用，0=禁用 */
 } zk_device_config_t;
 
 typedef struct

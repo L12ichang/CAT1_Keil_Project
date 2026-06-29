@@ -376,18 +376,28 @@ static boolean_en zk_apply_server_time_text(const char *time_text)
 
     if (time_text == NULL || time_text[0] == '\0')
     {
+        printf("[RTC] server time text empty, skip sync\r\n");
         return BOOL_FALSE;
     }
+    printf("[RTC] server time text: %s\r\n", time_text);
     if (zk_parse_rtc_text(time_text, &server_time) == BOOL_FALSE)
     {
+        printf("[RTC] parse server time failed, format mismatch\r\n");
         return BOOL_FALSE;
     }
+    printf("[RTC] server time parsed: %04d-%02d-%02d %02d:%02d:%02d\r\n",
+           server_time.year, server_time.mon, server_time.day,
+           server_time.hour, server_time.min, server_time.sec);
     if (apprtc_RtcTime.ready != BOOL_TRUE)
     {
+        printf("[RTC] local RTC not ready, apply server time directly\r\n");
         zk_set_local_rtc(&server_time);
         return BOOL_TRUE;
     }
 
+    printf("[RTC] local time: %04d-%02d-%02d %02d:%02d:%02d\r\n",
+           apprtc_RtcTime.year, apprtc_RtcTime.mon, apprtc_RtcTime.day,
+           apprtc_RtcTime.hour, apprtc_RtcTime.min, apprtc_RtcTime.sec);
     server_seconds = zk_rtc_to_unix_seconds(&server_time);
     local_seconds = zk_rtc_to_unix_seconds(&apprtc_RtcTime);
     diff_seconds = server_seconds - local_seconds;
@@ -395,9 +405,15 @@ static boolean_en zk_apply_server_time_text(const char *time_text)
     {
         diff_seconds = -diff_seconds;
     }
+    printf("[RTC] time diff = %ld seconds\r\n", diff_seconds);
     if (diff_seconds > 30)
     {
+        printf("[RTC] diff > 30s, apply server time\r\n");
         zk_set_local_rtc(&server_time);
+    }
+    else
+    {
+        printf("[RTC] diff <= 30s, skip sync\r\n");
     }
     return BOOL_TRUE;
 }
@@ -419,7 +435,7 @@ static uint32 zk_get_effective_period_sec(int configured, uint32 default_value)
 static void zk_sync_online_period_timers(uint32 now)
 {
     zk_report_tick = now;
-    zk_time_request_tick = now;
+    zk_time_request_tick = 0;   /* 设为0，上线后立即触发TmCali校时请求 */
     zk_heartbeat_tick = now;
 }
 
@@ -1171,6 +1187,9 @@ void zk_add_ele_info_group(cJSON *dt_root)
     cJSON *p;
     cJSON *r_ec;
     cJSON *t_ec;
+    cJSON *oc;
+    cJSON *ov;
+    cJSON *op;
 
     ele_info = zk_cjson_create_tx_object("EleInfo");
     e = zk_cjson_create_tx_array("EleInfo.e");
@@ -1180,8 +1199,12 @@ void zk_add_ele_info_group(cJSON *dt_root)
     p = zk_cjson_create_tx_array("EleInfo.p");
     r_ec = zk_cjson_create_tx_array("EleInfo.rEc");
     t_ec = zk_cjson_create_tx_array("EleInfo.tEc");
+    oc = zk_cjson_create_tx_array("EleInfo.oc");
+    ov = zk_cjson_create_tx_array("EleInfo.ov");
+    op = zk_cjson_create_tx_array("EleInfo.op");
     if (ele_info == NULL || e == NULL || c == NULL || v == NULL ||
-        f == NULL || p == NULL || r_ec == NULL || t_ec == NULL)
+        f == NULL || p == NULL || r_ec == NULL || t_ec == NULL ||
+        oc == NULL || ov == NULL || op == NULL)
     {
         return;
     }
@@ -1197,6 +1220,12 @@ void zk_add_ele_info_group(cJSON *dt_root)
     /* tEc = flash历史累积 + 本周期RAM累积 = 设备启用至今总能耗 */
     cJSON_AddItemToArray(r_ec, cJSON_CreateNumber((double)((energy_this_time + 50U) / 100U)));
     cJSON_AddItemToArray(t_ec, cJSON_CreateNumber((double)((sys_data.ac_EnergyP + total_power_this_time + 50U) / 100U)));
+    /* EleInfo.oc: 输出电流，Io_value原始单位mA，协议单位mA，直接使用 */
+    cJSON_AddItemToArray(oc, cJSON_CreateNumber((double)Io_value));
+    /* EleInfo.ov: 输出电压，Vo_value原始单位0.1V，协议单位0.1V，直接使用 */
+    cJSON_AddItemToArray(ov, cJSON_CreateNumber((double)Vo_value));
+    /* EleInfo.op: 输出功率，Po_value原始单位0.1W，协议单位W，/10四舍五入 */
+    cJSON_AddItemToArray(op, cJSON_CreateNumber((double)((Po_value + 5U) / 10U)));
     cJSON_AddItemToObject(ele_info, "e", e);
     cJSON_AddItemToObject(ele_info, "c", c);
     cJSON_AddItemToObject(ele_info, "v", v);
@@ -1204,9 +1233,13 @@ void zk_add_ele_info_group(cJSON *dt_root)
     cJSON_AddItemToObject(ele_info, "p", p);
     cJSON_AddItemToObject(ele_info, "rEc", r_ec);
     cJSON_AddItemToObject(ele_info, "tEc", t_ec);
+    cJSON_AddItemToObject(ele_info, "oc", oc);
+    cJSON_AddItemToObject(ele_info, "ov", ov);
+    cJSON_AddItemToObject(ele_info, "op", op);
     cJSON_AddNumberToObject(ele_info, "pwr", power_down_flag ? 1 : 0);
     cJSON_AddNumberToObject(ele_info, "lc", danger_current_warn ? 30 : 0);
-    cJSON_AddItemToObject(dt_root, "EleInfo", ele_info);
+    cJSON_AddItemToObject(dt_root, "EleInfo
+        ", ele_info);
 }
 
 void zk_add_per_sts_group(cJSON *dt_root)
