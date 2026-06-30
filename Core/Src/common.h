@@ -46,7 +46,7 @@ ver 3. 2022.12.7 dali时序兼容不了新唐，改回来。
 #endif
 
 #ifndef APP_HEX_LOG_ENABLE
-#define APP_HEX_LOG_ENABLE 0
+#define APP_HEX_LOG_ENABLE 1            
 #endif
 
 #ifndef APP_PERF_PROFILE_ENABLE

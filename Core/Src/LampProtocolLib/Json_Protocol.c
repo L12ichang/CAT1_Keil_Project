@@ -43,7 +43,6 @@ void app_mqtt_rx(char *rx)
         }
         if (zk_mqtt_accept_login_ack(header))
         {
-            zk_apply_server_time_from_header(header);
             onLogInResponse(LOGIN_SUCCESS);
             goto EXIT_CLEANUP;
         }

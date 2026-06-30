@@ -60,6 +60,7 @@ static int zk_ota_error_code = 0;
 static u8 zk_send_busy_fail_count = 0;
 static boolean_en zk_reboot_pending = BOOL_FALSE;
 static uint32 zk_reboot_tick = 0;
+static boolean_en zk_login_time_sync_pending = BOOL_FALSE;
 static boolean_en zk_control_restore_pending = BOOL_FALSE;
 static uint32 zk_control_restore_tick = 0;
 static uint32 zk_control_restore_delay_ms = 0;
@@ -74,6 +75,10 @@ static char zk_signal_qeng_resp[] = "OK";
 #define ZK_SEND_BUSY_CLEAR_THRESHOLD 3U
 #define ZK_CHANGE_REPORT_SETTLE_MS 3000UL
 #define ZK_SIGNAL_QUERY_INTERVAL_MS (4UL * 60UL * 1000UL)
+#define ZK_DEFAULT_TIMEZONE_HOURS 8
+#define ZK_SECONDS_PER_HOUR 3600L
+#define ZK_SECONDS_PER_DAY 86400L
+#define ZK_TIME_SYNC_THRESHOLD_SECONDS 30L
 static void zk_apply_brightness(int brightness);
 
 static void *ZK_Cjson_Malloc(size_t size)
@@ -266,6 +271,21 @@ static int zk_is_leap_year(int year)
     return ((year % 4) == 0) ? 1 : 0;
 }
 
+static int zk_days_in_month(int year, int month)
+{
+    static const int days[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+
+    if (month < 1 || month > 12)
+    {
+        return 0;
+    }
+    if (month == 2 && zk_is_leap_year(year))
+    {
+        return 29;
+    }
+    return days[month - 1];
+}
+
 static long zk_days_before_month(int year, int month)
 {
     static const int days[12] = {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334};
@@ -299,6 +319,97 @@ static long zk_rtc_to_unix_seconds(const RtcTime_t *rtc)
     return (((days * 24L) + rtc->hour) * 60L + rtc->min) * 60L + rtc->sec;
 }
 
+static boolean_en zk_unix_seconds_to_rtc(long seconds, RtcTime_t *rtc)
+{
+    long days;
+    long second_of_day;
+    int year;
+    int month;
+    int year_days;
+    int month_days;
+
+    if (rtc == NULL || seconds < 0)
+    {
+        return BOOL_FALSE;
+    }
+
+    days = seconds / ZK_SECONDS_PER_DAY;
+    second_of_day = seconds % ZK_SECONDS_PER_DAY;
+
+    year = 1970;
+    while (1)
+    {
+        year_days = zk_is_leap_year(year) ? 366 : 365;
+        if (days < year_days)
+        {
+            break;
+        }
+        days -= year_days;
+        ++year;
+        if (year > 2099)
+        {
+            return BOOL_FALSE;
+        }
+    }
+
+    month = 1;
+    while (month <= 12)
+    {
+        month_days = zk_days_in_month(year, month);
+        if (days < month_days)
+        {
+            break;
+        }
+        days -= month_days;
+        ++month;
+    }
+    if (month > 12)
+    {
+        return BOOL_FALSE;
+    }
+
+    memset(rtc, 0, sizeof(*rtc));
+    rtc->year = (u16)year;
+    rtc->mon = (u8)month;
+    rtc->day = (u8)(days + 1L);
+    rtc->hour = (u8)(second_of_day / ZK_SECONDS_PER_HOUR);
+    second_of_day %= ZK_SECONDS_PER_HOUR;
+    rtc->min = (u8)(second_of_day / 60L);
+    rtc->sec = (u8)(second_of_day % 60L);
+    rtc->week = (u8)(GetWeek(rtc->year, rtc->mon, rtc->day) + 1U);
+    rtc->ready = BOOL_TRUE;
+    return BOOL_TRUE;
+}
+
+static long zk_local_timezone_offset_seconds(void)
+{
+    const zk_device_config_t *cfg;
+    int zone;
+
+    cfg = zk_device_config_get();
+    zone = ZK_DEFAULT_TIMEZONE_HOURS;
+    if (cfg != NULL && cfg->zone >= -12 && cfg->zone <= 12)
+    {
+        zone = cfg->zone;
+    }
+    return (long)zone * ZK_SECONDS_PER_HOUR;
+}
+
+static boolean_en zk_utc_rtc_to_local_rtc(const RtcTime_t *utc_time, RtcTime_t *local_time)
+{
+    long utc_seconds;
+    long local_seconds;
+
+    if (utc_time == NULL || local_time == NULL)
+    {
+        return BOOL_FALSE;
+    }
+
+    utc_seconds = zk_rtc_to_unix_seconds(utc_time);
+    local_seconds = utc_seconds + zk_local_timezone_offset_seconds();
+    return zk_unix_seconds_to_rtc(local_seconds, local_time);
+}
+
 boolean_en zk_parse_rtc_text(const char *text, RtcTime_t *rtc)
 {
     unsigned int y;
@@ -317,7 +428,13 @@ boolean_en zk_parse_rtc_text(const char *text, RtcTime_t *rtc)
     {
         return BOOL_FALSE;
     }
-    if (mo < 1U || mo > 12U || d < 1U || d > 31U || h > 23U || mi > 59U || s > 59U)
+    if (mo < 1U ||
+        mo > 12U ||
+        d < 1U ||
+        d > (unsigned int)zk_days_in_month((int)y, (int)mo) ||
+        h > 23U ||
+        mi > 59U ||
+        s > 59U)
     {
         return BOOL_FALSE;
     }
@@ -369,35 +486,60 @@ void zk_set_local_rtc(const RtcTime_t *rtc)
 
 static boolean_en zk_apply_server_time_text(const char *time_text)
 {
-    RtcTime_t server_time;
-    long server_seconds;
+    RtcTime_t server_utc_time;
+    RtcTime_t server_local_time;
+    long server_local_seconds;
     long local_seconds;
     long diff_seconds;
 
     if (time_text == NULL || time_text[0] == '\0')
     {
+        printf("[RTC] server time text empty, skip sync\r\n");
         return BOOL_FALSE;
     }
-    if (zk_parse_rtc_text(time_text, &server_time) == BOOL_FALSE)
+    printf("[RTC] server time text: %s\r\n", time_text);
+    if (zk_parse_rtc_text(time_text, &server_utc_time) == BOOL_FALSE)
     {
+        printf("[RTC] parse server time failed, format mismatch\r\n");
         return BOOL_FALSE;
     }
+    if (zk_utc_rtc_to_local_rtc(&server_utc_time, &server_local_time) == BOOL_FALSE)
+    {
+        printf("[RTC] convert server UTC time failed\r\n");
+        return BOOL_FALSE;
+    }
+    printf("[RTC] server UTC parsed: %04d-%02d-%02d %02d:%02d:%02d\r\n",
+           server_utc_time.year, server_utc_time.mon, server_utc_time.day,
+           server_utc_time.hour, server_utc_time.min, server_utc_time.sec);
+    printf("[RTC] server local time: %04d-%02d-%02d %02d:%02d:%02d\r\n",
+           server_local_time.year, server_local_time.mon, server_local_time.day,
+           server_local_time.hour, server_local_time.min, server_local_time.sec);
     if (apprtc_RtcTime.ready != BOOL_TRUE)
     {
-        zk_set_local_rtc(&server_time);
+        printf("[RTC] local RTC not ready, apply server local time directly\r\n");
+        zk_set_local_rtc(&server_local_time);
         return BOOL_TRUE;
     }
 
-    server_seconds = zk_rtc_to_unix_seconds(&server_time);
+    printf("[RTC] local time: %04d-%02d-%02d %02d:%02d:%02d\r\n",
+           apprtc_RtcTime.year, apprtc_RtcTime.mon, apprtc_RtcTime.day,
+           apprtc_RtcTime.hour, apprtc_RtcTime.min, apprtc_RtcTime.sec);
+    server_local_seconds = zk_rtc_to_unix_seconds(&server_local_time);
     local_seconds = zk_rtc_to_unix_seconds(&apprtc_RtcTime);
-    diff_seconds = server_seconds - local_seconds;
+    diff_seconds = server_local_seconds - local_seconds;
     if (diff_seconds < 0)
     {
         diff_seconds = -diff_seconds;
     }
-    if (diff_seconds > 30)
+    printf("[RTC] time diff = %ld seconds\r\n", diff_seconds);
+    if (diff_seconds > ZK_TIME_SYNC_THRESHOLD_SECONDS)
     {
-        zk_set_local_rtc(&server_time);
+        printf("[RTC] diff > 30s, apply server local time\r\n");
+        zk_set_local_rtc(&server_local_time);
+    }
+    else
+    {
+        printf("[RTC] diff <= 30s, skip sync\r\n");
     }
     return BOOL_TRUE;
 }
@@ -568,6 +710,7 @@ void zk_mqtt_reset_session(void)
     zk_ota_error_pending = BOOL_FALSE;
     zk_send_busy_fail_count = 0;
     zk_reboot_pending = BOOL_FALSE;
+    zk_login_time_sync_pending = BOOL_FALSE;
     zk_alarm_reset_states();
 }
 
@@ -1031,6 +1174,7 @@ boolean_en zk_dispatch_message(cJSON *root, const zk_message_header_t *header)
     {
         return BOOL_FALSE;
     }
+    zk_apply_server_time_from_header(header);
     if (zk_handle_property_read(root, header))
     {
         return BOOL_TRUE;
@@ -1171,6 +1315,9 @@ void zk_add_ele_info_group(cJSON *dt_root)
     cJSON *p;
     cJSON *r_ec;
     cJSON *t_ec;
+    cJSON *oc;
+    cJSON *ov;
+    cJSON *op;
 
     ele_info = zk_cjson_create_tx_object("EleInfo");
     e = zk_cjson_create_tx_array("EleInfo.e");
@@ -1180,8 +1327,12 @@ void zk_add_ele_info_group(cJSON *dt_root)
     p = zk_cjson_create_tx_array("EleInfo.p");
     r_ec = zk_cjson_create_tx_array("EleInfo.rEc");
     t_ec = zk_cjson_create_tx_array("EleInfo.tEc");
+    oc = zk_cjson_create_tx_array("EleInfo.oc");
+    ov = zk_cjson_create_tx_array("EleInfo.ov");
+    op = zk_cjson_create_tx_array("EleInfo.op");
     if (ele_info == NULL || e == NULL || c == NULL || v == NULL ||
-        f == NULL || p == NULL || r_ec == NULL || t_ec == NULL)
+        f == NULL || p == NULL || r_ec == NULL || t_ec == NULL ||
+        oc == NULL || ov == NULL || op == NULL)
     {
         return;
     }
@@ -1190,13 +1341,19 @@ void zk_add_ele_info_group(cJSON *dt_root)
     cJSON_AddItemToArray(e, cJSON_CreateNumber((double)error_flag_byte));
     cJSON_AddItemToArray(c, cJSON_CreateNumber((double)Z_ac_current));
     cJSON_AddItemToArray(v, cJSON_CreateNumber((double)ac_voltage_8209));
-    cJSON_AddItemToArray(f, cJSON_CreateNumber((double)ac_pf));
+    cJSON_AddItemToArray(f, cJSON_CreateNumber((double)((u32)ac_pf * 10U)));
     /* EleInfo.p: BL0942有功功率ac_powerpa原始单位0.01W，平台按原始数字显示W，故/100转为整数W（四舍五入） */
     cJSON_AddItemToArray(p, cJSON_CreateNumber((double)((ac_powerpa + 50U) / 100U)));
     /* EleInfo.rEc/tEc: 原始单位0.01Wh，协议要求W·h，故/100转为整数W·h（四舍五入） */
     /* tEc = flash历史累积 + 本周期RAM累积 = 设备启用至今总能耗 */
     cJSON_AddItemToArray(r_ec, cJSON_CreateNumber((double)((energy_this_time + 50U) / 100U)));
     cJSON_AddItemToArray(t_ec, cJSON_CreateNumber((double)((sys_data.ac_EnergyP + total_power_this_time + 50U) / 100U)));
+    /* EleInfo.oc: 输出电流，Io_value原始单位mA，协议单位mA，直接使用 */
+    cJSON_AddItemToArray(oc, cJSON_CreateNumber((double)Io_value));
+    /* EleInfo.ov: 输出电压，Vo_value原始单位0.1V，协议单位0.1V，直接使用 */
+    cJSON_AddItemToArray(ov, cJSON_CreateNumber((double)Vo_value));
+    /* EleInfo.op: 输出功率，Po_value原始单位0.1W，协议单位W，/10四舍五入 */
+    cJSON_AddItemToArray(op, cJSON_CreateNumber((double)((Po_value + 5U) / 10U)));
     cJSON_AddItemToObject(ele_info, "e", e);
     cJSON_AddItemToObject(ele_info, "c", c);
     cJSON_AddItemToObject(ele_info, "v", v);
@@ -1204,6 +1361,9 @@ void zk_add_ele_info_group(cJSON *dt_root)
     cJSON_AddItemToObject(ele_info, "p", p);
     cJSON_AddItemToObject(ele_info, "rEc", r_ec);
     cJSON_AddItemToObject(ele_info, "tEc", t_ec);
+    cJSON_AddItemToObject(ele_info, "oc", oc);
+    cJSON_AddItemToObject(ele_info, "ov", ov);
+    cJSON_AddItemToObject(ele_info, "op", op);
     cJSON_AddNumberToObject(ele_info, "pwr", power_down_flag ? 1 : 0);
     cJSON_AddNumberToObject(ele_info, "lc", danger_current_warn ? 30 : 0);
     cJSON_AddItemToObject(dt_root, "EleInfo", ele_info);
@@ -1624,6 +1784,16 @@ void zk_mqtt_session_process(void)
             return;
         }
 
+        if (zk_login_time_sync_pending == BOOL_TRUE)
+        {
+            if (zk_publish_time_request() == 0)
+            {
+                zk_login_time_sync_pending = BOOL_FALSE;
+                zk_time_request_tick = now;
+            }
+            return;
+        }
+
         if (zk_change_report_pending == BOOL_TRUE &&
             Timer_PassedDelay(zk_change_report_tick, ZK_CHANGE_REPORT_SETTLE_MS) == BOOL_FALSE)
         {
@@ -1803,6 +1973,7 @@ boolean_en zk_mqtt_accept_login_ack(const zk_message_header_t *header)
         now = Timer_GetTickCount();
         zk_login_state = ZK_LOGIN_STATE_ONLINE;
         zk_sync_online_period_timers(now);
+        zk_login_time_sync_pending = BOOL_TRUE;
         return BOOL_TRUE;
     }
     return BOOL_FALSE;

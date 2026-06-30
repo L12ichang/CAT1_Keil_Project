@@ -74,7 +74,7 @@ class Phase3JsonSkeletonTests(unittest.TestCase):
             json_source.index("if (zk_parse_message_header_from_root(root, header) == 0)"):
             json_source.index("if (zk_mqtt_accept_login_ack(header))")
         ]
-        self.assertIn("zk_apply_server_time_from_header(header)", login_ack_block)
+        self.assertNotIn("zk_apply_server_time_from_header(header)", login_ack_block)
         self.assertNotIn("zk_apply_server_time_from_header(header)", before_login_ack)
         self.assertIn("zk_publish_error_response", mqtt_source)
 

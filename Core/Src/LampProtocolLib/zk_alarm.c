@@ -9,6 +9,7 @@
 #include "sys_pow_drop_check.h"
 #include "ntc.h"
 #include "factory_user_data.h"
+#include "net_dim.h"
 
 /* dangeo_out 定义于 danger_current_check.c */
 extern u32 dangeo_out;
@@ -31,16 +32,23 @@ typedef struct
  * 阈值初始填0，运行时从zk_device_config_get()加载 */
 static zk_alarm_state_t zk_alarm_states[] =
 {
-    {ZK_ALARM_OVER_VOLTAGE, 0, 0, 0, 0, 0, 0},
-    {ZK_ALARM_UNDER_VOLTAGE, 0, 0, 0, 0, 0, 0},
-    {ZK_ALARM_OVER_CURRENT, 0, 0, 0, 0, 0, 0},
-    {ZK_ALARM_UNDER_CURRENT, 0, 0, 0, 0, 0, 0},
-    {ZK_ALARM_LIGHT_ON_FAIL, 0, 0, 0, 0, 0, 0},
-    {ZK_ALARM_LIGHT_OFF_FAIL, 0, 0, 0, 0, 0, 0},       /* 预留：灯具关断失败（暂未接入检测信号） */
-    {ZK_ALARM_POLE_TILT, 0, 0, 0, 0, 0, 0},             /* 预留：灯杆倾斜（暂未接入检测信号） */
-    {ZK_ALARM_LEAK_CURRENT, 0, 0, 0, 0, 0, 0},
-    {ZK_ALARM_DEVICE_FAULT, 0, 0, 0, 0, 0, 0},
-    {ZK_ALARM_POWER_DOWN, 0, 0, 0, 1, 0, 0},
+    {ZK_ALARM_OVER_VOLTAGE,       0, 0, 0, 0, 0, 0},  /*  0: 10000-输入过压 */
+    {ZK_ALARM_UNDER_VOLTAGE,      0, 0, 0, 0, 0, 0},  /*  1: 10001-输入欠压 */
+    {ZK_ALARM_OVER_CURRENT,       0, 0, 0, 0, 0, 0},  /*  2: 10002-输入过流 */
+    {ZK_ALARM_UNDER_CURRENT,      0, 0, 0, 0, 0, 0},  /*  3: 10003-输入欠流 */
+    {ZK_ALARM_LIGHT_ON_FAIL,      0, 0, 0, 0, 0, 0},  /*  4: 10004-开灯异常 */
+    {ZK_ALARM_LIGHT_OFF_FAIL,     0, 0, 0, 0, 0, 0},  /*  5: 10005-关灯异常（预留） */
+    {ZK_ALARM_POLE_TILT,          0, 0, 0, 0, 0, 0},  /*  6: 10006-灯杆倾斜（预留） */
+    {ZK_ALARM_LEAK_CURRENT,       0, 0, 0, 0, 0, 0},  /*  7: 10007-漏电 */
+    {ZK_ALARM_DEVICE_FAULT,       0, 0, 0, 0, 0, 0},  /*  8: 10008-设备故障 */
+    {ZK_ALARM_POWER_DOWN,         0, 0, 0, 1, 0, 0},  /*  9: 10009-输入失电 */
+    {ZK_ALARM_OUT_OVER_VOLTAGE,   0, 0, 0, 0, 0, 0},  /* 10: 10010-输出过压 */
+    {ZK_ALARM_OUT_UNDER_VOLTAGE,  0, 0, 0, 0, 0, 0},  /* 11: 10011-输出欠压 */
+    {ZK_ALARM_OUT_OVER_CURRENT,   0, 0, 0, 0, 0, 0},  /* 12: 10012-输出过流 */
+    {ZK_ALARM_OUT_UNDER_CURRENT,  0, 0, 0, 0, 0, 0},  /* 13: 10013-输出欠流 */
+    {ZK_ALARM_OVER_POWER,         0, 0, 0, 0, 0, 0},  /* 14: 10014-过功率 */
+    {ZK_ALARM_TC_OVER_TEMP,       0, 0, 0, 0, 0, 0},  /* 15: 10015-TC过温 */
+    {ZK_ALARM_CTRL_OVER_TEMP,     0, 0, 0, 0, 0, 0},  /* 16: 10016-控制器过温 */
 };
 #define ZK_ALARM_STATE_COUNT (sizeof(zk_alarm_states) / sizeof(zk_alarm_states[0]))
 
@@ -184,6 +192,57 @@ static void zk_alarm_collect_sources(void)
     /* 9-掉电告警（almIdx=9） */
     if (cfg->almEn[9])
         zk_alarm_update_power_down();
+
+    /* ---- 以下为新增 10010~10016 输出侧告警 ---- */
+
+    /* 10-输出过压（almIdx=10）：Vo_value > 阈值，0.1V单位 */
+    if (cfg->almEn[10])
+        zk_alarm_update_level(&zk_alarm_states[10],
+            (dim_level > 0U && Vo_value > (u32)cfg->almValue[10]) ? 1 : 0,
+            Vo_value,
+            (cfg->almValue[10] != 0) ? cfg->almValue[10] : 600);
+
+    /* 11-输出欠压（almIdx=11）：Error_Out_LV 硬件标志或 Vo_value < 阈值 */
+    if (cfg->almEn[11])
+        zk_alarm_update_level(&zk_alarm_states[11],
+            Error_Out_LV ? 1 : 0,
+            Vo_value,
+            (cfg->almValue[11] != 0) ? cfg->almValue[11] : 100);
+
+    /* 12-输出过流（almIdx=12）：Error_1_OL 硬件标志或 Io_value > 阈值 */
+    if (cfg->almEn[12])
+        zk_alarm_update_level(&zk_alarm_states[12],
+            Error_1_OL ? 1 : 0,
+            Io_value,
+            (cfg->almValue[12] != 0) ? cfg->almValue[12] : zk_alarm_current_threshold(120));
+
+    /* 13-输出欠流（almIdx=13）：输出开启但电流低于阈值，默认禁用 */
+    if (cfg->almEn[13])
+        zk_alarm_update_level(&zk_alarm_states[13],
+            (dim_level > 0U && cfg->almValue[13] > 0 && Io_value < (u32)cfg->almValue[13]) ? 1 : 0,
+            Io_value,
+            (cfg->almValue[13] != 0) ? cfg->almValue[13] : 0);
+
+    /* 14-过功率（almIdx=14）：Po_value > 阈值，0.1W单位 */
+    if (cfg->almEn[14])
+        zk_alarm_update_level(&zk_alarm_states[14],
+            (dim_level > 0U && cfg->almValue[14] > 0 && Po_value > (u32)cfg->almValue[14]) ? 1 : 0,
+            Po_value,
+            (cfg->almValue[14] != 0) ? cfg->almValue[14] : 0);
+
+    /* 15-TC过温（almIdx=15）：NTC温度 > 阈值，℃单位 */
+    if (cfg->almEn[15])
+        zk_alarm_update_level(&zk_alarm_states[15],
+            (INNRE_TEMP_PRO > 0 && zk_alarm_temperature_value() > (uint32)INNRE_TEMP_PRO) ? 1 : 0,
+            zk_alarm_temperature_value(),
+            (cfg->almValue[15] != 0) ? cfg->almValue[15] : zk_alarm_temperature_threshold());
+
+    /* 16-控制器过温（almIdx=16）：driver_temperarure_warn 硬件标志 */
+    if (cfg->almEn[16])
+        zk_alarm_update_level(&zk_alarm_states[16],
+            driver_temperarure_warn ? 1 : 0,
+            zk_alarm_temperature_value(),
+            (cfg->almValue[16] != 0) ? cfg->almValue[16] : zk_alarm_temperature_threshold());
 }
 
 /* 遍历告警表，发布第一条 pending 的告警（一次只发一条，防止多轮拥塞） */

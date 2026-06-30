@@ -41,9 +41,9 @@ typedef struct
     s32 uPeriod;
     s32 hPeriod;
     s32 tPeriod;
-    s32 almValue[10];       /* 告警触发阈值，索引=almId-10000 */
-    s32 almRecValue[10];    /* 告警恢复阈值 */
-    s32 almEn[10];          /* 告警使能标志 */
+    s32 almValue[17];       /* 告警触发阈值，索引=almId-10000 */
+    s32 almRecValue[17];    /* 告警恢复阈值 */
+    s32 almEn[17];          /* 告警使能标志 */
     u32 checksum;
 } zk_property_flash_record_t;
 
@@ -276,16 +276,23 @@ static void zk_device_config_set_defaults(zk_device_config_t *config)
     config->spreadWindow = 60;
     config->spreadInterval = 10;
     /* 设置告警阈值默认值："设备出厂配置"即默认阈值 */
-    config->almValue[0] = 3200;  config->almRecValue[0] = 2640;  config->almEn[0] = 1;  /* 10000-过压 */
-    config->almValue[1] = 800;   config->almRecValue[1] = 820;   config->almEn[1] = 1;  /* 10001-欠压 */
-    config->almValue[2] = 0;     config->almRecValue[2] = 0;     config->almEn[2] = 1;  /* 10002-过流（动态按额定电流%计算） */
-    config->almValue[3] = 0;     config->almRecValue[3] = 0;     config->almEn[3] = 1;  /* 10003-欠流（动态按额定电流%计算） */
+    config->almValue[0] = 3200;  config->almRecValue[0] = 2640;  config->almEn[0] = 1;  /* 10000-输入过压 */
+    config->almValue[1] = 800;   config->almRecValue[1] = 820;   config->almEn[1] = 1;  /* 10001-输入欠压 */
+    config->almValue[2] = 0;     config->almRecValue[2] = 0;     config->almEn[2] = 1;  /* 10002-输入过流（动态按额定电流%计算） */
+    config->almValue[3] = 0;     config->almRecValue[3] = 0;     config->almEn[3] = 1;  /* 10003-输入欠流（动态按额定电流%计算） */
     config->almValue[4] = 0;     config->almRecValue[4] = 0;     config->almEn[4] = 1;  /* 10004-开灯异常 */
     config->almValue[5] = 0;     config->almRecValue[5] = 0;     config->almEn[5] = 0;  /* 10005-关灯异常（未接入） */
     config->almValue[6] = 0;     config->almRecValue[6] = 0;     config->almEn[6] = 0;  /* 10006-灯杆倾斜（未接入） */
     config->almValue[7] = 30;    config->almRecValue[7] = 20;    config->almEn[7] = 1;  /* 10007-漏电 */
     config->almValue[8] = 0;     config->almRecValue[8] = 0;     config->almEn[8] = 1;  /* 10008-设备故障（动态按NTC温度） */
-    config->almValue[9] = 70;    config->almRecValue[9] = 80;    config->almEn[9] = 1;  /* 10009-失电 */
+    config->almValue[9] = 70;    config->almRecValue[9] = 80;    config->almEn[9] = 1;  /* 10009-输入失电 */
+    config->almValue[10] = 600;  config->almRecValue[10] = 550;  config->almEn[10] = 1; /* 10010-输出过压（0.1V） */
+    config->almValue[11] = 100;  config->almRecValue[11] = 120;  config->almEn[11] = 1; /* 10011-输出欠压（0.1V） */
+    config->almValue[12] = 0;    config->almRecValue[12] = 0;    config->almEn[12] = 1; /* 10012-输出过流（动态按SET_OUTCUR计算） */
+    config->almValue[13] = 0;    config->almRecValue[13] = 0;    config->almEn[13] = 0; /* 10013-输出欠流（默认禁用） */
+    config->almValue[14] = 0;    config->almRecValue[14] = 0;    config->almEn[14] = 1; /* 10014-过功率（动态按SET_OUTCUR×Vo计算） */
+    config->almValue[15] = 0;    config->almRecValue[15] = 0;    config->almEn[15] = 1; /* 10015-TC过温（动态取INNRE_TEMP_PRO） */
+    config->almValue[16] = 0;    config->almRecValue[16] = 0;    config->almEn[16] = 1; /* 10016-控制器过温（动态取INNRE_TEMP_PRO） */
 }
 
 void zk_device_config_init(void)
@@ -357,13 +364,16 @@ static void zk_add_dev_info_prop(cJSON *dt_root)
 static void zk_add_mdl_info_prop(cJSON *dt_root)
 {
     cJSON *item;
+    const zk_mqtt_config_t *mqtt_cfg;
 
     item = zk_cjson_create_tx_object("MdlInfo");
     if (item == NULL)
     {
         return;
     }
+    mqtt_cfg = zk_mqtt_get_config();
     cJSON_AddStringToObject(item, "mver", zk_dev_cfg.mver);
+    cJSON_AddStringToObject(item, "imei", (mqtt_cfg != NULL) ? mqtt_cfg->imei : "");
     cJSON_AddStringToObject(item, "iccid", zk_dev_cfg.iccid);
     cJSON_AddItemToObject(dt_root, "MdlInfo", item);
 }

@@ -148,6 +148,12 @@ class Phase4LoginHeartbeatTests(unittest.TestCase):
         self.assertIn('cJSON_AddNumberToObject(root, "ER", er_code);', mqtt_source)
         self.assertIn("int zk_publish_error_response", mqtt_source)
 
+    def test_ele_info_power_factor_reports_tenth_units(self):
+        mqtt_source = read_text("Core/Src/LampProtocolLib/mqtt_zk_protocol.c")
+
+        self.assertIn('zk_cjson_create_tx_array("EleInfo.f")', mqtt_source)
+        self.assertIn("cJSON_AddItemToArray(f, cJSON_CreateNumber((double)((u32)ac_pf * 10U)))", mqtt_source)
+
     def test_session_process_handles_all_periodic_tasks(self):
         mqtt_source = read_text("Core/Src/LampProtocolLib/mqtt_zk_protocol.c")
         session = mqtt_source[
@@ -172,15 +178,31 @@ class Phase4LoginHeartbeatTests(unittest.TestCase):
             json_source.index("if (zk_mqtt_accept_login_ack(header))"):
             json_source.index("if (zk_mqtt_accept_heartbeat_ack(header))")
         ]
-        self.assertIn("zk_apply_server_time_from_header(header)", login_ack_block)
+        self.assertNotIn("zk_apply_server_time_from_header(header)", login_ack_block)
+        self.assertIn("zk_login_time_sync_pending = BOOL_TRUE;", mqtt_source)
 
         request_handler = mqtt_source[
             mqtt_source.index("boolean_en zk_handle_request_message"):
             mqtt_source.index("boolean_en zk_handle_ota_message")
         ]
+        dispatch_handler = mqtt_source[
+            mqtt_source.index("boolean_en zk_dispatch_message"):
+            mqtt_source.index("static boolean_en zk_signal_query_process")
+        ]
+        self.assertIn("zk_apply_server_time_from_header(header);", dispatch_handler)
+        self.assertLess(
+            dispatch_handler.index("zk_apply_server_time_from_header(header);"),
+            dispatch_handler.index("zk_handle_property_read(root, header)"),
+        )
         self.assertIn('cJSON_GetObjectItem(dt, "TmCali")', request_handler)
         self.assertIn("zk_apply_server_time_text(zk_json_get_rtc_time_text(tm_cali))", request_handler)
         self.assertNotIn("zk_apply_server_time_from_header(header)", request_handler)
+        self.assertIn("#define ZK_DEFAULT_TIMEZONE_HOURS 8", mqtt_source)
+        self.assertIn("static long zk_local_timezone_offset_seconds(void)", mqtt_source)
+        self.assertIn("cfg->zone >= -12 && cfg->zone <= 12", mqtt_source)
+        self.assertIn("zk_utc_rtc_to_local_rtc(&server_utc_time, &server_local_time)", mqtt_source)
+        self.assertIn("zk_set_local_rtc(&server_local_time);", mqtt_source)
+        self.assertNotIn("zk_set_local_rtc(&server_time);", mqtt_source)
 
         rtc_validator = property_source[
             property_source.index("static int zk_validate_rtc_config"):
@@ -207,6 +229,9 @@ class Phase4LoginHeartbeatTests(unittest.TestCase):
 
         self.assertIn("static void zk_sync_online_period_timers(uint32 now)", mqtt_source)
         self.assertIn("zk_sync_online_period_timers(now);", login_ack)
+        self.assertIn("zk_login_time_sync_pending = BOOL_TRUE;", login_ack)
+        self.assertIn("zk_login_time_sync_pending == BOOL_TRUE", session)
+        self.assertIn("zk_login_time_sync_pending = BOOL_FALSE;", session)
         self.assertNotIn("zk_report_tick = 0;", login_ack)
         self.assertNotIn("zk_time_request_tick = 0;", login_ack)
         self.assertIn("Timer_PassedDelay(zk_report_tick, report_period_ms)", session)

@@ -109,6 +109,7 @@ class ZkPublishBackpressureTests(unittest.TestCase):
             "zk_ota_progress_pending = BOOL_FALSE;",
             "zk_ota_error_pending = BOOL_FALSE;",
             "zk_change_report_pending = BOOL_FALSE;",
+            "zk_login_time_sync_pending = BOOL_FALSE;",
         ):
             self.assertIn(flag, reset)
         self.assertIn("zk_change_report_tick = 0;", reset)
@@ -121,6 +122,7 @@ class ZkPublishBackpressureTests(unittest.TestCase):
         self.assertIn("uint32 now;", login_ack)
         self.assertIn("now = Timer_GetTickCount();", login_ack)
         self.assertIn("zk_sync_online_period_timers(now);", login_ack)
+        self.assertIn("zk_login_time_sync_pending = BOOL_TRUE;", login_ack)
         self.assertNotIn("zk_report_tick = 0;", login_ack)
         self.assertNotIn("zk_time_request_tick = 0;", login_ack)
 
@@ -144,6 +146,21 @@ class ZkPublishBackpressureTests(unittest.TestCase):
         self.assertIn("zk_send_busy_fail_count = 0;", note_result)
         self.assertIn("pub_en_flag=0;", reset_idle)
         self.assertIn("pubsend_state=PUBSEDN_STATE_IDLE;", reset_idle)
+
+    def test_pubsend_idle_includes_pending_payload_and_at_windows(self):
+        nb_source = NB_SOURCE.read_text(encoding="utf-8", errors="ignore")
+        at_busy = block(nb_source, "static boolean_en nb_at_command_is_busy", "static boolean_en pubsend_is_busy")
+        busy_check = block(nb_source, "static boolean_en pubsend_is_busy", "uint8 nbSendTcpData")
+        idle_check = block(nb_source, "boolean_en pubsend_state_idle", "void pubsend_state_set_idle")
+        sender = block(nb_source, "uint8 g4Send_MQTT_Data", "boolean_en pubsend_state_finish")
+
+        self.assertIn("sendcommad_state == SEND_COMMAND_STATE_IDLE", at_busy)
+        self.assertIn("sendcommad_state == SEND_COMMAND_STATE_RXING_COMPLETE", at_busy)
+        self.assertIn("pub_en_flag", busy_check)
+        self.assertIn("pubsend_state != PUBSEDN_STATE_IDLE", busy_check)
+        self.assertIn("nb_at_command_is_busy() == BOOL_TRUE", busy_check)
+        self.assertIn("pub_en_flag=1;", sender)
+        self.assertIn("pubsend_is_busy() == BOOL_FALSE", idle_check)
 
 
 if __name__ == "__main__":
