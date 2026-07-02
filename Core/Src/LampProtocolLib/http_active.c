@@ -45,14 +45,22 @@ void http_congfig_fsm(void)//整个过程是2.5S
               http_congfig_state=HTTP_CONFIG_AT_QHTTPCFG2;  
              }  
              break;
-       case  HTTP_CONFIG_AT_QHTTPCFG2:         
+       case  HTTP_CONFIG_AT_QHTTPCFG2:
             if(send_AT_Command_machine_finish()==TRUE)
              {
-              send_AT_Command_machine_star("AT+QHTTPCFG=\"contenttype\",4\r\n",strlen("AT+QHTTPCFG=\"contenttype\",4\r\n"),"OK", 25, 1);//配置http消息体类型 content_type:application/json
-              http_congfig_state= HTTP_CONFIG_AT_QHTTPURL_POST;  
+              send_AT_Command_machine_star("AT+QHTTPCFG=\"requestheader\",0\r\n",strlen("AT+QHTTPCFG=\"requestheader\",0\r\n"),"OK", 25, 1);
+              http_congfig_state= HTTP_CONFIG_AT_QHTTPCFG_REQUESTHEADER;
              }
                break;
-       case  HTTP_CONFIG_AT_QHTTPURL_POST:  
+       case  HTTP_CONFIG_AT_QHTTPCFG_REQUESTHEADER:
+            if(send_AT_Command_machine_finish()==TRUE)
+             {
+              send_AT_Command_machine_star("AT+QHTTPCFG=\"contenttype\",4\r\n",strlen("AT+QHTTPCFG=\"contenttype\",4\r\n"),"OK", 25, 1);
+              http_congfig_state= HTTP_CONFIG_AT_QHTTPURL_POST;
+             }
+               break;
+
+       case  HTTP_CONFIG_AT_QHTTPURL_POST:
             if(send_AT_Command_machine_finish()==TRUE)
             {
                  //并触发激活流程  ‘

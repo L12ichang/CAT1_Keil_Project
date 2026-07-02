@@ -57,6 +57,10 @@ ver 3. 2022.12.7 dali时序兼容不了新唐，改回来。
 #define APP_PWM_DEBUG_ENABLE 1
 #endif
 
+#ifndef APP_OTA_LOG_ENABLE
+#define APP_OTA_LOG_ENABLE 1
+#endif
+
 #if APP_LOG_ENABLE
 #define LOG_PRINT(...) dma_printf(__VA_ARGS__)
 #else
@@ -67,6 +71,18 @@ ver 3. 2022.12.7 dali时序兼容不了新唐，改回来。
 #define LOGW(...) LOG_PRINT("[W] " __VA_ARGS__)
 #define LOGI(...) LOG_PRINT("[I] " __VA_ARGS__)
 #define LOGD(...) LOG_PRINT("[D] " __VA_ARGS__)
+
+#if APP_LOG_ENABLE && APP_OTA_LOG_ENABLE
+#define OTA_LOGE(...) LOG_PRINT("[OTA][E] " __VA_ARGS__)
+#define OTA_LOGW(...) LOG_PRINT("[OTA][W] " __VA_ARGS__)
+#define OTA_LOGI(...) LOG_PRINT("[OTA][I] " __VA_ARGS__)
+#define OTA_LOGD(...) LOG_PRINT("[OTA][D] " __VA_ARGS__)
+#else
+#define OTA_LOGE(...) do {} while (0)
+#define OTA_LOGW(...) do {} while (0)
+#define OTA_LOGI(...) do {} while (0)
+#define OTA_LOGD(...) do {} while (0)
+#endif
 
 #if APP_LOG_ENABLE
 #define printf(...) dma_printf(__VA_ARGS__)

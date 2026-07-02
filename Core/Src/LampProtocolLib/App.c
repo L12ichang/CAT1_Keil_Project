@@ -293,6 +293,7 @@ uint8 onFirmwareUpdate(uint16 packNumber, uint16 totalPackCount, uint8 *pData, u
        printf("____OTA__START_");
        memset(firm_name_buffer,0x00,24);
        memcpy(firm_name_buffer,"cat1.bin",strlen("cat1.bin"));//固件名默认cat1.bin
+         OTA_LOGI("legacy cmd received local=%s\r\n", firm_name_buffer);
          set_OTA_ENABLE();
      }
      else if(pData[0]==0xA0&&pData[1]==0xA0)
@@ -301,6 +302,7 @@ uint8 onFirmwareUpdate(uint16 packNumber, uint16 totalPackCount, uint8 *pData, u
          memcpy(firm_name_buffer,&pData[2], 22);//固件名格式cat120250401162230.bin  22个字符
          firm_name_buffer[22]='\0';
          printf("firm_name_buffer=%s\n",firm_name_buffer);
+         OTA_LOGI("legacy cmd received local=%s\r\n", firm_name_buffer);
          set_OTA_ENABLE();
      }
      else

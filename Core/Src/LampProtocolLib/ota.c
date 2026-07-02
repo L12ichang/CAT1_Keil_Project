@@ -14,6 +14,9 @@
 #include "hw_flash.h"
 #include "Queue.h"
 #include "mqtt_zk_protocol.h"
+#define OTA_QHTTPREADFILE_WAIT_SEC        80U
+#define OTA_QHTTPREADFILE_TIMEOUT_MS      ((OTA_QHTTPREADFILE_WAIT_SEC + 15U) * 1000U)
+#define OTA_QHTTPREADFILE_DIAG_TIMEOUT_MS 5000U
       //  #include "watchdog.h"
 extern void soft_reset(void); //存储失败系统复位
 static   uint16 recvLength = 0;//数据接收长度
@@ -40,6 +43,12 @@ extern QUEUE  usartRecvQueue;//串口数据接收队列
 static u8 last_server_big_pick=0;
 static u16 SERVER_CHECSUM=0;
 static u16 checsum_temp=0;
+static int ota_http_err_code=-1;
+static int ota_http_status_code=0;
+static u32 ota_http_content_length=0;
+static u8 ota_readfile_command_ok_logged=0;
+static u8 ota_diag_qflst_found=0;
+static u32 ota_diag_qflst_size=0;
 uint16 pack_length=0;
 static  uint8 *pack_buf;
 static u8  have_get_pack_length=0;
@@ -63,19 +72,276 @@ static DATA_STATE_en  data_state=DATA_STATE_IDLE;
 
 char firm_name_buffer[256];
 static   char common_send_buff[256];
-static void zk_build_ota_url_string(char *buf, u16 buf_size)
+static char ota_default_url[128];
+
+static void ota_use_local_firmware_name(void);
+
+static const char *ota_get_download_url(void)
 {
     const char *url;
 
     url = zk_get_ota_url();
     if (url != NULL && url[0] != '\0')
     {
-        snprintf(buf, buf_size, "%s\r\n", url);
+        return url;
+    }
+
+    if (firm_name_buffer[0] == '\0')
+    {
+        ota_use_local_firmware_name();
+    }
+    snprintf(ota_default_url, sizeof(ota_default_url), "http://47.120.15.220:888/downloads/%s", firm_name_buffer);
+    return ota_default_url;
+}
+
+static boolean_en ota_build_ota_url_string(char *buf, u16 buf_size, u16 *url_len)
+{
+    int len;
+
+    if (buf == NULL || url_len == NULL || buf_size == 0)
+    {
+        return BOOL_FALSE;
+    }
+
+    len = snprintf(buf, buf_size, "%s\r\n", ota_get_download_url());
+    if (len <= 2 || len >= buf_size || len > 255)
+    {
+        buf[0] = '\0';
+        *url_len = 0;
+        return BOOL_FALSE;
+    }
+
+    *url_len = (u16)(len - 2);
+    return BOOL_TRUE;
+}
+
+static boolean_en ota_build_http_get_header(char *buf, u16 buf_size, u16 *header_len)
+{
+    const char *url;
+    const char *host_start;
+    const char *path_start;
+    int host_len;
+    int len;
+
+    if (buf == NULL || header_len == NULL || buf_size == 0)
+    {
+        return BOOL_FALSE;
+    }
+
+    url = ota_get_download_url();
+    if (strncmp(url, "http://", 7) != 0)
+    {
+        return BOOL_FALSE;
+    }
+
+    host_start = url + 7;
+    path_start = strchr(host_start, '/');
+    if (path_start == NULL)
+    {
+        path_start = "/";
+        host_len = (int)strlen(host_start);
     }
     else
     {
-        snprintf(buf, buf_size, "http://47.120.15.220:888/downloads/%s\r\n", firm_name_buffer);
+        host_len = (int)(path_start - host_start);
     }
+
+    if (host_len <= 0)
+    {
+        return BOOL_FALSE;
+    }
+
+    len = snprintf(buf,
+                   buf_size,
+                   "GET %s HTTP/1.0\r\nHost: %.*s\r\nConnection: close\r\n\r\n",
+                   path_start,
+                   host_len,
+                   host_start);
+    if (len <= 0 || len >= buf_size || len > 255)
+    {
+        buf[0] = '\0';
+        *header_len = 0;
+        return BOOL_FALSE;
+    }
+
+    *header_len = (u16)len;
+    return BOOL_TRUE;
+}
+
+static void ota_use_local_firmware_name(void)
+{
+    memset(firm_name_buffer, 0, sizeof(firm_name_buffer));
+    strncpy(firm_name_buffer, OTA_LOCAL_FIRMWARE_NAME, sizeof(firm_name_buffer) - 1);
+}
+
+static void ota_reset_for_bad_url(void)
+{
+    OTA_LOGE("download failed: url/header too long or invalid\r\n");
+    ota_connect_state = CONNECT_OTA_AT_QHTTPREADFILE_STROE_FINISH;
+    soft_reset();
+}
+
+static boolean_en ota_parse_qhttpget_result(const char *line)
+{
+    const char *p;
+    int err;
+    int status;
+    u32 content_len;
+
+    if (line == NULL)
+    {
+        return BOOL_FALSE;
+    }
+
+    p = strstr(line, "+QHTTPGET:");
+    if (p == NULL)
+    {
+        return BOOL_FALSE;
+    }
+    p += strlen("+QHTTPGET:");
+    while (*p == ' ')
+    {
+        ++p;
+    }
+
+    err = 0;
+    while (*p >= '0' && *p <= '9')
+    {
+        err = (err * 10) + (*p - '0');
+        ++p;
+    }
+    if (*p != ',')
+    {
+        return BOOL_FALSE;
+    }
+    ++p;
+
+    status = 0;
+    while (*p >= '0' && *p <= '9')
+    {
+        status = (status * 10) + (*p - '0');
+        ++p;
+    }
+
+    content_len = 0;
+    if (*p == ',')
+    {
+        ++p;
+        while (*p >= '0' && *p <= '9')
+        {
+            content_len = (content_len * 10U) + (u32)(*p - '0');
+            ++p;
+        }
+    }
+
+    ota_http_err_code = err;
+    ota_http_status_code = status;
+    ota_http_content_length = content_len;
+    return BOOL_TRUE;
+}
+
+static boolean_en ota_parse_qhttpreadfile_result(const char *line, int *err_code)
+{
+    const char *p;
+    int err;
+
+    if (line == NULL || err_code == NULL)
+    {
+        return BOOL_FALSE;
+    }
+
+    p = strstr(line, "+QHTTPREADFILE:");
+    if (p == NULL)
+    {
+        return BOOL_FALSE;
+    }
+    p += strlen("+QHTTPREADFILE:");
+    while (*p == ' ')
+    {
+        ++p;
+    }
+
+    err = 0;
+    while (*p >= '0' && *p <= '9')
+    {
+        err = (err * 10) + (*p - '0');
+        ++p;
+    }
+
+    *err_code = err;
+    return BOOL_TRUE;
+}
+
+static boolean_en ota_parse_qflst_firmware_line(const char *line, u32 *file_size)
+{
+    char target[96];
+    const char *p;
+    int len;
+    u32 size;
+
+    if (line == NULL || file_size == NULL)
+    {
+        return BOOL_FALSE;
+    }
+
+    len = snprintf(target, sizeof(target), "+QFLST: \"UFS:%s\",", firm_name_buffer);
+    if (len <= 0 || len >= (int)sizeof(target))
+    {
+        return BOOL_FALSE;
+    }
+
+    p = strstr(line, target);
+    if (p == NULL)
+    {
+        return BOOL_FALSE;
+    }
+    p += len;
+
+    size = 0;
+    while (*p >= '0' && *p <= '9')
+    {
+        size = (size * 10U) + (u32)(*p - '0');
+        ++p;
+    }
+
+    *file_size = size;
+    return BOOL_TRUE;
+}
+
+static void ota_reset_after_diag(void)
+{
+    HAL_Delay(300);
+    soft_reset();
+}
+
+static void ota_start_readfile_fs_diag(const char *reason)
+{
+    ota_diag_qflst_found = 0;
+    ota_diag_qflst_size = 0;
+    recvLength = 0;
+    memset(stringBuf, 0x00, RECV_BUF_LENGTH);
+    OTA_LOGI("module fs diagnose start reason=%s file=UFS:%s\r\n",
+             (reason != NULL) ? reason : "unknown",
+             firm_name_buffer);
+    sendCommand("AT+QFLST\r\n", strlen("AT+QFLST\r\n"));
+    http_get_timer = Timer_GetTickCount();
+    ota_connect_state = CONNECT_OTA_AT_QHTTPREADFILE_QFLST_DIAG;
+}
+
+static void ota_start_qhttpurl(void)
+{
+    u16 length;
+    static char buff[64];
+
+    if (ota_build_ota_url_string(common_send_buff, sizeof(common_send_buff), &length) == BOOL_FALSE)
+    {
+        ota_reset_for_bad_url();
+        return;
+    }
+    sprintf(buff, "AT+QHTTPURL=%u,30\r\n", length);
+    OTA_LOGI("url ready len=%u\r\n", length);
+    send_AT_Command_machine_star(buff, strlen(buff), "CONNECT",20, 0);
+    ota_connect_state=CONNECT_OTA_AT_QHTTPURL;
 }
 
 
@@ -84,10 +350,15 @@ static void zk_build_ota_url_string(char *buf, u16 buf_size)
 *************************************/
 void  _4G_OTA_machine_star(void)
 {
+       OTA_LOGI("download task start local=%s\r\n", firm_name_buffer);
+       OTA_LOGI("code marker=ota_http_status_v2\r\n");
        ota_connect_state=CONNECT_OTA_RESETING;
        server_big_pick_counter=0;
        POWERED_DOWN_read_count=0;
        http_get_timer=0;
+       ota_http_err_code=-1;
+       ota_http_status_code=0;
+       ota_http_content_length=0;
 }
 /************************************
 功能描述：启动服务器固件下载配置
@@ -192,25 +463,29 @@ void _4G_OTA_machine(void)
          case CONNECT_OTA_AT_QHTTPCFG_responseheader:
              if(send_AT_Command_machine_finish()==TRUE)
              {
-                 u16 length;
-                static char buff[64];
-                 zk_build_ota_url_string(common_send_buff, sizeof(common_send_buff));
-                 length=strlen(common_send_buff)-2;
-                 sprintf(buff,"AT+QHTTPURL=%u,30\r\n",length);
-                 printf("AT+QHTTPURL=%s\n",buff);
-                 send_AT_Command_machine_star(buff, strlen(buff), "CONNECT",20, 0);
-              // send_AT_Command_machine_star("AT+QHTTPURL=43,30\r\n", strlen("AT+QHTTPURL=43,30\r\n"), "CONNECT",20, 0);//43
+                  send_AT_Command_machine_star("AT+QHTTPCFG=\"requestheader\",1\r\n",strlen("AT+QHTTPCFG=\"requestheader\",1\r\n"),"OK\r\n", 20, 0);
+                  ota_connect_state=CONNECT_OTA_AT_QHTTPCFG_requestheader;
+              }
+              break;
 
-                  ota_connect_state=CONNECT_OTA_AT_QHTTPURL;
-             }
-             break;
+         case CONNECT_OTA_AT_QHTTPCFG_requestheader:
+              if(send_AT_Command_machine_finish()==TRUE)
+              {
+                  ota_start_qhttpurl();
+              }
+              break;
              
          case CONNECT_OTA_AT_QHTTPURL:
              if(send_AT_Command_machine_finish()==TRUE)
              {
-                memset(common_send_buff,0x00,128);
-                zk_build_ota_url_string(common_send_buff, sizeof(common_send_buff));
-                 printf("firm_name_buffer1=%s\n",common_send_buff);
+                 u16 length;
+                memset(common_send_buff,0x00,sizeof(common_send_buff));
+                if (ota_build_ota_url_string(common_send_buff, sizeof(common_send_buff), &length) == BOOL_FALSE)
+                {
+                    ota_reset_for_bad_url();
+                    break;
+                }
+                 OTA_LOGD("url sent=%s\r\n", common_send_buff);
                  send_AT_Command_machine_star(common_send_buff, strlen(common_send_buff), "OK",20, 0);
                 // send_AT_Command_machine_star("http://47.120.15.220:888/downloads/cat1.bin\r\n", strlen("http://47.120.15.220:888/downloads/cat1.bin\r\n"), "OK",20, 0);      //不要删除
                 //  send_AT_Command_machine_star("http://47.120.15.220:888/downloads/cat120250401162230.bin\r\n", strlen("http://47.120.15.220:888/downloads/cat120250401162230.bin\r\n"), "OK",20, 0);   
@@ -226,27 +501,72 @@ void _4G_OTA_machine(void)
               }  
               //此处没有 break; 不要加 break  
              
-           case CONNECT_OTA_AT_QHTTPGET:         //  AT+QHTTPGETEX
+           case CONNECT_OTA_AT_QHTTPGET:
                 if(send_AT_Command_machine_finish()==TRUE)
                 {
-                    if( server_big_pick_counter==0)
-                    { 
-                        send_AT_Command_machine_star("AT+QHTTPGETEX=80,0,20480\r\n",strlen("AT+QHTTPGETEX=80,0,20480\r\n"),"+QHTTPGET: 0,20",200, 1);//仅接收2xx成功码
-                    }
+                    u16 header_len;
+                    static char buff[64];
 
-                    else
-                    { 
-                        send_AT_Command_machine_star("AT+QHTTPGETEX=80,-1,20480\r\n",strlen("AT+QHTTPGETEX=80,-1,20480\r\n"),"+QHTTPGET: 0,20",200, 1);//仅接收2xx成功码
+                    if (ota_build_http_get_header(common_send_buff, sizeof(common_send_buff), &header_len) == BOOL_FALSE)
+                    {
+                        ota_reset_for_bad_url();
+                        break;
                     }
-                        ota_connect_state=CONNECT_OTA_AT_QHTTPREADFILE;   
+                    sprintf(buff,"AT+QHTTPGET=120,%u,30\r\n",header_len);
+                    OTA_LOGI("http download start header_len=%u local=%s\r\n", header_len, firm_name_buffer);
+                    OTA_LOGD("http url=%s\r\n", ota_get_download_url());
+                    send_AT_Command_machine_star(buff,strlen(buff),"CONNECT",20, 0);
+                    ota_connect_state=CONNECT_OTA_AT_QHTTPGET_HEADER;
                 }  
-                break;                   
-                 
+                break;
+
+           case CONNECT_OTA_AT_QHTTPGET_HEADER:
+                if(send_AT_Command_machine_finish()==TRUE)
+                {
+                    u16 header_len;
+
+                    if (ota_build_http_get_header(common_send_buff, sizeof(common_send_buff), &header_len) == BOOL_FALSE)
+                    {
+                        ota_reset_for_bad_url();
+                        break;
+                    }
+                    send_AT_Command_machine_star(common_send_buff,(uint8)header_len,"+QHTTPGET:",200, 1);
+                    ota_connect_state=CONNECT_OTA_AT_QHTTPREADFILE;
+                }
+                break;
+
        case CONNECT_OTA_AT_QHTTPREADFILE:
-             if(send_AT_Command_machine_finish()==TRUE)
-             {
-                sprintf(common_send_buff,"AT+QHTTPREADFILE=\"UFS:%s\",80 \r\n",firm_name_buffer );
-                printf("firm_name_buffer2=%s\n",common_send_buff);
+                if(send_AT_Command_machine_finish()==TRUE)
+                {
+                if (ota_parse_qhttpget_result((const char *)stringBuf) == BOOL_FALSE)
+                {
+                    OTA_LOGE("download failed: missing QHTTPGET result line=%s\r\n", stringBuf);
+                    ota_connect_state=CONNECT_OTA_AT_QHTTPREADFILE_STROE_FINISH;
+                    soft_reset();
+                    break;
+                }
+                OTA_LOGI("server response: err=%d http=%d content_len=%u\r\n",
+                         ota_http_err_code,
+                         ota_http_status_code,
+                         (unsigned int)ota_http_content_length);
+                if (ota_http_err_code != 0 || ota_http_status_code < 200 || ota_http_status_code >= 300)
+                {
+                    OTA_LOGE("download failed: server response err=%d http=%d\r\n",
+                             ota_http_err_code,
+                             ota_http_status_code);
+                    ota_connect_state=CONNECT_OTA_AT_QHTTPREADFILE_STROE_FINISH;
+                    soft_reset();
+                    break;
+                }
+                sprintf(common_send_buff,"AT+QHTTPREADFILE=\"UFS:%s\",%u \r\n",
+                        firm_name_buffer,
+                        (unsigned int)OTA_QHTTPREADFILE_WAIT_SEC);
+                OTA_LOGI("save to module fs start file=UFS:%s wait=%us\r\n",
+                         firm_name_buffer,
+                         (unsigned int)OTA_QHTTPREADFILE_WAIT_SEC);
+                ota_readfile_command_ok_logged = 0;
+                recvLength = 0;
+                memset(stringBuf, 0x00, RECV_BUF_LENGTH);
                 send_AT_Command_machine_star(common_send_buff,strlen(common_send_buff),"OK",100, 1);//收到+QHTTPREADFILE: 0  需要500ms
              // send_AT_Command_machine_star("AT+QHTTPREADFILE=\"UFS:cat1.bin\",80 \r\n",strlen("AT+QHTTPREADFILE=\"UFS:cat1.bin\",80 \r\n"),"OK",100, 1);//收到+QHTTPREADFILE: 0  需要500ms   //不要删除
              // send_AT_Command_machine_star("AT+QHTTPREADFILE=\"UFS:cat120250401162230.bin\",80 \r\n",strlen("AT+QHTTPREADFILE=\"UFS:cat120250401162230.bin\",80 \r\n"),"OK",100, 1);//收到+QHTTPREADFILE: 0  需要500ms   //不要删除
@@ -258,14 +578,53 @@ void _4G_OTA_machine(void)
         case CONNECT_OTA_AT_QHTTPREADFILE_STROE_WAIT:       
              if(send_AT_Command_machine_finish()==TRUE)
              {
-                if(!Timer_PassedDelay(http_get_timer, 80000))    //    &&Timer_PassedDelay(http_get__data_wait_timer, 150)
+                int readfile_err;
+
+                if (ota_readfile_command_ok_logged == 0)
+                {
+                    ota_readfile_command_ok_logged = 1;
+                    if (strstr((const char *)stringBuf, "OK") == NULL)
+                    {
+                        OTA_LOGE("download failed: QHTTPREADFILE command not accepted raw=%s\r\n", stringBuf);
+                        ota_start_readfile_fs_diag("readfile command no OK");
+                        break;
+                    }
+                    OTA_LOGI("module fs save command accepted raw=%s", stringBuf);
+                    recvLength = 0;
+                    memset(stringBuf, 0x00, RECV_BUF_LENGTH);
+                }
+
+                if(!Timer_PassedDelay(http_get_timer, OTA_QHTTPREADFILE_TIMEOUT_MS))    //    &&Timer_PassedDelay(http_get__data_wait_timer, 150)
                 {   
                     if (readLine(stringBuf, &recvLength, 0))
                     {  
                       // printf_buf(stringBuf,recvLength);//这里会输出固件信息
+                        OTA_LOGD("module fs save line len=%u raw=%s",
+                                 recvLength,
+                                 stringBuf);
+                        if (ota_parse_qhttpreadfile_result((const char *)stringBuf, &readfile_err) == BOOL_TRUE)
+                        {
+                            OTA_LOGI("module fs save result err=%d raw=%s",
+                                     readfile_err,
+                                     stringBuf);
+                            if (readfile_err != 0)
+                            {
+                                OTA_LOGE("download failed: module fs save result err=%d\r\n", readfile_err);
+                                ota_start_readfile_fs_diag("readfile urc error");
+                                break;
+                            }
+                        }
+                        if (strstr((const char *)stringBuf, "ERROR") != NULL ||
+                            strstr((const char *)stringBuf, "+CME ERROR:") != NULL)
+                        {
+                            OTA_LOGE("download failed: module fs save error raw=%s", stringBuf);
+                            ota_start_readfile_fs_diag("readfile error line");
+                            break;
+                        }
                         if( strstr((const char *) stringBuf, "+QHTTPREADFILE: 0"))
                         {  //调试完后改为“+QHTTPREADFILE: 0 ”
                                 ota_connect_state=CONNECT_OTA_AT_QHTTPREADFILE_STROE_FINISH; 
+                                OTA_LOGI("download success: saved in module fs file=UFS:%s\r\n", firm_name_buffer);
                                 mcu_copy_firmware_star();
                                 set_gateway_state_idle();//置位通信静默状态
                                 printf("_____________通信模块收到固件__________\n");
@@ -281,12 +640,68 @@ void _4G_OTA_machine(void)
                 } // 等待成功储存响应消息<80S
                 else
                 {
-                     printf("__________________模块OTA存储失败___________________\n");
-                     ota_connect_state=CONNECT_OTA_AT_QHTTPREADFILE_STROE_FINISH; 
-                     soft_reset();  
+                     OTA_LOGE("download failed: module fs save timeout wait=%ums file=UFS:%s\r\n",
+                              (unsigned int)OTA_QHTTPREADFILE_TIMEOUT_MS,
+                              firm_name_buffer);
+                     ota_start_readfile_fs_diag("readfile timeout");
                 }
              }                 
              break;        
+        case CONNECT_OTA_AT_QHTTPREADFILE_QFLST_DIAG:
+             if(!Timer_PassedDelay(http_get_timer, OTA_QHTTPREADFILE_DIAG_TIMEOUT_MS))
+             {
+                if (readLine(stringBuf, &recvLength, 0))
+                {
+                    u32 file_size;
+
+                    OTA_LOGI("module fs diag line len=%u raw=%s",
+                             recvLength,
+                             stringBuf);
+                    if (ota_parse_qflst_firmware_line((const char *)stringBuf, &file_size) == BOOL_TRUE)
+                    {
+                        ota_diag_qflst_found = 1;
+                        ota_diag_qflst_size = file_size;
+                        OTA_LOGI("module fs file present file=UFS:%s size=%u\r\n",
+                                 firm_name_buffer,
+                                 (unsigned int)ota_diag_qflst_size);
+                    }
+                    if (strstr((const char *)stringBuf, "OK") != NULL)
+                    {
+                        if (ota_diag_qflst_found)
+                        {
+                            OTA_LOGE("download failed: no readfile success urc, but UFS file exists size=%u\r\n",
+                                     (unsigned int)ota_diag_qflst_size);
+                        }
+                        else
+                        {
+                            OTA_LOGE("download failed: no readfile success urc and UFS file missing\r\n");
+                        }
+                        ota_connect_state=CONNECT_OTA_AT_QHTTPREADFILE_STROE_FINISH;
+                        ota_reset_after_diag();
+                        break;
+                    }
+                    if (strstr((const char *)stringBuf, "ERROR") != NULL ||
+                        strstr((const char *)stringBuf, "+CME ERROR:") != NULL)
+                    {
+                        OTA_LOGE("module fs diag failed raw=%s", stringBuf);
+                        ota_connect_state=CONNECT_OTA_AT_QHTTPREADFILE_STROE_FINISH;
+                        ota_reset_after_diag();
+                        break;
+                    }
+                    memset(stringBuf,0x00,recvLength);
+                    recvLength=0;
+                }
+             }
+             else
+             {
+                OTA_LOGE("module fs diag timeout file=UFS:%s found=%u size=%u\r\n",
+                         firm_name_buffer,
+                         ota_diag_qflst_found,
+                         (unsigned int)ota_diag_qflst_size);
+                ota_connect_state=CONNECT_OTA_AT_QHTTPREADFILE_STROE_FINISH;
+                ota_reset_after_diag();
+             }
+             break;
         case CONNECT_OTA_AT_QHTTPREADFILE_STROE_FINISH:
                 break;
      }        
@@ -351,17 +766,17 @@ void upload_ota_progress_fsm_process(void)
            
               if(_4G_configModule_machine_finish() ==BOOL_TRUE)
               {
-                  if(server_big_pick_counter==0)
+                  if(last_server_big_pick)
+                  {
+                    upload_ota_progress_bar(DEVICE_ID ,90 );
+                  }
+                  else if(server_big_pick_counter==0)
                   {
                    upload_ota_progress_bar(DEVICE_ID ,30 ); 
                   }
                   else if(server_big_pick_counter==1)
                   {
                     upload_ota_progress_bar(DEVICE_ID ,50 );
-                  }
-                  else if(last_server_big_pick)
-                  {
-                    upload_ota_progress_bar(DEVICE_ID ,90 );
                   }        
                   wait_openota_timer =Timer_GetTickCount();//获取时间点，进度上报需要耗时100mS，
                   ota_progress_state=OTA_PROGRESS_AT_REPORT_CLOSE;               
@@ -423,6 +838,9 @@ boolean_en  mcu_copy_firmware_getdata(void)
 *************************************/
  void  mcu_copy_firmware_star(void)
      {
+         OTA_LOGI("move firmware to flash start src=UFS:%s dst=0x%08x\r\n",
+                  firm_name_buffer,
+                  (unsigned int)OTABAKROM_STARTADDR);
          MCU_OTA_state=MCU_OTA_STATE_RESETING;
          server_big_pick_counter=0;
          save_byete_counter=0;
@@ -560,7 +978,7 @@ void  mcu_copy_firmware_machine(void)
                //启动转移固件到MCU 
                  
                 sprintf(common_send_buff,"+QFLST: \"UFS:%s\"",firm_name_buffer );
-                printf("firm_name_buffer3=%s\n",common_send_buff);
+                OTA_LOGI("module fs file check file=UFS:%s\r\n", firm_name_buffer);
                 send_AT_Command_machine_star("AT+QFLST\r\n",strlen("AT+QFLST\r\n"),common_send_buff,20,1);     // 要提取文件大小     插入固件名字符串
            //   send_AT_Command_machine_star("AT+QFLST\r\n",strlen("AT+QFLST\r\n"),"+QFLST: \"UFS:cat1.bin\"",20,1);     // 要提取文件大小           //不要删除
              // send_AT_Command_machine_star("AT+QFLST\r\n",strlen("AT+QFLST\r\n"),"+QFLST: \"UFS:cat120250401162230.bin\"",20,1);     // 要提取文件大小           //不要删除
@@ -601,7 +1019,7 @@ void  mcu_copy_firmware_machine(void)
                 static char common_send_buff_2[64]; 
                 sprintf(common_send_buff,"AT+QFDWL=\"%s\"\r\n",firm_name_buffer );
                 sprintf(common_send_buff_2,"AT+QFDWL=\"%s\"",firm_name_buffer );
-                printf("firm_name_buffer4=%s\n",common_send_buff);             
+                OTA_LOGI("module fs download to mcu start file=%s\r\n", firm_name_buffer);
                 send_AT_Command_machine_star(common_send_buff,strlen(common_send_buff),common_send_buff_2,255,1); //+QFDWL: 152937,0a31 "CONNECT\r\n"  //???
             //  send_AT_Command_machine_star("AT+QFDWL=\"cat1.bin\"\r\n",strlen("AT+QFDWL=\"cat1.bin\"\r\n"),"AT+QFDWL=\"cat1.bin\"",255,1); //+QFDWL: 152937,0a31 "CONNECT\r\n"  //不要删除
             //  send_AT_Command_machine_star("AT+QFDWL=\"cat120250401162230.bin\"\r\n",strlen("AT+QFDWL=\"cat120250401162230.bin\"\r\n"),"AT+QFDWL=\"cat120250401162230.bin\"",255,1); //+QFDWL: 152937,0a31 "CONNECT\r\n"  //不要删除
@@ -616,8 +1034,9 @@ void  mcu_copy_firmware_machine(void)
                     memset(stringBuf,0x00,recvLength);//不清空会多耗点时间进出缓冲 
                     recvLength=0;//
                     printf("----MCU_OTA_state=%d,=%d\n",MCU_OTA_state,MCU_OTA_state==MCU_OTA_STATE_QFDWL_GET_FIRMWARE);
+                    OTA_LOGI("module fs transfer stream ready file=%s\r\n", firm_name_buffer);
                     MCU_OTA_state=MCU_OTA_STATE_QFDWL_GET_FIRMWARE;
-                    data_state=DATA_STATE_IDLE;//打开序列检索 
+                    data_state=DATA_STATE_IDLE;//打开序列检索
                }
                break;
                
@@ -759,33 +1178,24 @@ void  mcu_copy_firmware_machine(void)
                                            }
                                             //提取长度和校验值  
                                             tihs_time_SERVER_PICK_SIZE=leng_temp;//本次分固件大小
-                                            if(leng_temp<SERVER_PICK_SIZE)//零头帧000000000
+                                            if(leng_temp>0)
                                             {
-                                                last_server_big_pick=1; // 最后一帧标志
+                                                last_server_big_pick=1;
                                                 last_total_size=leng_temp;
-                                                firmware_total_size+=leng_temp;
-                                                SERVER_CHECSUM^=checsum_temp;
+                                                firmware_total_size=leng_temp;
+                                                SERVER_CHECSUM=checsum_temp;
+                                                OTA_LOGI("module fs transfer info size=%u xor=0x%04x\r\n",
+                                                         (unsigned int)firmware_total_size,
+                                                         SERVER_CHECSUM);
                                                  printf("total_temp=0x%08x\n",SERVER_CHECSUM); 
                                                 if( get_checksum_status_XOR( SERVER_CHECSUM, firmware_total_size)  )
                                                 { 
                                                     printf("OTA_OK___2\n");            
                                                 }
                                             }  
-                                            else if(leng_temp==SERVER_PICK_SIZE)//整帧
-                                            {
-                                               firmware_total_size+=SERVER_PICK_SIZE;
-                                               SERVER_CHECSUM^=checsum_temp; 
-                                              
-                                                printf("total_temp2=0x%08x\n",SERVER_CHECSUM); 
-                                               if( get_checksum_status_XOR( SERVER_CHECSUM, firmware_total_size)  )
-                                               { 
-                                                    printf("OTA_OK___1\n");
-                                                   
-                                               }
-                                            }
                                             else
                                             {
-                                             //大于SERVER_PICK_SIZE错误如何跳转？----------------//重新下载？---------------
+                                             OTA_LOGE("download failed: invalid module fs transfer size=%u\r\n", (unsigned int)leng_temp);
                                                 
                                             }
                                              leng_temp=0;
@@ -804,7 +1214,7 @@ void  mcu_copy_firmware_machine(void)
                case MCU_OTA_AT_QFLST:
 
                   sprintf(common_send_buff,"AT+QFOPEN=\"%s\",2\r\n",firm_name_buffer );
-                  printf("firm_name_buffer5=\"%s\"\n",common_send_buff);
+                  OTA_LOGI("open module fs file file=%s\r\n", firm_name_buffer);
                   send_AT_Command_machine_star(common_send_buff,strlen(common_send_buff),"+QFOPEN:",20,1);   //获取文件指针+QFOPEN: 1
              // send_AT_Command_machine_star("AT+QFOPEN=\"cat1.bin\",2\r\n",strlen("AT+QFOPEN=\"cat1.bin\",2\r\n"),"+QFOPEN:",20,1);   //获取文件指针+QFOPEN: 1
             //   send_AT_Command_machine_star("AT+QFOPEN=\"cat120250401162230.bin\",2\r\n",strlen("AT+QFOPEN=\"cat120250401162230.bin\",2\r\n"),"+QFOPEN:",20,1);   //获取文件指针+QFOPEN: 1
@@ -867,16 +1277,16 @@ void  mcu_copy_firmware_machine(void)
                        }
              
                  if (Timer_PassedDelay(wait_data_timer, 400))    //等,400MS 数据接收完 ,太少接收不完整或错误
-                 {    
+                 {
                      MCU_OTA_state=MCU_OTA_MCU_GETDATA; 
                      have_get_pack_length=0;
-                 }  
                  if (Timer_PassedDelay(wait_data_timer, 300)) 
                  {      //无数据超时              *************待处理死循环*********
                    //  MCU_OTA_state=MCU_OTA_AT_QFREAD_LOOP; 
                  }
-             }  
-             break; 
+             }
+             }
+             break;
         case MCU_OTA_MCU_GETDATA:        //由接收处理切换
              if(OTA_DATA_IS_READY)       //收不到重发待做
              {
@@ -892,6 +1302,7 @@ void  mcu_copy_firmware_machine(void)
              }
              else if (Timer_PassedDelay(wait_data_timer, 5000))
              {
+                  OTA_LOGE("download failed: no firmware data from module fs file=%s\r\n", firm_name_buffer);
                   printf("MCU_OTA_MCU_GETDATA timeout, no firmware data received\n");
                   sys_data.sn = 3;
                   sys_data_store();
@@ -932,6 +1343,7 @@ void  mcu_copy_firmware_machine(void)
             {
                  if( last_server_big_pick)//服务器固件最后一帧?什么时候清零
                  {
+                      OTA_LOGI("move firmware to flash complete bytes=%u\r\n", (unsigned int)save_byete_counter);
                       server_big_pick_counter=0;
                       save_byete_counter=0;
                       pfile=0;//小片指针位置归零
@@ -948,11 +1360,15 @@ void  mcu_copy_firmware_machine(void)
              break;      
              
           case MCU_OTA_AT_QFCLOSE :     //AT+QFCLOSE=1
+              OTA_LOGI("verify firmware start size=%u xor=0x%04x\r\n",
+                       (unsigned int)firmware_total_size,
+                       SERVER_CHECSUM);
               if( get_checksum_status_XOR( SERVER_CHECSUM, firmware_total_size)  )//传输层校验                                      ---------- 传输错误没有发现-------------
               { 
                      printf("---------------OTA_XOR_CHECK_OK\n");
                      if( get_checksum_status())  //  应用层固件完整性状态读取
                      {
+                           OTA_LOGI("verify firmware complete result=ok size=%u\r\n", (unsigned int)firmware_total_size);
                            printf("---------------OTA_SUM_CHECK_OK\n");
                            sys_data.sn=0xaa5555aa;//标记有新固件
                            sys_data_store();
@@ -960,6 +1376,7 @@ void  mcu_copy_firmware_machine(void)
                      }
                      else
                      {
+                        OTA_LOGE("verify firmware failed: app checksum size=%u\r\n", (unsigned int)firmware_total_size);
                         printf("---------------OTA_SUM_CHECK_ERROR\n");
                         sys_data.sn=3;//标记固件下载错误
                         sys_data_store();
@@ -970,6 +1387,9 @@ void  mcu_copy_firmware_machine(void)
               }
               else //校验错误
               {
+                    OTA_LOGE("verify firmware failed: transport xor expected=0x%04x size=%u\r\n",
+                             SERVER_CHECSUM,
+                             (unsigned int)firmware_total_size);
                     printf("------------OTA_XOR_CHECK_ERR\n");
                     sys_data.sn=3;//标记固件下载错误
                     sys_data_store();
@@ -984,6 +1404,7 @@ void  mcu_copy_firmware_machine(void)
                break; 
               
           case   MCU_OTA_MCU_FINISH:
+                    OTA_LOGI("upgrade start: mark new firmware and jump to boot\r\n");
                     printf("---------OTA 完毕------\n");
                     printf("---------系统重启-------\n");
                     last_server_big_pick=0;//清零标志，防止跳转失败后影响下次OTA

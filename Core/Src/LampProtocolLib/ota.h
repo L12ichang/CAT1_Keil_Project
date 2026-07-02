@@ -1,8 +1,11 @@
 #ifndef OTA_H_
 #define OTA_H_
 #include "common.h"
-typedef enum 
-{ 
+
+#define OTA_LOCAL_FIRMWARE_NAME "cat1.bin"
+
+typedef enum
+{
     CONNECT_OTA_STATE_IDLE,
     CONNECT_OTA_RESETING,
     CONNECT_OTA_READY,
@@ -10,12 +13,15 @@ typedef enum
     CONNECT_OTA_AT_QMTT_CLOSE,
     CONNECT_OTA_AT_QHTTPCFG_contextid,
     CONNECT_OTA_AT_QHTTPCFG_responseheader,
+    CONNECT_OTA_AT_QHTTPCFG_requestheader,
     CONNECT_OTA_AT_QHTTPURL,
     CONNECT_OTA_AT_QFDEL,
     CONNECT_OTA_AT_QHTTPGET,
+    CONNECT_OTA_AT_QHTTPGET_HEADER,
     //下载固件到UFS
     CONNECT_OTA_AT_QHTTPREADFILE,                  //通过 UART/USB 读取 HTTP(S)服务器响应信息<file_name>[,<wait_time>]
     CONNECT_OTA_AT_QHTTPREADFILE_STROE_WAIT,
+    CONNECT_OTA_AT_QHTTPREADFILE_QFLST_DIAG,
     CONNECT_OTA_AT_QHTTPREADFILE_STROE_FINISH,     //+QHTTPREADFILE: 0 
 
 } CONNECT_OTA_state_en;

@@ -600,32 +600,6 @@ static void zk_ota_set_url(const char *url)
     zk_ota_url[sizeof(zk_ota_url) - 1] = '\0';
 }
 
-static boolean_en zk_ota_extract_filename(const char *url, char *file_name, int file_name_size)
-{
-    const char *last_slash;
-    const char *query;
-    int len;
-
-    if (url == NULL || file_name == NULL || file_name_size <= 1)
-    {
-        return BOOL_FALSE;
-    }
-    last_slash = strrchr(url, '/');
-    if (last_slash == NULL || last_slash[1] == '\0')
-    {
-        return BOOL_FALSE;
-    }
-    query = strchr(last_slash + 1, '?');
-    len = (query != NULL) ? (int)(query - (last_slash + 1)) : (int)strlen(last_slash + 1);
-    if (len <= 0 || len >= file_name_size)
-    {
-        return BOOL_FALSE;
-    }
-    memcpy(file_name, last_slash + 1, (size_t)len);
-    file_name[len] = '\0';
-    return BOOL_TRUE;
-}
-
 static boolean_en zk_ota_is_busy(void)
 {
     if (OTA_ENABLE_state != 0U)
@@ -2420,7 +2394,6 @@ boolean_en zk_handle_ota_message(cJSON *root, const zk_message_header_t *header)
 {
     cJSON *dt;
     cJSON *url;
-    char file_name[64];
 
     if (root == NULL || header == NULL)
     {
@@ -2435,35 +2408,40 @@ boolean_en zk_handle_ota_message(cJSON *root, const zk_message_header_t *header)
     url = (dt != NULL) ? cJSON_GetObjectItem(dt, "url") : NULL;
     if (url == NULL || !cJSON_IsString(url) || url->valuestring == NULL)
     {
+        OTA_LOGW("cmd rejected: missing url id=%s\r\n", header->id);
         zk_publish_simple_response(header, 5);
         return BOOL_TRUE;
     }
     if (strncmp(url->valuestring, "http://", 7) != 0)
     {
+        OTA_LOGW("cmd rejected: unsupported url id=%s\r\n", header->id);
         zk_publish_simple_response(header, 91);
         return BOOL_TRUE;
     }
     if (strlen(url->valuestring) >= sizeof(zk_ota_url))
     {
+        OTA_LOGW("cmd rejected: url too long id=%s len=%u\r\n", header->id, (unsigned int)strlen(url->valuestring));
+        zk_publish_simple_response(header, 91);
+        return BOOL_TRUE;
+    }
+    if (strchr(url->valuestring, '\r') != NULL || strchr(url->valuestring, '\n') != NULL)
+    {
+        OTA_LOGW("cmd rejected: url has newline id=%s\r\n", header->id);
         zk_publish_simple_response(header, 91);
         return BOOL_TRUE;
     }
     if (zk_ota_is_busy() == BOOL_TRUE)
     {
+        OTA_LOGW("cmd rejected: ota busy id=%s\r\n", header->id);
         zk_publish_simple_response(header, 12);
         return BOOL_TRUE;
     }
-    if (zk_ota_extract_filename(url->valuestring, file_name, sizeof(file_name)) == BOOL_FALSE)
-    {
-        zk_publish_simple_response(header, 91);
-        return BOOL_TRUE;
-    }
-
     strncpy(zk_last_ota_id, header->id, sizeof(zk_last_ota_id) - 1);
     zk_last_ota_id[sizeof(zk_last_ota_id) - 1] = '\0';
     zk_ota_set_url(url->valuestring);
     memset(firm_name_buffer, 0, 256);
-    strncpy(firm_name_buffer, file_name, 255);
+    strncpy(firm_name_buffer, OTA_LOCAL_FIRMWARE_NAME, 255);
+    OTA_LOGI("cmd received id=%s url=%s local=%s\r\n", zk_last_ota_id, url->valuestring, firm_name_buffer);
     set_OTA_ENABLE();
     zk_publish_simple_response(header, 0);
     return BOOL_TRUE;
