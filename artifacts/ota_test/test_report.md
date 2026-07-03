@@ -7,7 +7,7 @@ Generated: 2026-07-03T22:12:12+08:00
 - Final result: PASS for the normal real-device OTA closed loop.
 - Branch: `fix/ota-rawtcp-jlink-e2e`
 - Base commit before final validation: `44fe628`
-- Final OTA fix commit: `912f5fa0ebbbec35164c252d9876241067c166a7`
+- Final OTA fix commit: `c88b3bb9db3d7466e26c7ac36b0a616f1d063703`
 - MQTT IMEI: `864512081541939`
 - Server OTA URL: `http://47.120.15.220:3915/system/mediaInfo/download/1522561582713004032`
 
