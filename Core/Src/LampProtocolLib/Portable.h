@@ -15,6 +15,7 @@ uint32 Timer_GetTickCount(void);
 uint32 Timer_PassedMs(uint32 start, uint32 end);
 uint8 Timer_PassedDelay(uint32 startTime, uint32 msDelay);
 void updateTimeTick(uint32 ms);
+uint8 usartSendDataWithResult(uint8 *pBuf, uint16 length);
 void usartSendData(uint8 *pBuf, uint16 length);
 void saveUsartByte(uint8 byte);
 void portableInit(void);

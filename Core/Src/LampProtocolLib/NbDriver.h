@@ -95,6 +95,9 @@ void  send_AT_Command_machine_idle(void);
 void  send_AT_Command_machine_star(char *command,uint8 length, char *response, unsigned char waitCount, uint8 throwAwayTail) ;
 boolean_en nb_get_rsrp_dbm10(s32 *rsrp_dbm10);
 boolean_en OTA_ENABLE_IS_SET(void);
+void nb_modem_lock_for_ota(void);
+void nb_modem_unlock_for_ota(void);
+boolean_en nb_modem_locked_by_ota(void);
 void set_OTA_ENABLE(void);
 void nbSendTcpData_sm(void);
  uint16 readLine(uint8 *buf, uint16 *len, uint8 syncMode) ;
@@ -112,6 +115,7 @@ uint8 g4Send_MQTT_Data(char *topic,char *pData);
 */
 u8 configNbModule(void);
 uint8 config4GModule(void) ;
+uint8 nb_modem_send_command_ota(void *command,uint16 length);
 void sendCommand(void *command,uint16 length) ;//调试4G
 /**
 *@brief   设置连接的服务器信息

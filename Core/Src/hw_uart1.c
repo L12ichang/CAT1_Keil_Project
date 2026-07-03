@@ -46,6 +46,31 @@ void hw_uart1_timer(void)
     }
 }
 
+u8 hw_uart1_send_with_result(u8* buf, u32 length)
+{
+      HAL_StatusTypeDef status;
+
+      if (buf == 0 || length == 0U || length > 0xFFFFU)
+      {
+          return (u8)HAL_ERROR;
+      }
+      if (huart1.gState != HAL_UART_STATE_READY)
+      {
+          return (u8)HAL_BUSY;
+      }
+      _tx_length = (u16)length;
+      _pTx = buf;
+      _tx_index = 0;
+      status = HAL_UART_Transmit_IT(&huart1, (uint8_t*)_pTx , 1);
+      if (status != HAL_OK)
+      {
+          _tx_length = 0;
+          _pTx = 0;
+          _tx_index = 0;
+      }
+      return (u8)status;
+}
+
 void hw_uart1_send(u8* buf, u32 length)
 {
       _tx_length = length;

@@ -1,0 +1,71 @@
+#ifndef OTA_CONFIG_H_
+#define OTA_CONFIG_H_
+
+/* Production OTA path: raw TCP + HTTP GET + QIRD stream into OTA backup. */
+#ifndef OTA_USE_RAW_TCP_STREAM
+#define OTA_USE_RAW_TCP_STREAM              1U
+#endif
+
+#ifndef OTA_USE_QHTTPREADFILE_UFS
+#define OTA_USE_QHTTPREADFILE_UFS           0U
+#endif
+
+#ifndef OTA_DEBUG_DOWNLOAD_ONLY
+#define OTA_DEBUG_DOWNLOAD_ONLY             0U
+#endif
+
+#ifndef OTA_DISABLE_FAIL_RESET
+#define OTA_DISABLE_FAIL_RESET              0U
+#endif
+
+#ifndef OTA_DEBUG_CLEAR_ALL_UFS
+#define OTA_DEBUG_CLEAR_ALL_UFS             0U
+#endif
+
+#ifndef OTA_STREAM_TO_BACKUP_DEBUG
+#define OTA_STREAM_TO_BACKUP_DEBUG          0U
+#endif
+
+#ifndef OTA_STREAM_ALLOW_RAW_BIN_TEST
+#define OTA_STREAM_ALLOW_RAW_BIN_TEST       0U
+#endif
+
+#define OTA_EXPECTED_DEVICE_TYPE            0x0003U
+
+/* Legacy name kept to avoid renaming the whole state machine in one pass. */
+#define OTA_RAW_TCP_STREAM_DEBUG            OTA_USE_RAW_TCP_STREAM
+
+#define OTA_HTTP10_CLOSE_WORKAROUND         0U
+#define OTA_QHTTPGET_WAIT_SEC               120U
+#define OTA_QHTTPGET_INPUT_TIMEOUT_SEC      30U
+#define OTA_QHTTPGET_TIMEOUT_MS             ((OTA_QHTTPGET_WAIT_SEC + 30U) * 1000U)
+#define OTA_QHTTPREADFILE_WAIT_SEC          300U
+#define OTA_QHTTPREADFILE_TIMEOUT_MS        ((OTA_QHTTPREADFILE_WAIT_SEC + 30U) * 1000U)
+#define OTA_QHTTPREADFILE_DIAG_TIMEOUT_MS   10000U
+#define OTA_QHTTPREAD_WAIT_SEC              300U
+#define OTA_QHTTPREAD_TIMEOUT_MS            ((OTA_QHTTPREAD_WAIT_SEC + 30U) * 1000U)
+#define OTA_QHTTPSTOP_TIMEOUT_MS            10000U
+#define OTA_QFLDS_TIMEOUT_MS                5000U
+#define OTA_STREAM_WAIT_LOG_MS              10000U
+#define OTA_LOCAL_UFS_PATH_PREFIX           "UFS:"
+#define OTA_QHTTPREADFILE_ERR_MEMORY_ALLOC  729
+#define OTA_RAW_LOG_LINE_MAX                512U
+#define OTA_RAW_HEX_LOG_ENABLE              0U
+#define OTA_RAW_TCP_CONTEXT_ID              1U
+#define OTA_RAW_TCP_CONNECT_ID              0U
+#define OTA_RAW_TCP_QIRD_LEN                512U
+#define OTA_RAW_TCP_OPEN_TIMEOUT_MS         150000U
+#define OTA_RAW_TCP_SEND_TIMEOUT_MS         20000U
+#define OTA_RAW_TCP_IDLE_TIMEOUT_MS         60000U
+#define OTA_RAW_TCP_TOTAL_TIMEOUT_MS        330000U
+#define OTA_RAW_QISEND_QUERY_TIMEOUT_MS     3000U
+#define OTA_RAW_QISEND_WITH_LEN             0U
+#define OTA_RAW_QISEND_PROMPT_TIMEOUT_MS    5000U
+#define OTA_RAW_QISEND_PROMPT_TAIL_LEN      32U
+#define OTA_RAW_QISTATE_TIMEOUT_MS          2000U
+#define OTA_RAW_HTTP_LINE_MAX               128U
+#define OTA_STREAM_HEADER_MIN_LEN           (ADDR_TYPE_OFFSET + 2U)
+#define OTA_STREAM_BACKUP_CAPACITY          ((u32)(OTABAKROM_ENDADDR - OTABAKROM_STARTADDR + 1U))
+#define OTA_STREAM_APP_MAX_SIZE             ((u32)(APROM_SAFE_ENDADDR - APROM_STARTADDR))
+
+#endif

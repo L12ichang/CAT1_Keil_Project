@@ -77,7 +77,7 @@ void resetNbModule_machine(void)
 
 }
 
-#define UART_RECV_QUEUE_SIZE 2048
+#define UART_RECV_QUEUE_SIZE 4096
  uint8 queueBuf[UART_RECV_QUEUE_SIZE + 1];
 QUEUE  usartRecvQueue;
  uint8 uartSendingFlag = 0;
@@ -85,8 +85,13 @@ uint8 CREG_common[11]="AT+CREG?\r\n";
 volatile uint32 usart_queue_drop_count = 0;
 
 void usartSendData(uint8 *pBuf, uint16 length)
-{  
+{
    UART_SEND(pBuf, length);
+}
+
+uint8 usartSendDataWithResult(uint8 *pBuf, uint16 length)
+{
+   return hw_uart1_send_with_result(pBuf, length);
 }
 
 void saveUsartByte(uint8 byte)

@@ -9,6 +9,7 @@ extern void hw_uart1_init(void);
 
 extern void hw_uart1_process(void);
 
+extern u8 hw_uart1_send_with_result(u8* buf, u32 length);
 extern void hw_uart1_send(u8* buf, u32 length);
 extern void hw_uart1_timer(void);
 

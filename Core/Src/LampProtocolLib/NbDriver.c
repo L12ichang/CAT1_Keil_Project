@@ -20,6 +20,7 @@ extern QUEUE  usartRecvQueue;//�������ݽ��ն���
 #define CONNECTING_MAX_WAIT_TIME 20
 #define CONNECTED_MAX_WAIT_TIME 5
 #define MAX_RECONNECT_COUNT 6*5 //6*20*5s=10min
+#define NB_MODEM_OTA_TX_BUFFER_SIZE 320U
 #define NB_DEBUG_PRINT
 uint8 stringBuf[RECV_BUF_LENGTH];//���ݽ��ջ���
 static  uint16 recvLength = 0;//���ݽ��ճ���
@@ -32,6 +33,8 @@ static  NB_STATE state = NB_STATE_POWER_DOWN;//nbģ��״̬
 //static  uint16 serverPort = 0;//�������˿ں�
 static  uint32 pub_timer=0;//����delay
  u8   OTA_ENABLE=0;
+static u8 nb_modem_ota_lock=0;
+static u8 nb_modem_ota_tx_buffer[NB_MODEM_OTA_TX_BUFFER_SIZE];
  u8 IMEI[18]={0};
  u8 IMEI10[13]={0};
 uint8 simCardICCID[22]={0};
@@ -210,11 +213,51 @@ static void nb_trace_state_change(void)
 *@param	  length��AT�����
 
 */
-void sendCommand(void *command,uint16 length)
+static uint8 nb_modem_send_command_raw_result(void *command,uint16 length)
+{
+    flushQueue(&usartRecvQueue);
+   // printf("usartSendData=%s\n",command);
+    return usartSendDataWithResult((uint8 *)command, length);
+}
+
+static void nb_modem_send_command_raw(void *command,uint16 length)
 {
     flushQueue(&usartRecvQueue);
    // printf("usartSendData=%s\n",command);
     usartSendData((uint8 *)command, length);
+}
+
+uint8 nb_modem_send_command_ota(void *command,uint16 length)
+{
+    uint8 uart_ret;
+
+    if (command == NULL || length == 0U)
+    {
+        return (uint8)HAL_ERROR;
+    }
+    if (length > (uint16)sizeof(nb_modem_ota_tx_buffer))
+    {
+        OTA_LOGE("modem ota send too long len=%u cap=%u\r\n",
+                 (unsigned int)length,
+                 (unsigned int)sizeof(nb_modem_ota_tx_buffer));
+        return (uint8)HAL_ERROR;
+    }
+    memcpy(nb_modem_ota_tx_buffer, command, length);
+    uart_ret = nb_modem_send_command_raw_result(nb_modem_ota_tx_buffer, length);
+    OTA_LOGD("modem ota uart write ret=%u len=%u\r\n",
+             (unsigned int)uart_ret,
+             (unsigned int)length);
+    return uart_ret;
+}
+
+void sendCommand(void *command,uint16 length)
+{
+    if (nb_modem_ota_lock)
+    {
+        OTA_LOGW("modem ota lock blocked direct send\r\n");
+        return;
+    }
+    nb_modem_send_command_raw(command, length);
 }
     
 static SEND_COMMAND_state_en sendcommad_state= SEND_COMMAND_STATE_IDLE;
@@ -229,6 +272,30 @@ static u32 atwaitCount;
 
 static void clear_imei_data(void);
 static void clear_iccid_data(void);
+
+static boolean_en nb_at_command_allowed_during_ota(const char *command)
+{
+    if (command == 0)
+    {
+        return BOOL_FALSE;
+    }
+    if (strstr(command, "AT+QMTCLOSE") != 0 ||
+        strstr(command, "AT+QICLOSE") != 0 ||
+        strstr(command, "AT+QHTTPCFG") != 0 ||
+        strstr(command, "AT+QHTTP") != 0 ||
+        strstr(command, "AT+QFLST") != 0 ||
+        strstr(command, "AT+QFLDS") != 0 ||
+        strstr(command, "AT+QFDEL") != 0 ||
+        strstr(command, "AT+QFDWL") != 0 ||
+        strstr(command, "AT+QFOPEN") != 0 ||
+        strstr(command, "AT+QFSEEK") != 0 ||
+        strstr(command, "AT+QFREAD") != 0 ||
+        strstr(command, "AT+QFCLOSE") != 0)
+    {
+        return BOOL_TRUE;
+    }
+    return BOOL_FALSE;
+}
 
 static boolean_en nb_at_command_is_qccid(void)
 {
@@ -272,6 +339,12 @@ static void nb_set_default_iccid(void)
 void  send_AT_Command_machine_star(char *command,uint8 length, char *response,unsigned char waitCount, uint8 throwAwayTail)
 {
     (void)throwAwayTail;
+    if (nb_modem_ota_lock &&
+        nb_at_command_allowed_during_ota(command) == BOOL_FALSE)
+    {
+        OTA_LOGW("modem ota lock blocked at command\r\n");
+        return;
+    }
     atcommand=command;
     atlength =length;
     atresponse=  response;
@@ -577,6 +650,12 @@ static void send_AT_Command_machine_wait_or_retry(void)
 */
  void send_AT_Command_machine(void)
 {
+    if (nb_modem_ota_lock &&
+        nb_at_command_allowed_during_ota(atcommand) == BOOL_FALSE)
+    {
+        sendcommad_state= SEND_COMMAND_STATE_RXING_COMPLETE;
+        return;
+    }
     switch (sendcommad_state)
     {
         case  SEND_COMMAND_STATE_IDLE :
@@ -619,7 +698,14 @@ static void send_AT_Command_machine_wait_or_retry(void)
                     {
                         printf("[ICCID] attempt=%u send AT+QCCID\n", (unsigned int)resend_counter);
                     }
-                    sendCommand((uint8*)atcommand, atlength) ;
+                    if (nb_modem_ota_lock)
+                    {
+                        nb_modem_send_command_ota((uint8*)atcommand, atlength);
+                    }
+                    else
+                    {
+                        sendCommand((uint8*)atcommand, atlength);
+                    }
                     sendcommad_state= SEND_COMMAND_STATE_RXING;
                     wait_timer=Timer_GetTickCount();
                     read_counter=0;//�ض�����
@@ -708,8 +794,12 @@ boolean_en  _4G_configModule_machine_finish(void)
     }  
 }
 
-void _4G_configModule_machine(void) 
-{  
+void _4G_configModule_machine(void)
+{
+    if (nb_modem_ota_lock)
+    {
+        return;
+    }
     nb_trace_state_change();
     switch(connect_state)
     {
@@ -1028,6 +1118,10 @@ uint8 nbSendTcpData(uint8 *pData, uint16 length)
     const char *topic;
     uint16 msg_id;
 
+    if (nb_modem_ota_lock)
+    {
+        return NB_ERROR_SEND_FAIL;
+    }
     if (pData == 0 || length == 0 || length >= sizeof(pubDataBuf))
     {
         return NB_ERROR_SEND_FAIL;
@@ -1061,6 +1155,10 @@ uint8 g4Send_MQTT_Data(char *topic,char *pData)
     uint16 msg_id;
     uint16 length;
 
+    if (nb_modem_ota_lock)
+    {
+        return NB_ERROR_SEND_FAIL;
+    }
     if (pData == 0)
     {
         return NB_ERROR_SEND_FAIL;
@@ -1126,8 +1224,47 @@ void pubsend_state_set_idle(void)
     pubsend_state=PUBSEDN_STATE_IDLE;
 }
 
+void nb_modem_lock_for_ota(void)
+{
+    if (nb_modem_ota_lock == 0U)
+    {
+        OTA_LOGI("modem ota lock on\r\n");
+    }
+    nb_modem_ota_lock = 1U;
+    if (nb_at_command_allowed_during_ota(atcommand) == BOOL_FALSE)
+    {
+        atcommand = 0;
+        atresponse = 0;
+        atlength = 0;
+        atwaitCount = 0;
+        read_counter = 0;
+        resend_counter = 0;
+        sendcommad_state= SEND_COMMAND_STATE_RXING_COMPLETE;
+    }
+    pub_en_flag = 0U;
+    pubsend_state = PUBSEDN_STATE_IDLE;
+}
+
+void nb_modem_unlock_for_ota(void)
+{
+    if (nb_modem_ota_lock)
+    {
+        OTA_LOGI("modem ota lock off\r\n");
+    }
+    nb_modem_ota_lock = 0U;
+}
+
+boolean_en nb_modem_locked_by_ota(void)
+{
+    return nb_modem_ota_lock ? BOOL_TRUE : BOOL_FALSE;
+}
+
 void nbSendTcpData_sm(void)
 {
+    if (nb_modem_ota_lock)
+    {
+        return;
+    }
     switch (pubsend_state)
     {
         case PUBSEDN_STATE_IDLE:
@@ -1576,6 +1713,7 @@ u8   OTA_ENABLE_state=0;
 
 void set_OTA_ENABLE(void)
 {
+     nb_modem_lock_for_ota();
      OTA_ENABLE_state=1;//�͸������ϱ��Ǳ�֪ͨ��־
     
      _4G_OTA_machine_contextid();//����ģ������,��������·��
@@ -1583,6 +1721,7 @@ void set_OTA_ENABLE(void)
 }
 void changea_to_MQTT_modle(void)
 {
+    nb_modem_unlock_for_ota();
     
     OTA_ENABLE=0;//�ر�OTA���е�MQTT
     OTA_ENABLE_state=0;//�͸������ϱ��Ǳ�֪ͨ��־

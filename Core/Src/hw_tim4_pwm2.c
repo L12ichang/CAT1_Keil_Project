@@ -27,7 +27,7 @@ void hw_tim4_pwm2_set_off(void)
 
 void hw_tim4_pwm2_init(void)
 {
-    TIM_HandleTypeDef htim4;
+    TIM_HandleTypeDef htim4 = {0};
     TIM_MasterConfigTypeDef sMasterConfig = {0};
     TIM_OC_InitTypeDef sConfigOC = {0};
 
@@ -106,7 +106,7 @@ void hw_tim4_pwm2_set_off(void)
 
 void hw_tim4_pwm2_init(void)
 {
-    TIM_HandleTypeDef htim4;
+    TIM_HandleTypeDef htim4 = {0};
 
 
 
