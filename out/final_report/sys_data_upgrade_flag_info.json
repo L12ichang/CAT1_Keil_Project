@@ -1,0 +1,16 @@
+{
+  "main": {
+    "source": "out\\final_report\\data_main_full_20260704_122618.bin",
+    "output": "out\\final_report\\sys_data_main_upgrade_flag.bin",
+    "word0": "0xAA5555AA",
+    "checksum_be": "0x04E3",
+    "sha256": "b64894f1e835cee0462e8b09290d48cb22946aa8a87bc89befea9522f6cf1f7a"
+  },
+  "backup": {
+    "source": "out\\final_report\\data_bak_full_20260704_122618.bin",
+    "output": "out\\final_report\\sys_data_bak_upgrade_flag.bin",
+    "word0": "0xAA5555AA",
+    "checksum_be": "0x04E3",
+    "sha256": "b64894f1e835cee0462e8b09290d48cb22946aa8a87bc89befea9522f6cf1f7a"
+  }
+}

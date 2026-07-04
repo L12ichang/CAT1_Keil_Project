@@ -48,7 +48,9 @@ void hw_tim1_pwm2_set_PWM_OUT(u16 pwm)//pwm输出
           pwm_on = 0;
     }
     
+#if APP_PWM_DEBUG_ENABLE
     printf("pwm=%d\r\n",pwm);
+#endif
    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, pwm+PWM_OFFSET);  //负逻辑
       
 }

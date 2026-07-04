@@ -17,6 +17,12 @@ static zk_device_config_t zk_dev_cfg;
 #define ZK_PROPERTY_FLASH_VERSION 1U
 #define ZK_PROPERTY_FLASH_MAIN_ADDR (DATAROM_STARTADDR + FLASH_PAGE_SIZE)
 #define ZK_PROPERTY_FLASH_BACKUP_ADDR (BAKDATAROM_STARTADDR + FLASH_PAGE_SIZE)
+#define ZK_RUNTIME_FLASH_OFFSET 0x200UL
+
+#define ZK_STATIC_ASSERT_CONCAT_(a, b) a##b
+#define ZK_STATIC_ASSERT_CONCAT(a, b) ZK_STATIC_ASSERT_CONCAT_(a, b)
+#define ZK_STATIC_ASSERT(cond) typedef char ZK_STATIC_ASSERT_CONCAT(zk_static_assert_, __LINE__)[(cond) ? 1 : -1]
+
 typedef struct
 {
     u32 magic;
@@ -46,6 +52,8 @@ typedef struct
     s32 almEn[17];          /* 告警使能标志 */
     u32 checksum;
 } zk_property_flash_record_t;
+
+ZK_STATIC_ASSERT(sizeof(zk_property_flash_record_t) <= ZK_RUNTIME_FLASH_OFFSET);
 
 static u32 zk_property_flash_seq = 0;
 

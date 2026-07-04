@@ -75,8 +75,12 @@ typedef enum
 typedef enum 
 {
     PUBSEDN_STATE_IDLE,
-    PUBSEDN_STATE_SEND,
+    PUBSEDN_STATE_SEND_HEADER,
+    PUBSEDN_STATE_WAIT_PROMPT,
+    PUBSEDN_STATE_SEND_PAYLOAD,
+    PUBSEDN_STATE_WAIT_ACK,
     PUBSEDN_STATE_SENDFINISH,
+    PUBSEDN_STATE_FAIL,
 } PUBSEDN_STATE_EN;
 extern u8   OTA_ENABLE_state;
 extern PUBSEDN_STATE_EN pubsend_state ;
@@ -86,13 +90,15 @@ extern u8   OTA_ENABLE;
 boolean_en pubsend_state_finish(void);
 void pubsend_state_set_idle(void);
 boolean_en pubsend_state_idle(void);
+uint32 nb_mqtt_get_publish_fail_count(void);
+uint32 nb_mqtt_get_publish_timeout_count(void);
 void  _4G_configModule_machine_star(void) ;
 boolean_en  _4G_configModule_machine_finish(void) ;
 void _4G_configModule_machine(void) ;
 void send_AT_Command_machine(void);
 boolean_en  send_AT_Command_machine_finish(void);
 void  send_AT_Command_machine_idle(void);
-void  send_AT_Command_machine_star(char *command,uint8 length, char *response, unsigned char waitCount, uint8 throwAwayTail) ;
+void  send_AT_Command_machine_star(char *command,uint8 length, char *response, uint32 waitCount, uint8 throwAwayTail) ;
 boolean_en nb_get_rsrp_dbm10(s32 *rsrp_dbm10);
 boolean_en OTA_ENABLE_IS_SET(void);
 void nb_modem_lock_for_ota(void);

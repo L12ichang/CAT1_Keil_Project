@@ -240,7 +240,7 @@ int main(void)
 
   while (1)
   {
-    watchdog_feed_dog();
+    watchdog_loop_begin();
     if(softstar) //����������
     {
         softstar=0;
@@ -255,14 +255,14 @@ int main(void)
     uart_diam_process();
     adc_process();
     sys_temp_over_protect_process();
+    resetNbModule_machine();
+    APP_PROFILE_CALL(APP_PERF_4G_CONFIG, _4G_configModule_machine());
+    APP_PROFILE_CALL(APP_PERF_NB_SEND, nbSendTcpData_sm());
+    APP_PROFILE_CALL(APP_PERF_AT_COMMAND, send_AT_Command_machine());
     if(OTA_ENABLE_IS_SET()==BOOL_FALSE)
     {
         APP_PROFILE_CALL(APP_PERF_TCP_CLIENT, tcpClientProcess());
     }
-    resetNbModule_machine();
-    APP_PROFILE_CALL(APP_PERF_4G_CONFIG, _4G_configModule_machine());
-    APP_PROFILE_CALL(APP_PERF_AT_COMMAND, send_AT_Command_machine());
-    APP_PROFILE_CALL(APP_PERF_NB_SEND, nbSendTcpData_sm());
     APP_PROFILE_CALL(APP_PERF_BL0942, sys_bl0942_process());
     APP_PROFILE_CALL(APP_PERF_OTA, _4G_OTA_machine());
     APP_PROFILE_CALL(APP_PERF_COPY_FW, mcu_copy_firmware_machine());
@@ -297,6 +297,7 @@ int main(void)
 #endif
 
     APP_PROFILE_CALL(APP_PERF_JSON, json_process());
+    watchdog_loop_end();
   }
 }
 

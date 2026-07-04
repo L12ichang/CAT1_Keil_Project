@@ -25,7 +25,7 @@ static boolean_en volatile _flag_txing = BOOL_FALSE;
 
 char buffer[50] __attribute__ ((aligned(4)));;
 
-#define DMA_BUFFER_SIZE 1024
+#define DMA_BUFFER_SIZE 768
 char dma_buffer[DMA_BUFFER_SIZE];
 static volatile u8 _timer; 
 void hw_uart3_dma_tx(u8* buf, u16 length) 
@@ -55,20 +55,16 @@ void hw_uart3_timer(void)
 
 int dma_printf(const char* format, ...)
 {
-#if !APP_LOG_ENABLE
+#if (!APP_LOG_ENABLE) && (!APP_OTA_LOG_ENABLE)
     (void)format;
     return 0;
 #else
     int n;
     va_list args;
 
-    _timer = 10;
-    while(_flag_txing == BOOL_TRUE)
+    if(_flag_txing == BOOL_TRUE)
     {
-        if(_timer == 0)
-        {
-            break;
-        }
+        return 0;
     }
     va_start(args, format);
     n = vsnprintf(dma_buffer, DMA_BUFFER_SIZE - 1, format, args);

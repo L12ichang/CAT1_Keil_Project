@@ -92,6 +92,9 @@ u16  ac_powerq;    //无功功率
 u32  energy_this_time = 0;
 
 u32 total_power_this_time=0;
+u32 bl0942_checksum_error_count = 0;
+u32 bl0942_timeout_count = 0;
+u32 bl0942_uart_error_count = 0;
 
 sys_bl0942_state_en  sys_bl0942_state = SYS_BL0942_STATE_IDLE;
 sys_bl0942_init_en  sys_bl0942_init1 =  SYS_BL0942_INIT_IDLE;
@@ -116,6 +119,7 @@ static u32  energy_tmp = 0; //有功电能， 断电归0     单位 0.01WH
 u8  ac_pf;
 static u16 _timer=0;
 static u16 minute=0;
+static u32 bl0942_last_uart_error_count = 0;
 
    u8 bl0942data_ready;
 void sys_bl0942_timer(void)
@@ -141,6 +145,20 @@ void sys_bl0942_timer(void)
           sys_data_store() ;
         }
         
+    }
+}
+
+static void sys_bl0942_check_uart_error(void)
+{
+    u32 uart_error_count;
+
+    uart_error_count = hw_uart2_get_error_count();
+    if (uart_error_count != bl0942_last_uart_error_count)
+    {
+        bl0942_uart_error_count += uart_error_count - bl0942_last_uart_error_count;
+        bl0942_last_uart_error_count = uart_error_count;
+        sys_bl0942_state = SYS_BL0942_STATE_READ;
+        _timer_for_read = 10;
     }
 }
 
@@ -404,6 +422,7 @@ void sys_bl0942_write_disable(void)
 void sys_bl0942_process(void)
 {
     u32 tmp;
+    sys_bl0942_check_uart_error();
     switch(sys_bl0942_state)
     {
         case SYS_BL0942_STATE_IDLE:
@@ -458,6 +477,7 @@ void sys_bl0942_process(void)
                     }
                     else if(_timer_for_read == 0)
                     {
+                        bl0942_timeout_count++;
                         sys_bl0942_init1 =  SYS_BL0942_INIT_IDLE;
                     }
                 }
@@ -708,12 +728,14 @@ void sys_bl0942_process(void)
                 }
                 else
                 {
+                    bl0942_checksum_error_count++;
                     printf("checksum error1\n");
                 }                
                 sys_bl0942_state = SYS_BL0942_STATE_READ;
             }
             else if(_timer_for_read == 0)
             {
+                bl0942_timeout_count++;
                 sys_bl0942_state = SYS_BL0942_STATE_READ;
             }
         }

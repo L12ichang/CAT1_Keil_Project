@@ -1,0 +1,11 @@
+{"event":"probe_start","client_id":"codex-patrol-1783138091","listen_topics":["MS/864512081541939/dev2plt","MS/864512081541939/dev2pcp","MS/864512081541939/offline"],"ts":"2026-07-04 12:08:11"}
+{"event":"connect","rc":0,"client_id":"codex-patrol-1783138091","username":"864512081541939","ts":"2026-07-04 12:08:11"}
+{"event":"subscribe_call","topic":"MS/864512081541939/dev2plt","rc":0,"mid":1,"ts":"2026-07-04 12:08:11"}
+{"event":"subscribe_call","topic":"MS/864512081541939/dev2pcp","rc":0,"mid":2,"ts":"2026-07-04 12:08:11"}
+{"event":"subscribe_call","topic":"MS/864512081541939/offline","rc":0,"mid":3,"ts":"2026-07-04 12:08:11"}
+{"event":"suback","mid":1,"granted_qos":[1],"ts":"2026-07-04 12:08:11"}
+{"event":"suback","mid":2,"granted_qos":[1],"ts":"2026-07-04 12:08:11"}
+{"event":"suback","mid":3,"granted_qos":[1],"ts":"2026-07-04 12:08:11"}
+{"event":"published_patrol","topic":"MS/864512081541939/plt2dev","mid":4,"rc":0,"payload":{"SN":"864512081541939","TM":"2026-07-04 12:08:11","SV":"ctrl","ID":"900001","CT":"W","DT":{"DO":"patrol"}},"ts":"2026-07-04 12:08:11"}
+{"event":"publish_ack","mid":4,"reason_code":"Success","ts":"2026-07-04 12:08:11"}
+{"event":"probe_finish","state":{"connected":true,"subacks":3,"published":true,"publish_mid":4,"publish_rc":0,"messages":0},"log_path":"out\\final_report\\mqtt_patrol_probe_20260704_120811.jsonl","ts":"2026-07-04 12:10:42"}

@@ -1,0 +1,13 @@
+{"event":"probe_start","client_id":"codex-utc-1783140598","ts":"2026-07-04 12:49:58"}
+{"event":"connect","rc":0,"client_id":"codex-utc-1783140598","ts":"2026-07-04 12:49:58"}
+{"event":"subscribe_call","topic":"MS/864512081541939/dev2plt","rc":0,"mid":1,"ts":"2026-07-04 12:49:58"}
+{"event":"subscribe_call","topic":"MS/864512081541939/dev2pcp","rc":0,"mid":2,"ts":"2026-07-04 12:49:58"}
+{"event":"subscribe_call","topic":"MS/864512081541939/offline","rc":0,"mid":3,"ts":"2026-07-04 12:49:58"}
+{"event":"suback","mid":1,"ts":"2026-07-04 12:49:58"}
+{"event":"suback","mid":2,"ts":"2026-07-04 12:49:58"}
+{"event":"suback","mid":3,"ts":"2026-07-04 12:49:58"}
+{"event":"published_patrol_utc","topic":"MS/864512081541939/plt2dev","mid":4,"rc":0,"payload":{"SN":"864512081541939","TM":"2026-07-04 04:49:58","SV":"ctrl","ID":"900002","CT":"W","DT":{"DO":"patrol"}},"ts":"2026-07-04 12:49:58"}
+{"event":"publish_ack","mid":4,"reason_code":"Success","ts":"2026-07-04 12:49:58"}
+{"event":"message","topic":"MS/864512081541939/dev2plt","payload":"{\"SN\":\"864512081541939\",\"TM\":\"2026-07-04 12:49:58\",\"SV\":\"ctrl\",\"ID\":\"900002\",\"CT\":\"W\",\"ER\":0}","json":{"SN":"864512081541939","TM":"2026-07-04 12:49:58","SV":"ctrl","ID":"900002","CT":"W","ER":0},"ts":"2026-07-04 12:50:00"}
+{"event":"message","topic":"MS/864512081541939/dev2plt","payload":"{\"SN\":\"864512081541939\",\"TM\":\"2026-07-04 12:49:58\",\"SV\":\"rept\",\"ID\":\"000011\",\"CT\":\"C\",\"DT\":{\"RunTm\":{\"tTime\":366,\"rTime\":6},\"LightTm\":{\"tLtTime\":[366],\"rLtTime\":[6]},\"RunSts\":{\"sts\":[31],\"bri\":[100]},\"EleInfo\":{\"e\":[16],\"c\":[0],\"v\":[0],\"f\":[0],\"p\":[0],\"rEc\":[0],\"tEc\":[0],\"oc\":[7],\"ov\":[1],\"op\":[0],\"pwr\":0,\"lc\":0},\"PerSts\":{\"temp\":293},\"Signal\":{\"rsrp\":-1250,\"reg\":1}}}","json":{"SN":"864512081541939","TM":"2026-07-04 12:49:58","SV":"rept","ID":"000011","CT":"C","DT":{"RunTm":{"tTime":366,"rTime":6},"LightTm":{"tLtTime":[366],"rLtTime":[6]},"RunSts":{"sts":[31],"bri":[100]},"EleInfo":{"e":[16],"c":[0],"v":[0],"f":[0],"p":[0],"rEc":[0],"tEc":[0],"oc":[7],"ov":[1],"op":[0],"pwr":0,"lc":0},"PerSts":{"temp":293},"Signal":{"rsrp":-1250,"reg":1}}},"ts":"2026-07-04 12:50:01"}
+{"event":"probe_finish","state":{"connected":true,"subacks":3,"published":true,"messages":2},"log_path":"out\\final_report\\mqtt_patrol_utc_time_restore_20260704_124958.jsonl","ts":"2026-07-04 12:50:02"}

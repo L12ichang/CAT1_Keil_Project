@@ -22,7 +22,7 @@
 #if APP_PWM_DEBUG_ENABLE
 #define PWM_DBG(...) printf(__VA_ARGS__)
 #else
-#define PWM_DBG(...) do {} while (0)
+#define PWM_DBG(...) do { if (0) { dma_printf(__VA_ARGS__); } } while (0)
 #endif
 
 //#define SET_OUTCUR     sys_data.setcur

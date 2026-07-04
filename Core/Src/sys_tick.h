@@ -28,6 +28,9 @@ extern u32 sys_tick_get_tick(void);
 *************************************/
 extern void sys_tick_process(void);
 
+extern u32 sys_tick_get_lag_count(void);
+extern u32 sys_tick_get_max_lag_ticks(void);
+
 
 
 /************************************

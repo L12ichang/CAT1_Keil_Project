@@ -1,0 +1,36 @@
+J-Link Flash And Verify Summary
+
+Tool:
+  C:\Program Files (x86)\SEGGER\JLink_V810\JLink.exe
+
+Target:
+  STM32F103RC, SWD, final speed 1000 kHz
+
+Boot:
+  boot.bin was verified earlier against on-chip Boot at 0x08000000.
+
+Final APP OTA seed:
+  Log: out/final_report/jlink_seed_final_ota_and_flag_uart_owner_gateway_20260704_124325.log
+  Programmed MDK-ARM-8008000/out/cat1.bin to 0x08024000.
+  verifybin at 0x08024000: successful.
+  Programmed sys_data upgrade flag page to 0x08005000.
+  verifybin at 0x08005000: successful.
+  Programmed backup sys_data upgrade flag page to 0x08006800.
+  verifybin at 0x08006800: successful.
+
+Final header readback:
+  Log: out/final_report/jlink_read_final_headers_20260704_125253.log
+  Compare: out/final_report/final_header_compare_20260704_125253.txt
+
+Readback values:
+  expected: sp=0x200089A8 reset=0x08008145 checksum=0x0083CCD1 size=0x000145A4 dtype=0x0003
+  app:      sp=0x200089A8 reset=0x08008145 checksum=0x0083CCD1 size=0x000145A4 dtype=0x0003
+  ota:      sp=0x200089A8 reset=0x08008145 checksum=0x0083CCD1 size=0x000145A4 dtype=0x0003
+  data:     word0=0x00000000 checksum_be=0x02E5
+
+Results:
+  APP head matches final binary first 1 KB: true.
+  OTA backup head matches final binary first 1 KB: true.
+  Boot upgrade flag cleared: true.
+  VTOR: 0x08008000.
+  Fault status CFSR: 0x00000000.

@@ -32,8 +32,13 @@
 #include "sys_Vo_Io.h"
 #include "offline_Time_controlled_dimming.h"
 #include "app_active.h"
+
+#define SYS_TICK_MAX_CATCH_UP 3U
+
 static u16 volatile _tick_h = 0; //让定时器揍够32位
 static u32 _tick = 0;
+static volatile u32 sys_tick_lag_count = 0;
+static volatile u32 sys_tick_max_lag_ticks = 0;
 
 extern void main_timer(void);
 extern void hw_tim4_cap1_timer(void);
@@ -129,6 +134,24 @@ void sys_timer_1ms(void)
     
 }
 
+void sys_tick_cycle_handle(void)
+{
+    adc_process_timer();
+    sys_temp_over_protect_timer();
+    sys_pwm_timer();
+    sys_serial_port_timer();
+    hw_tim4_cap1_timer();
+    charge_timer();
+    sys_bl0942_timer();
+    hw_gateway_timer();
+    sys_aip1302_timer();
+    sys_pow_drop_check_timer();
+    danger_current_timer();
+    voio_timer();
+    offline_timer();
+    app_activate_timer();
+}
+
 /************************************
 功能描述：主程序调用
 输入参数：无
@@ -137,29 +160,39 @@ void sys_timer_1ms(void)
 void sys_tick_process(void)
 {
     u32 system_tick;
+    u32 lag_ticks;
+    u8 catch_count;
+
     system_tick = sys_tick_get_tick();
-    if(system_tick - _tick >= MODULE_TIMER_INTERVAL)
+    catch_count = 0;
+
+    while ((system_tick - _tick) >= MODULE_TIMER_INTERVAL && catch_count < SYS_TICK_MAX_CATCH_UP)
     {
         _tick += MODULE_TIMER_INTERVAL;
-        // 10 ms执行一次                  
-       
-        adc_process_timer();
-        sys_temp_over_protect_timer();
-        sys_pwm_timer();
-        sys_serial_port_timer();
-        hw_tim4_cap1_timer();
-        charge_timer();    
-        sys_bl0942_timer();
-        hw_gateway_timer();
-
-        sys_aip1302_timer(); 
-        sys_pow_drop_check_timer(); 
-        danger_current_timer();
-        voio_timer();
-        offline_timer();
-        app_activate_timer();
+        sys_tick_cycle_handle();
+        catch_count++;
     }
-  
+
+    if ((system_tick - _tick) >= MODULE_TIMER_INTERVAL)
+    {
+        lag_ticks = system_tick - _tick;
+        if (lag_ticks > sys_tick_max_lag_ticks)
+        {
+            sys_tick_max_lag_ticks = lag_ticks;
+        }
+        sys_tick_lag_count++;
+        _tick = system_tick;
+    }
+}
+
+u32 sys_tick_get_lag_count(void)
+{
+    return sys_tick_lag_count;
+}
+
+u32 sys_tick_get_max_lag_ticks(void)
+{
+    return sys_tick_max_lag_ticks;
 }
 
 

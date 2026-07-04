@@ -3,6 +3,8 @@
 
 #include "mqtt_zk_protocol.h"
 
+void zk_device_config_init(void);
+void zk_device_config_refresh_iccid(void);
 const zk_device_config_t *zk_device_config_get(void);
 boolean_en zk_device_config_restore_defaults(void);
 

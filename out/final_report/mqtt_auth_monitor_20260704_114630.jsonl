@@ -1,0 +1,9 @@
+{"ts": "2026-07-04 11:46:30", "event": "monitor_start", "auth_user": "864512081541939"}
+{"ts": "2026-07-04 11:46:30", "event": "connect", "rc": 0, "topics": ["MS/864512081541939/dev2pcp", "MS/864512081541939/dev2plt", "MS/864512081541939/offline"]}
+{"ts": "2026-07-04 11:46:30", "event": "subscribe_call", "topic": "MS/864512081541939/dev2pcp", "rc": 0, "mid": 1}
+{"ts": "2026-07-04 11:46:30", "event": "subscribe_call", "topic": "MS/864512081541939/dev2plt", "rc": 0, "mid": 2}
+{"ts": "2026-07-04 11:46:30", "event": "subscribe_call", "topic": "MS/864512081541939/offline", "rc": 0, "mid": 3}
+{"ts": "2026-07-04 11:46:31", "event": "suback", "mid": 1, "granted_qos": [1]}
+{"ts": "2026-07-04 11:46:31", "event": "suback", "mid": 2, "granted_qos": [1]}
+{"ts": "2026-07-04 11:46:31", "event": "suback", "mid": 3, "granted_qos": [1]}
+{"ts": "2026-07-04 11:49:31", "event": "monitor_finish", "state": {"connected": true, "messages": 0, "online": false, "subs": [{"topic": "MS/864512081541939/dev2pcp", "rc": 0, "mid": 1}, {"topic": "MS/864512081541939/dev2plt", "rc": 0, "mid": 2}, {"topic": "MS/864512081541939/offline", "rc": 0, "mid": 3}]}, "log_path": "out\\final_report\\mqtt_auth_monitor_20260704_114630.jsonl"}

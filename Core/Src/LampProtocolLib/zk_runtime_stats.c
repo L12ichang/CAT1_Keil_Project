@@ -18,6 +18,10 @@
 
 #define ZK_FLASH_SAVE_ERROR           99
 
+#define ZK_STATIC_ASSERT_CONCAT_(a, b) a##b
+#define ZK_STATIC_ASSERT_CONCAT(a, b) ZK_STATIC_ASSERT_CONCAT_(a, b)
+#define ZK_STATIC_ASSERT(cond) typedef char ZK_STATIC_ASSERT_CONCAT(zk_static_assert_, __LINE__)[(cond) ? 1 : -1]
+
 /* ========== Flash 记录结构 ========== */
 typedef struct
 {
@@ -29,6 +33,8 @@ typedef struct
     u32 total_light_seconds;
     u32 checksum;
 } zk_runtime_flash_record_t;
+
+ZK_STATIC_ASSERT((ZK_RUNTIME_FLASH_OFFSET + sizeof(zk_runtime_flash_record_t)) <= FLASH_PAGE_SIZE);
 
 /* ========== 运行时统计状态 ========== */
 static uint32 zk_boot_run_seconds;              /* 本次上电累计运行秒数 */

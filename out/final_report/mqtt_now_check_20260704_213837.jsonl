@@ -1,0 +1,11 @@
+{"event":"monitor_start","client_id":"codex-now-1783172317","ts":"2026-07-04 21:38:37"}
+{"event":"connect","rc":0,"client_id":"codex-now-1783172317","topics":["MS/864512081541939/dev2plt","MS/864512081541939/dev2pcp","MS/864512081541939/offline"],"ts":"2026-07-04 21:38:37"}
+{"event":"subscribe_call","topic":"MS/864512081541939/dev2plt","rc":0,"mid":1,"ts":"2026-07-04 21:38:37"}
+{"event":"subscribe_call","topic":"MS/864512081541939/dev2pcp","rc":0,"mid":2,"ts":"2026-07-04 21:38:37"}
+{"event":"subscribe_call","topic":"MS/864512081541939/offline","rc":0,"mid":3,"ts":"2026-07-04 21:38:37"}
+{"event":"suback","mid":1,"reason_codes":["Granted QoS 1"],"ts":"2026-07-04 21:38:37"}
+{"event":"suback","mid":2,"reason_codes":["Granted QoS 1"],"ts":"2026-07-04 21:38:37"}
+{"event":"suback","mid":3,"reason_codes":["Granted QoS 1"],"ts":"2026-07-04 21:38:37"}
+{"event":"message","topic":"MS/864512081541939/dev2plt","qos":1,"payload":"{\"SN\":\"864512081541939\",\"TM\":\"2026-07-04 21:39:09\",\"SV\":\"rept\",\"ID\":\"000298\",\"CT\":\"H\"}","json":{"SN":"864512081541939","TM":"2026-07-04 21:39:09","SV":"rept","ID":"000298","CT":"H"},"ts":"2026-07-04 21:39:15"}
+{"event":"message","topic":"MS/864512081541939/dev2plt","qos":1,"payload":"{\"SN\":\"864512081541939\",\"TM\":\"2026-07-04 21:39:09\",\"SV\":\"rept\",\"ID\":\"000298\",\"CT\":\"H\"}","json":{"SN":"864512081541939","TM":"2026-07-04 21:39:09","SV":"rept","ID":"000298","CT":"H"},"ts":"2026-07-04 21:39:15"}
+{"event":"monitor_finish","state":{"connected":true,"messages":2},"log_path":"out\\final_report\\mqtt_now_check_20260704_213837.jsonl","ts":"2026-07-04 21:39:53"}

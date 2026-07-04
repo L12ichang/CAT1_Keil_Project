@@ -95,9 +95,14 @@ class ZkPublishBackpressureTests(unittest.TestCase):
         ota_error = block(source, "int zk_publish_ota_error", "void zk_notify_state_changed")
         notify_change = block(source, "void zk_notify_state_changed", "static void zk_cancel_control_restore")
 
-        self.assertIn("static zk_message_header_t zk_response_pending_header;", source)
+        self.assertIn("#define ZK_RESPONSE_QUEUE_SIZE 2U", source)
+        self.assertIn("static zk_response_pending_item_t zk_response_queue[ZK_RESPONSE_QUEUE_SIZE];", source)
+        self.assertIn("static u8 zk_response_queue_head = 0;", source)
+        self.assertIn("static u8 zk_response_queue_count = 0;", source)
+        self.assertIn("static u32 zk_response_queue_drop_count = 0;", source)
         self.assertIn("#define ZK_CHANGE_REPORT_SETTLE_MS 3000UL", source)
-        self.assertIn("memcpy(&zk_response_pending_header, request", response)
+        self.assertIn("memcpy(&zk_response_queue[write_index].header, request", response)
+        self.assertIn("zk_response_queue_count++;", response)
         self.assertIn("zk_response_pending = BOOL_TRUE;", response)
         self.assertIn("zk_ota_progress_value = progress;", ota_progress)
         self.assertIn("zk_ota_progress_pending = BOOL_TRUE;", ota_progress)
@@ -110,6 +115,9 @@ class ZkPublishBackpressureTests(unittest.TestCase):
             "zk_ota_error_pending = BOOL_FALSE;",
             "zk_change_report_pending = BOOL_FALSE;",
             "zk_login_time_sync_pending = BOOL_FALSE;",
+            "zk_response_queue_head = 0;",
+            "zk_response_queue_count = 0;",
+            "zk_response_queue_drop_count = 0;",
         ):
             self.assertIn(flag, reset)
         self.assertIn("zk_change_report_tick = 0;", reset)
@@ -147,19 +155,52 @@ class ZkPublishBackpressureTests(unittest.TestCase):
         self.assertIn("pub_en_flag=0;", reset_idle)
         self.assertIn("pubsend_state=PUBSEDN_STATE_IDLE;", reset_idle)
 
+    def test_login_wait_recovers_from_publish_timeout_and_missing_ack(self):
+        source = read_source()
+        login = block(source, "int zk_publish_login_packet", "int zk_publish_heartbeat_packet")
+        session = block(source, "void zk_mqtt_session_process", "static void zk_copy_json_string")
+        reconnect = block(source, "static void zk_mqtt_force_reconnect", "static int zk_send_payload")
+        reset = block(source, "void zk_mqtt_reset_session", "const zk_mqtt_config_t *zk_mqtt_get_config")
+
+        self.assertIn("#define ZK_LOGIN_ACK_RECONNECT_THRESHOLD 2U", source)
+        self.assertIn("zk_login_wait_pub_timeout_count = nb_mqtt_get_publish_timeout_count();", login)
+        self.assertIn("nb_mqtt_get_publish_timeout_count() != zk_login_wait_pub_timeout_count", session)
+        self.assertIn('zk_mqtt_force_reconnect("login_publish_timeout");', session)
+        self.assertIn("zk_login_ack_timeout_count++;", session)
+        self.assertIn('zk_mqtt_force_reconnect("login_ack_timeout");', session)
+        self.assertIn("pubsend_state_set_idle();", reconnect)
+        self.assertIn("onNBEvent(NB_EVENT_LOST_CONNECTION, 0, 0);", reconnect)
+        self.assertIn("_4G_configModule_machine_star();", reconnect)
+        self.assertIn("zk_login_ack_timeout_count = 0;", reset)
+        self.assertIn("zk_login_wait_pub_timeout_count = 0;", reset)
+
     def test_pubsend_idle_includes_pending_payload_and_at_windows(self):
         nb_source = NB_SOURCE.read_text(encoding="utf-8", errors="ignore")
         at_busy = block(nb_source, "static boolean_en nb_at_command_is_busy", "static boolean_en pubsend_is_busy")
         busy_check = block(nb_source, "static boolean_en pubsend_is_busy", "uint8 nbSendTcpData")
         idle_check = block(nb_source, "boolean_en pubsend_state_idle", "void pubsend_state_set_idle")
         sender = block(nb_source, "uint8 g4Send_MQTT_Data", "boolean_en pubsend_state_finish")
+        prepare = block(nb_source, "static uint8 nb_mqtt_publish_prepare", "static boolean_en nb_mqtt_publish_read_prompt")
+        uart_owner = block(nb_source, "static boolean_en nb_mqtt_publish_owns_uart", "/**")
+        at_machine = block(nb_source, "void send_AT_Command_machine", "boolean_en  _4G_configModule_machine_finish")
+        nb_process = block(nb_source, "void nbModuleProcess", "}//switch")
 
         self.assertIn("sendcommad_state == SEND_COMMAND_STATE_IDLE", at_busy)
         self.assertIn("sendcommad_state == SEND_COMMAND_STATE_RXING_COMPLETE", at_busy)
         self.assertIn("pub_en_flag", busy_check)
         self.assertIn("pubsend_state != PUBSEDN_STATE_IDLE", busy_check)
         self.assertIn("nb_at_command_is_busy() == BOOL_TRUE", busy_check)
-        self.assertIn("pub_en_flag=1;", sender)
+        self.assertIn("return nb_mqtt_publish_prepare(pub_topic, (uint8 *)pData, length);", sender)
+        self.assertIn("pubsend_state = PUBSEDN_STATE_SEND_HEADER;", prepare)
+        for state in (
+            "PUBSEDN_STATE_SEND_HEADER",
+            "PUBSEDN_STATE_WAIT_PROMPT",
+            "PUBSEDN_STATE_SEND_PAYLOAD",
+            "PUBSEDN_STATE_WAIT_ACK",
+        ):
+            self.assertIn(state, uart_owner)
+        self.assertIn("if (nb_mqtt_publish_owns_uart() == BOOL_TRUE)", at_machine)
+        self.assertIn("if (nb_mqtt_publish_owns_uart() == BOOL_TRUE)", nb_process)
         self.assertIn("pubsend_is_busy() == BOOL_FALSE", idle_check)
 
 

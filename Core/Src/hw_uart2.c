@@ -28,6 +28,7 @@ static u8  _index;
 static u8  _tx_length;
 static u8  _rx_length;
 static hw_bl0942_state_en  _bl0942_state =  BL0942_STATE_IDLE;
+static volatile u32 hw_uart2_error_count = 0;
 
 static void hw_bl0942_uart_abort_rx(void)
 {
@@ -134,6 +135,26 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
   
   HAL_UART_Tx1CpltCallback(huart);
  
+}
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance == USART2)
+  {
+      hw_uart2_error_count++;
+      _bl0942_state = BL0942_STATE_IDLE;
+      _index = 0;
+      hw_bl0942_uart_abort_rx();
+      __HAL_UART_CLEAR_OREFLAG(&huart2);
+      __HAL_UART_CLEAR_FEFLAG(&huart2);
+      __HAL_UART_CLEAR_NEFLAG(&huart2);
+      (void)HAL_UART_Receive_IT(&huart2, (uint8_t*)rx3_buffer, 1);
+  }
+}
+
+u32 hw_uart2_get_error_count(void)
+{
+    return hw_uart2_error_count;
 }
 
 

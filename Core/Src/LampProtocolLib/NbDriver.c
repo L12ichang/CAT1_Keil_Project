@@ -21,7 +21,13 @@ extern QUEUE  usartRecvQueue;//�������ݽ��ն���
 #define CONNECTED_MAX_WAIT_TIME 5
 #define MAX_RECONNECT_COUNT 6*5 //6*20*5s=10min
 #define NB_MODEM_OTA_TX_BUFFER_SIZE 320U
-#define NB_MQTT_PUB_PAYLOAD_DELAY_MS 1000U
+#define NB_AT_TICK_MS 20UL
+#define NB_QMTOPEN_TIMEOUT_MS 150000UL
+#define NB_QMTCONN_TIMEOUT_MS 30000UL
+#define NB_QMTSUB_TIMEOUT_MS 30000UL
+#define NB_QMTPUB_PROMPT_TIMEOUT_MS 5000UL
+#define NB_QMTPUB_ACK_TIMEOUT_MS 30000UL
+#define NB_AT_TIMEOUT_COUNT(ms) (((ms) + NB_AT_TICK_MS - 1UL) / NB_AT_TICK_MS)
 #define NB_DEBUG_PRINT
 uint8 stringBuf[RECV_BUF_LENGTH];//���ݽ��ջ���
 static  uint16 recvLength = 0;//���ݽ��ճ���
@@ -49,6 +55,9 @@ static boolean_en rsrp_ready = BOOL_FALSE;
 static s32 nb_rsrp_dbm10 = 0;
 static char nb_net_reg_status[16] = "";
 static boolean_en nb_net_reg_ready = BOOL_FALSE;
+
+static void parseResult(uint8 *buf);
+static boolean_en nb_is_link_lost_line(uint8 *buf);
 
 typedef enum
 {
@@ -264,7 +273,7 @@ void sendCommand(void *command,uint16 length)
 static SEND_COMMAND_state_en sendcommad_state= SEND_COMMAND_STATE_IDLE;
 static u32  wait_timer=0;
 
-static u8   read_counter=0;
+static u32  read_counter=0;
 static u8   resend_counter=0;
 static char * atcommand;
 static u8 atlength;
@@ -337,7 +346,7 @@ static void nb_set_default_iccid(void)
     iccid_ready = BOOL_FALSE;
 }
 
-void  send_AT_Command_machine_star(char *command,uint8 length, char *response,unsigned char waitCount, uint8 throwAwayTail)
+void  send_AT_Command_machine_star(char *command,uint8 length, char *response,uint32 waitCount, uint8 throwAwayTail)
 {
     (void)throwAwayTail;
     if (nb_modem_ota_lock &&
@@ -639,6 +648,20 @@ static void send_AT_Command_machine_wait_or_retry(void)
     }
 }
 
+static boolean_en nb_mqtt_publish_owns_uart(void)
+{
+    switch (pubsend_state)
+    {
+        case PUBSEDN_STATE_SEND_HEADER:
+        case PUBSEDN_STATE_WAIT_PROMPT:
+        case PUBSEDN_STATE_SEND_PAYLOAD:
+        case PUBSEDN_STATE_WAIT_ACK:
+            return BOOL_TRUE;
+        default:
+            return BOOL_FALSE;
+    }
+}
+
 
 /**
 *@brief   �첽��ʽִ��AT����
@@ -651,6 +674,10 @@ static void send_AT_Command_machine_wait_or_retry(void)
 */
  void send_AT_Command_machine(void)
 {
+    if (nb_mqtt_publish_owns_uart() == BOOL_TRUE)
+    {
+        return;
+    }
     if (nb_modem_ota_lock &&
         nb_at_command_allowed_during_ota(atcommand) == BOOL_FALSE)
     {
@@ -929,7 +956,7 @@ void _4G_configModule_machine(void)
                      connect_state=CONNECT_CONFIG_RESETING;
                      break;
                  }
-                 send_AT_Command_machine_star(sendStringBufSub,(uint8)cmd_len,"+QMTSUB: 0,1,0", 50, 1);
+                 send_AT_Command_machine_star(sendStringBufSub,(uint8)cmd_len,"+QMTSUB: 0,1,0", NB_AT_TIMEOUT_COUNT(NB_QMTSUB_TIMEOUT_MS), 1);
                  connect_state=CONNECT_CONFIG_AT_QMTSUB;
              }
        break;
@@ -956,7 +983,7 @@ void _4G_configModule_machine(void)
                   connect_state=CONNECT_CONFIG_RESETING;
                   break;
               }
-              send_AT_Command_machine_star(sendStringBufOpen,(uint8)cmd_len, "+QMTOPEN: 0,0", 50, 1);
+              send_AT_Command_machine_star(sendStringBufOpen,(uint8)cmd_len, "+QMTOPEN: 0,0", NB_AT_TIMEOUT_COUNT(NB_QMTOPEN_TIMEOUT_MS), 1);
               connect_state=CONNECT_CONFIG_AT_IPPORT;
              }
        break;
@@ -971,7 +998,7 @@ void _4G_configModule_machine(void)
                   connect_state=CONNECT_CONFIG_RESETING;
                   break;
               }
-              send_AT_Command_machine_star(sendStringBufConn,(uint8)cmd_len,"+QMTCONN: 0,0,0", 50, 1);
+              send_AT_Command_machine_star(sendStringBufConn,(uint8)cmd_len,"+QMTCONN: 0,0,0", NB_AT_TIMEOUT_COUNT(NB_QMTCONN_TIMEOUT_MS), 1);
               connect_state=CONNECT_CONFIG_AT_QMTCONN;
               }
         break;
@@ -993,7 +1020,7 @@ void _4G_configModule_machine(void)
                      connect_state=CONNECT_CONFIG_RESETING;
                      break;
                  }
-                 send_AT_Command_machine_star(sendStringBufSubUp,(uint8)cmd_len,"+QMTSUB: 0,2,0", 50, 1);
+                 send_AT_Command_machine_star(sendStringBufSubUp,(uint8)cmd_len,"+QMTSUB: 0,2,0", NB_AT_TIMEOUT_COUNT(NB_QMTSUB_TIMEOUT_MS), 1);
                  connect_state=CONNECT_CONFIG_AT_LAST;
              }
        break;
@@ -1090,6 +1117,10 @@ static uint8 *pubData;
 static uint16 publength;
 static uint8 pubDataBuf[ZK_JSON_BUF_SIZE];
 static u8 pub_en_flag=0;
+static uint16 pub_msg_id=0;
+static u32 nb_mqtt_pub_success_count=0;
+static u32 nb_mqtt_pub_fail_count=0;
+static u32 nb_mqtt_pub_timeout_count=0;
 //
 static  char sendStringBuf3[128];
 
@@ -1114,10 +1145,98 @@ static boolean_en pubsend_is_busy(void)
     }
     return BOOL_FALSE;
 }
+
+static uint8 nb_mqtt_publish_prepare(const char *topic, const uint8 *payload, uint16 length)
+{
+    int cmd_len;
+
+    if (topic == 0 || payload == 0 || length == 0 || length >= sizeof(pubDataBuf))
+    {
+        return NB_ERROR_SEND_FAIL;
+    }
+    if (pubsend_is_busy() == BOOL_TRUE)
+    {
+        return NB_ERROR_SEND_FAIL;
+    }
+
+    pub_msg_id = zk_mqtt_next_packet_id();
+    cmd_len = snprintf(sendStringBuf3, sizeof(sendStringBuf3),
+                       "AT+QMTPUBEX=0,%u,1,0,\"%s\",%u\r\n",
+                       (unsigned int)pub_msg_id,
+                       topic,
+                       (unsigned int)length);
+    if (cmd_len <= 0 || cmd_len >= (int)sizeof(sendStringBuf3))
+    {
+        return NB_ERROR_SEND_FAIL;
+    }
+
+    memcpy(pubDataBuf, payload, length);
+    pubData = pubDataBuf;
+    publength = length;
+    pub_en_flag = 0;
+    pubsend_state = PUBSEDN_STATE_SEND_HEADER;
+    pub_timer = Timer_GetTickCount();
+    printf("[MQTT] publish topic=%s len=%u pkt=%u\n",
+           topic,
+           (unsigned int)length,
+           (unsigned int)pub_msg_id);
+    return NB_ERROR_NONE;
+}
+
+static boolean_en nb_mqtt_publish_read_prompt(void)
+{
+    uint8 ch;
+
+    while (dequeue(&usartRecvQueue, &ch))
+    {
+        if (ch == '>')
+        {
+            return BOOL_TRUE;
+        }
+    }
+    return BOOL_FALSE;
+}
+
+static boolean_en nb_mqtt_publish_ack_ok(const uint8 *line)
+{
+    char ack_text[32];
+
+    snprintf(ack_text, sizeof(ack_text),
+             "+QMTPUBEX: 0,%u,0",
+             (unsigned int)pub_msg_id);
+    return (strstr((const char *)line, ack_text) != 0) ? BOOL_TRUE : BOOL_FALSE;
+}
+
+static boolean_en nb_mqtt_publish_ack_failed(const uint8 *line)
+{
+    if (strstr((const char *)line, "+QMTPUBEX:") != 0 ||
+        strstr((const char *)line, "ERROR") != 0 ||
+        nb_is_link_lost_line((uint8 *)line) == BOOL_TRUE)
+    {
+        return BOOL_TRUE;
+    }
+    return BOOL_FALSE;
+}
+
+static void nb_mqtt_publish_fail(const char *reason, boolean_en timeout)
+{
+    if (timeout == BOOL_TRUE)
+    {
+        nb_mqtt_pub_timeout_count++;
+    }
+    nb_mqtt_pub_fail_count++;
+    printf("[MQTT] publish fail pkt=%u reason=%s fail=%lu timeout=%lu\n",
+           (unsigned int)pub_msg_id,
+           reason,
+           nb_mqtt_pub_fail_count,
+           nb_mqtt_pub_timeout_count);
+    pub_en_flag = 0;
+    pubsend_state = PUBSEDN_STATE_FAIL;
+}
+
 uint8 nbSendTcpData(uint8 *pData, uint16 length)
 {
     const char *topic;
-    uint16 msg_id;
 
     if (nb_modem_ota_lock)
     {
@@ -1137,27 +1256,11 @@ uint8 nbSendTcpData(uint8 *pData, uint16 length)
     {
         return NB_ERROR_SEND_FAIL;
     }
-    msg_id = zk_mqtt_next_packet_id();
-    snprintf(sendStringBuf3, sizeof(sendStringBuf3),
-             "AT+QMTPUBEX=0,%u,1,0,\"%s\",%d\r\n",
-             msg_id, topic, length);
-    printf("[MQTT] publish topic=%s len=%u pkt=%u\n",
-           topic,
-           (unsigned int)length,
-           (unsigned int)msg_id);
-    memcpy(pubDataBuf, pData, length);
-    pubData=pubDataBuf;
-    publength=length;
-    sendCommand((uint8*)sendStringBuf3,strlen(sendStringBuf3));
-    printf_buf(pubData,publength);
-    pub_timer=Timer_GetTickCount();
-    pub_en_flag=1;
-    return  NB_ERROR_NONE;
+    return nb_mqtt_publish_prepare(topic, pData, length);
 }
 uint8 g4Send_MQTT_Data(char *topic,char *pData)
 {
     const char *pub_topic;
-    uint16 msg_id;
     uint16 length;
 
     if (nb_modem_ota_lock)
@@ -1194,21 +1297,7 @@ uint8 g4Send_MQTT_Data(char *topic,char *pData)
         return NB_ERROR_SEND_FAIL;
     }
 
-    msg_id = zk_mqtt_next_packet_id();
-    snprintf(sendStringBuf3, sizeof(sendStringBuf3),
-             "AT+QMTPUBEX=0,%u,1,0,\"%s\",%d\r\n",
-             msg_id, pub_topic, length);
-    printf("[MQTT] publish topic=%s len=%u pkt=%u\n",
-           pub_topic,
-           (unsigned int)length,
-           (unsigned int)msg_id);
-    memcpy(pubDataBuf, pData, length);
-    pubData=pubDataBuf;
-    publength=length;
-    sendCommand((uint8*)sendStringBuf3,strlen(sendStringBuf3));
-    pub_timer=Timer_GetTickCount();
-    pub_en_flag=1;
-    return  NB_ERROR_NONE;
+    return nb_mqtt_publish_prepare(pub_topic, (uint8 *)pData, length);
 }
 
 boolean_en pubsend_state_finish()
@@ -1224,6 +1313,16 @@ boolean_en pubsend_state_finish()
 boolean_en pubsend_state_idle()
 {
     return (pubsend_is_busy() == BOOL_FALSE) ? BOOL_TRUE : BOOL_FALSE;
+}
+
+uint32 nb_mqtt_get_publish_fail_count(void)
+{
+    return nb_mqtt_pub_fail_count;
+}
+
+uint32 nb_mqtt_get_publish_timeout_count(void)
+{
+    return nb_mqtt_pub_timeout_count;
 }
 
 
@@ -1277,22 +1376,63 @@ void nbSendTcpData_sm(void)
     switch (pubsend_state)
     {
         case PUBSEDN_STATE_IDLE:
-                    if(pub_en_flag==1)
-                    {
-                        pub_en_flag=0;
-                        pubsend_state=PUBSEDN_STATE_SEND;
-                    }
              break;
-        case PUBSEDN_STATE_SEND:             
-                  if(Timer_PassedDelay(pub_timer, NB_MQTT_PUB_PAYLOAD_DELAY_MS))
-                  {  
-                       printf("[MQTT] publish payload len=%u\n", (unsigned int)publength);
-                       sendCommand(pubData,publength) ;//��������
-                       pubsend_state=PUBSEDN_STATE_SENDFINISH;
-                  }
+        case PUBSEDN_STATE_SEND_HEADER:
+              sendCommand((uint8*)sendStringBuf3, strlen(sendStringBuf3));
+              recvLength = 0;
+              pub_timer = Timer_GetTickCount();
+              pubsend_state = PUBSEDN_STATE_WAIT_PROMPT;
                break;
+        case PUBSEDN_STATE_WAIT_PROMPT:
+              if (nb_mqtt_publish_read_prompt() == BOOL_TRUE)
+              {
+                  pubsend_state = PUBSEDN_STATE_SEND_PAYLOAD;
+              }
+              else if (Timer_PassedDelay(pub_timer, NB_QMTPUB_PROMPT_TIMEOUT_MS))
+              {
+                  nb_mqtt_publish_fail("prompt_timeout", BOOL_TRUE);
+              }
+              break;
+        case PUBSEDN_STATE_SEND_PAYLOAD:
+              printf("[MQTT] publish payload len=%u\n", (unsigned int)publength);
+              usartSendData(pubData, publength);
+              recvLength = 0;
+              pub_timer = Timer_GetTickCount();
+              pubsend_state = PUBSEDN_STATE_WAIT_ACK;
+              break;
+        case PUBSEDN_STATE_WAIT_ACK:
+              if (readLine(stringBuf, &recvLength, 0))
+              {
+                  if (nb_mqtt_publish_ack_ok(stringBuf) == BOOL_TRUE)
+                  {
+                      nb_mqtt_pub_success_count++;
+                      printf("[MQTT] publish ack pkt=%u ok=%lu\n",
+                             (unsigned int)pub_msg_id,
+                             nb_mqtt_pub_success_count);
+                      recvLength = 0;
+                      pubsend_state=PUBSEDN_STATE_SENDFINISH;
+                  }
+                  else if (nb_mqtt_publish_ack_failed(stringBuf) == BOOL_TRUE)
+                  {
+                      recvLength = 0;
+                      nb_mqtt_publish_fail("ack_error", BOOL_FALSE);
+                  }
+                  else
+                  {
+                      parseResult(stringBuf);
+                      recvLength = 0;
+                  }
+              }
+              else if (Timer_PassedDelay(pub_timer, NB_QMTPUB_ACK_TIMEOUT_MS))
+              {
+                  nb_mqtt_publish_fail("ack_timeout", BOOL_TRUE);
+              }
+              break;
         case  PUBSEDN_STATE_SENDFINISH:
                  pubsend_state=PUBSEDN_STATE_IDLE;//����ط�Ҫ�ص�
+              break;
+        case PUBSEDN_STATE_FAIL:
+              pubsend_state=PUBSEDN_STATE_IDLE;
               break;
         
         default:
@@ -1843,6 +1983,10 @@ void nbModuleProcess(void)
                       if(_4G_configModule_machine_finish() ==BOOL_TRUE)
                       {  //ģ���������
                              
+                            if (nb_mqtt_publish_owns_uart() == BOOL_TRUE)
+                            {
+                                break;
+                            }
                             while (readLine(stringBuf, &recvLength, 0)) 
                             {
 //                                printf("stringBuf\n");

@@ -51,8 +51,6 @@ static boolean_en zk_change_report_pending = BOOL_FALSE;
 static uint32 zk_change_report_tick = 0;
 static boolean_en zk_patrol_report_pending = BOOL_FALSE;
 static boolean_en zk_response_pending = BOOL_FALSE;
-static zk_message_header_t zk_response_pending_header;
-static int zk_response_pending_err_code = 0;
 static boolean_en zk_ota_progress_pending = BOOL_FALSE;
 static uint32 zk_ota_progress_value = 0;
 static boolean_en zk_ota_error_pending = BOOL_FALSE;
@@ -75,11 +73,26 @@ static char zk_signal_qeng_resp[] = "OK";
 #define ZK_SEND_BUSY_CLEAR_THRESHOLD 3U
 #define ZK_CHANGE_REPORT_SETTLE_MS 3000UL
 #define ZK_SIGNAL_QUERY_INTERVAL_MS (4UL * 60UL * 1000UL)
+#define ZK_RESPONSE_QUEUE_SIZE 2U
+#define ZK_LOGIN_ACK_RECONNECT_THRESHOLD 2U
 #define ZK_DEFAULT_TIMEZONE_HOURS 8
 #define ZK_SECONDS_PER_HOUR 3600L
 #define ZK_SECONDS_PER_DAY 86400L
 #define ZK_TIME_SYNC_THRESHOLD_SECONDS 30L
 static void zk_apply_brightness(int brightness);
+
+typedef struct
+{
+    zk_message_header_t header;
+    int err_code;
+} zk_response_pending_item_t;
+
+static zk_response_pending_item_t zk_response_queue[ZK_RESPONSE_QUEUE_SIZE];
+static u8 zk_response_queue_head = 0;
+static u8 zk_response_queue_count = 0;
+static u32 zk_response_queue_drop_count = 0;
+static u8 zk_login_ack_timeout_count = 0;
+static u32 zk_login_wait_pub_timeout_count = 0;
 
 static void *ZK_Cjson_Malloc(size_t size)
 {
@@ -680,6 +693,11 @@ void zk_mqtt_reset_session(void)
     zk_change_report_tick = 0;
     zk_patrol_report_pending = BOOL_FALSE;
     zk_response_pending = BOOL_FALSE;
+    zk_response_queue_head = 0;
+    zk_response_queue_count = 0;
+    zk_response_queue_drop_count = 0;
+    zk_login_ack_timeout_count = 0;
+    zk_login_wait_pub_timeout_count = 0;
     zk_ota_progress_pending = BOOL_FALSE;
     zk_ota_error_pending = BOOL_FALSE;
     zk_send_busy_fail_count = 0;
@@ -868,6 +886,14 @@ static void zk_log_periodic_send_failure(const char *task_name)
     printf("ZK %s send failed, retry later\r\n", task_name);
 }
 
+static void zk_mqtt_force_reconnect(const char *reason)
+{
+    printf("ZK MQTT force reconnect: %s\r\n", reason == NULL ? "unknown" : reason);
+    pubsend_state_set_idle();
+    onNBEvent(NB_EVENT_LOST_CONNECTION, 0, 0);
+    _4G_configModule_machine_star();
+}
+
 static int zk_send_payload(const char *payload, uint16 length, const char *topic)
 {
     uint8 result;
@@ -912,14 +938,53 @@ int zk_send_json_root(cJSON *root, const char *topic)
     return zk_send_payload(zk_tx_buf, (uint16)len, topic);
 }
 
+static zk_response_pending_item_t *zk_response_queue_front(void)
+{
+    if (zk_response_queue_count == 0)
+    {
+        return NULL;
+    }
+    return &zk_response_queue[zk_response_queue_head];
+}
+
+static void zk_response_queue_pop(void)
+{
+    if (zk_response_queue_count == 0)
+    {
+        zk_response_pending = BOOL_FALSE;
+        return;
+    }
+    zk_response_queue_head++;
+    if (zk_response_queue_head >= ZK_RESPONSE_QUEUE_SIZE)
+    {
+        zk_response_queue_head = 0;
+    }
+    zk_response_queue_count--;
+    zk_response_pending = (zk_response_queue_count > 0) ? BOOL_TRUE : BOOL_FALSE;
+}
+
 void zk_schedule_simple_response(const zk_message_header_t *request, int err_code)
 {
+    u8 write_index;
+
     if (request == NULL)
     {
         return;
     }
-    memcpy(&zk_response_pending_header, request, sizeof(zk_response_pending_header));
-    zk_response_pending_err_code = err_code;
+    if (zk_response_queue_count >= ZK_RESPONSE_QUEUE_SIZE)
+    {
+        zk_response_queue_pop();
+        zk_response_queue_drop_count++;
+    }
+
+    write_index = zk_response_queue_head + zk_response_queue_count;
+    if (write_index >= ZK_RESPONSE_QUEUE_SIZE)
+    {
+        write_index -= ZK_RESPONSE_QUEUE_SIZE;
+    }
+    memcpy(&zk_response_queue[write_index].header, request, sizeof(zk_response_queue[write_index].header));
+    zk_response_queue[write_index].err_code = err_code;
+    zk_response_queue_count++;
     zk_response_pending = BOOL_TRUE;
 }
 
@@ -1071,6 +1136,7 @@ int zk_publish_login_packet(void)
     {
         return -1;
     }
+    zk_login_wait_pub_timeout_count = nb_mqtt_get_publish_timeout_count();
     zk_login_state = ZK_LOGIN_STATE_WAIT_ACK;
     zk_login_tick = Timer_GetTickCount();
     return 0;
@@ -1709,8 +1775,22 @@ void zk_mqtt_session_process(void)
 
     if (zk_login_state == ZK_LOGIN_STATE_WAIT_ACK)
     {
+        if (nb_mqtt_get_publish_timeout_count() != zk_login_wait_pub_timeout_count)
+        {
+            zk_mqtt_force_reconnect("login_publish_timeout");
+            return;
+        }
         if (Timer_PassedDelay(zk_login_tick, ZK_LOGIN_ACK_TIMEOUT_MS) == BOOL_FALSE)
         {
+            return;
+        }
+        if (zk_login_ack_timeout_count < 0xFFU)
+        {
+            zk_login_ack_timeout_count++;
+        }
+        if (zk_login_ack_timeout_count >= ZK_LOGIN_ACK_RECONNECT_THRESHOLD)
+        {
+            zk_mqtt_force_reconnect("login_ack_timeout");
             return;
         }
         zk_login_state = ZK_LOGIN_STATE_IDLE;
@@ -1750,10 +1830,18 @@ void zk_mqtt_session_process(void)
 
         if (zk_response_pending == BOOL_TRUE)
         {
-            if (zk_publish_simple_response_now(&zk_response_pending_header,
-                                               zk_response_pending_err_code) == 0)
+            zk_response_pending_item_t *item;
+
+            item = zk_response_queue_front();
+            if (item == NULL)
             {
                 zk_response_pending = BOOL_FALSE;
+                return;
+            }
+            if (zk_publish_simple_response_now(&item->header,
+                                               item->err_code) == 0)
+            {
+                zk_response_queue_pop();
             }
             return;
         }
@@ -1946,6 +2034,7 @@ boolean_en zk_mqtt_accept_login_ack(const zk_message_header_t *header)
     {
         now = Timer_GetTickCount();
         zk_login_state = ZK_LOGIN_STATE_ONLINE;
+        zk_login_ack_timeout_count = 0;
         zk_sync_online_period_timers(now);
         zk_login_time_sync_pending = BOOL_TRUE;
         return BOOL_TRUE;

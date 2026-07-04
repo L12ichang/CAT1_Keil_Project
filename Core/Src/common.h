@@ -42,7 +42,7 @@ ver 3. 2022.12.7 dali时序兼容不了新唐，改回来。
 #define TX_BUFF_LENGTH          540
 
 #ifndef APP_LOG_ENABLE
-#define APP_LOG_ENABLE 1
+#define APP_LOG_ENABLE 0
 #endif
 
 #ifndef APP_HEX_LOG_ENABLE
@@ -64,7 +64,7 @@ ver 3. 2022.12.7 dali时序兼容不了新唐，改回来。
 #if APP_LOG_ENABLE
 #define LOG_PRINT(...) dma_printf(__VA_ARGS__)
 #else
-#define LOG_PRINT(...) do {} while (0)
+#define LOG_PRINT(...) do { if (0) { dma_printf(__VA_ARGS__); } } while (0)
 #endif
 
 #define LOGE(...) LOG_PRINT("[E] " __VA_ARGS__)
@@ -72,11 +72,11 @@ ver 3. 2022.12.7 dali时序兼容不了新唐，改回来。
 #define LOGI(...) LOG_PRINT("[I] " __VA_ARGS__)
 #define LOGD(...) LOG_PRINT("[D] " __VA_ARGS__)
 
-#if APP_LOG_ENABLE && APP_OTA_LOG_ENABLE
-#define OTA_LOGE(...) LOG_PRINT("[OTA][E] " __VA_ARGS__)
-#define OTA_LOGW(...) LOG_PRINT("[OTA][W] " __VA_ARGS__)
-#define OTA_LOGI(...) LOG_PRINT("[OTA][I] " __VA_ARGS__)
-#define OTA_LOGD(...) LOG_PRINT("[OTA][D] " __VA_ARGS__)
+#if APP_OTA_LOG_ENABLE
+#define OTA_LOGE(...) dma_printf("[OTA][E] " __VA_ARGS__)
+#define OTA_LOGW(...) dma_printf("[OTA][W] " __VA_ARGS__)
+#define OTA_LOGI(...) dma_printf("[OTA][I] " __VA_ARGS__)
+#define OTA_LOGD(...) dma_printf("[OTA][D] " __VA_ARGS__)
 #else
 #define OTA_LOGE(...) do {} while (0)
 #define OTA_LOGW(...) do {} while (0)
@@ -87,7 +87,7 @@ ver 3. 2022.12.7 dali时序兼容不了新唐，改回来。
 #if APP_LOG_ENABLE
 #define printf(...) dma_printf(__VA_ARGS__)
 #else
-#define printf(...) do {} while (0)
+#define printf(...) do { if (0) { dma_printf(__VA_ARGS__); } } while (0)
 #endif
 
 
