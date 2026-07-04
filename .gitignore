@@ -28,9 +28,13 @@ RTE/
 *.axf
 *.elf
 *.idx
+*.hex
+*.out
+*.err
 # J-Link / Debugger files
 JLinkLog.txt
 *.dbgconf
+*.jlink
 EventRecorderStub.scvd
 
 # Firmware Products (Explicitly allowed)
@@ -40,7 +44,7 @@ EventRecorderStub.scvd
 
 # Build logs
 *.log
-
+*.bin
 # OS generated files
 .DS_Store
 Thumbs.db

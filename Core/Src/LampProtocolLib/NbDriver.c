@@ -21,6 +21,7 @@ extern QUEUE  usartRecvQueue;//�������ݽ��ն���
 #define CONNECTED_MAX_WAIT_TIME 5
 #define MAX_RECONNECT_COUNT 6*5 //6*20*5s=10min
 #define NB_MODEM_OTA_TX_BUFFER_SIZE 320U
+#define NB_MQTT_PUB_PAYLOAD_DELAY_MS 1000U
 #define NB_DEBUG_PRINT
 uint8 stringBuf[RECV_BUF_LENGTH];//���ݽ��ջ���
 static  uint16 recvLength = 0;//���ݽ��ճ���
@@ -1140,6 +1141,10 @@ uint8 nbSendTcpData(uint8 *pData, uint16 length)
     snprintf(sendStringBuf3, sizeof(sendStringBuf3),
              "AT+QMTPUBEX=0,%u,1,0,\"%s\",%d\r\n",
              msg_id, topic, length);
+    printf("[MQTT] publish topic=%s len=%u pkt=%u\n",
+           topic,
+           (unsigned int)length,
+           (unsigned int)msg_id);
     memcpy(pubDataBuf, pData, length);
     pubData=pubDataBuf;
     publength=length;
@@ -1193,6 +1198,10 @@ uint8 g4Send_MQTT_Data(char *topic,char *pData)
     snprintf(sendStringBuf3, sizeof(sendStringBuf3),
              "AT+QMTPUBEX=0,%u,1,0,\"%s\",%d\r\n",
              msg_id, pub_topic, length);
+    printf("[MQTT] publish topic=%s len=%u pkt=%u\n",
+           pub_topic,
+           (unsigned int)length,
+           (unsigned int)msg_id);
     memcpy(pubDataBuf, pData, length);
     pubData=pubDataBuf;
     publength=length;
@@ -1275,8 +1284,9 @@ void nbSendTcpData_sm(void)
                     }
              break;
         case PUBSEDN_STATE_SEND:             
-                  if(Timer_PassedDelay(pub_timer, 100))
+                  if(Timer_PassedDelay(pub_timer, NB_MQTT_PUB_PAYLOAD_DELAY_MS))
                   {  
+                       printf("[MQTT] publish payload len=%u\n", (unsigned int)publength);
                        sendCommand(pubData,publength) ;//��������
                        pubsend_state=PUBSEDN_STATE_SENDFINISH;
                   }
