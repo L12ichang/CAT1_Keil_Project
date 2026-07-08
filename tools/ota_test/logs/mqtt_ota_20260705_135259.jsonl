@@ -1,0 +1,5 @@
+{"ts": "2026-07-05 13:52:59", "event": "publish_plan", "pub_topic": "MS/864512081541939/pcp2dev", "sub_topics": ["MS/864512081541939/dev2pcp", "MS/864512081541939/dev2plt", "MS/864512081541939/offline"], "payload": {"SN": "864512081541939", "TM": "2026-07-05 13:52:59", "SV": "ota", "ID": "777001", "CT": "W", "DT": {"url": "http://192.0.2.1/cat1.bin"}}}
+{"ts": "2026-07-05 13:52:59", "event": "connect", "rc": 0, "sub_topics": ["MS/864512081541939/dev2pcp", "MS/864512081541939/dev2plt", "MS/864512081541939/offline"]}
+{"ts": "2026-07-05 13:52:59", "event": "published", "mid": 4, "rc": 0}
+{"ts": "2026-07-05 13:53:01", "event": "message", "topic": "MS/864512081541939/dev2plt", "payload": "{\"SN\":\"864512081541939\",\"TM\":\"2026-07-05 21:52:59\",\"SV\":\"ota\",\"ID\":\"777001\",\"CT\":\"W\",\"ER\":0}", "json": {"SN": "864512081541939", "TM": "2026-07-05 21:52:59", "SV": "ota", "ID": "777001", "CT": "W", "ER": 0}}
+{"ts": "2026-07-05 13:53:01", "event": "finish", "state": {"connected": true, "progress": false, "error": false, "response": true, "online": false}, "log_path": "tools\\ota_test\\logs\\mqtt_ota_20260705_135259.jsonl"}

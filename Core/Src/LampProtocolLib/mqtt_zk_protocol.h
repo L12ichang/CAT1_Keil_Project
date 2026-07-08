@@ -65,8 +65,9 @@
 typedef enum
 {
     ZK_LOGIN_STATE_IDLE = 0,
-    ZK_LOGIN_STATE_WAIT_ACK,
-    ZK_LOGIN_STATE_ONLINE,
+    ZK_LOGIN_STATE_WAIT_ACK = 1,
+    ZK_LOGIN_STATE_ONLINE = 2,
+    ZK_LOGIN_STATE_WAIT_PUBLISH = 3,
 } zk_login_state_en;
 
 typedef struct

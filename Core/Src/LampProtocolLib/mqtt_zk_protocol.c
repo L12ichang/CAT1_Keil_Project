@@ -59,22 +59,22 @@ static u8 zk_send_busy_fail_count = 0;
 static boolean_en zk_reboot_pending = BOOL_FALSE;
 static uint32 zk_reboot_tick = 0;
 static boolean_en zk_login_time_sync_pending = BOOL_FALSE;
+static boolean_en zk_startup_time_force_pending = BOOL_FALSE;
+static boolean_en zk_startup_time_sync_done = BOOL_FALSE;
 static boolean_en zk_control_restore_pending = BOOL_FALSE;
 static uint32 zk_control_restore_tick = 0;
 static uint32 zk_control_restore_delay_ms = 0;
 static int zk_control_restore_brightness = 0;
 
-static uint32 zk_signal_query_tick;
-static char zk_signal_qeng_cmd[] = "AT+QENG=\"servingcell\"\r\n";
-static char zk_signal_qeng_resp[] = "OK";
-
 #define ZK_CNCTRL_SUPPORTED_CNS 1
 #define ZK_CNCTRL_LAST_MAX_SEC  (24UL * 60UL * 60UL)
 #define ZK_SEND_BUSY_CLEAR_THRESHOLD 3U
 #define ZK_CHANGE_REPORT_SETTLE_MS 3000UL
-#define ZK_SIGNAL_QUERY_INTERVAL_MS (4UL * 60UL * 1000UL)
 #define ZK_RESPONSE_QUEUE_SIZE 2U
 #define ZK_LOGIN_ACK_RECONNECT_THRESHOLD 2U
+#define ZK_LOGIN_PUBLISH_TIMEOUT_MS (45UL * 1000UL)
+#define ZK_OTA_ACK_PUBLISH_TIMEOUT_MS (45UL * 1000UL)
+#define ZK_OTA_ACK_RETRY_LIMIT 3U
 #define ZK_DEFAULT_TIMEZONE_HOURS 8
 #define ZK_SECONDS_PER_HOUR 3600L
 #define ZK_SECONDS_PER_DAY 86400L
@@ -87,12 +87,28 @@ typedef struct
     int err_code;
 } zk_response_pending_item_t;
 
+typedef enum
+{
+    ZK_OTA_ACK_STATE_IDLE = 0,
+    ZK_OTA_ACK_STATE_SEND,
+    ZK_OTA_ACK_STATE_WAIT_PUBLISH,
+} zk_ota_ack_state_en;
+
 static zk_response_pending_item_t zk_response_queue[ZK_RESPONSE_QUEUE_SIZE];
 static u8 zk_response_queue_head = 0;
 static u8 zk_response_queue_count = 0;
 static u32 zk_response_queue_drop_count = 0;
 static u8 zk_login_ack_timeout_count = 0;
+static u32 zk_login_wait_pub_success_count = 0;
+static u32 zk_login_wait_pub_fail_count = 0;
 static u32 zk_login_wait_pub_timeout_count = 0;
+static zk_ota_ack_state_en zk_ota_ack_state = ZK_OTA_ACK_STATE_IDLE;
+static zk_message_header_t zk_ota_ack_header;
+static u32 zk_ota_ack_pub_success_count = 0;
+static u32 zk_ota_ack_pub_fail_count = 0;
+static u32 zk_ota_ack_pub_timeout_count = 0;
+static u32 zk_ota_ack_tick = 0;
+static u8 zk_ota_ack_retry_count = 0;
 
 static void *ZK_Cjson_Malloc(size_t size)
 {
@@ -497,7 +513,7 @@ void zk_set_local_rtc(const RtcTime_t *rtc)
     SetTime();
 }
 
-static boolean_en zk_apply_server_time_text(const char *time_text)
+static boolean_en zk_apply_server_time_text_ex(const char *time_text, boolean_en force_apply)
 {
     RtcTime_t server_utc_time;
     RtcTime_t server_local_time;
@@ -510,7 +526,7 @@ static boolean_en zk_apply_server_time_text(const char *time_text)
         printf("[RTC] server time text empty, skip sync\r\n");
         return BOOL_FALSE;
     }
-    printf("[RTC] server time text: %s\r\n", time_text);
+    printf("[RTC] server UTC TM: %s\r\n", time_text);
     if (zk_parse_rtc_text(time_text, &server_utc_time) == BOOL_FALSE)
     {
         printf("[RTC] parse server time failed, format mismatch\r\n");
@@ -527,34 +543,54 @@ static boolean_en zk_apply_server_time_text(const char *time_text)
     printf("[RTC] server local time: %04d-%02d-%02d %02d:%02d:%02d\r\n",
            server_local_time.year, server_local_time.mon, server_local_time.day,
            server_local_time.hour, server_local_time.min, server_local_time.sec);
-    if (apprtc_RtcTime.ready != BOOL_TRUE)
+    if (apprtc_RtcTime.ready == BOOL_TRUE)
     {
-        printf("[RTC] local RTC not ready, apply server local time directly\r\n");
+        printf("[RTC] local time: %04d-%02d-%02d %02d:%02d:%02d\r\n",
+               apprtc_RtcTime.year, apprtc_RtcTime.mon, apprtc_RtcTime.day,
+               apprtc_RtcTime.hour, apprtc_RtcTime.min, apprtc_RtcTime.sec);
+        server_local_seconds = zk_rtc_to_unix_seconds(&server_local_time);
+        local_seconds = zk_rtc_to_unix_seconds(&apprtc_RtcTime);
+        diff_seconds = server_local_seconds - local_seconds;
+        if (diff_seconds < 0)
+        {
+            diff_seconds = -diff_seconds;
+        }
+        printf("[RTC] time diff = %ld seconds\r\n", diff_seconds);
+    }
+    else
+    {
+        printf("[RTC] local RTC not ready\r\n");
+    }
+
+    if (force_apply == BOOL_TRUE)
+    {
+        printf("[RTC] startup force sync, apply server local time\r\n");
         zk_set_local_rtc(&server_local_time);
         return BOOL_TRUE;
     }
 
-    printf("[RTC] local time: %04d-%02d-%02d %02d:%02d:%02d\r\n",
-           apprtc_RtcTime.year, apprtc_RtcTime.mon, apprtc_RtcTime.day,
-           apprtc_RtcTime.hour, apprtc_RtcTime.min, apprtc_RtcTime.sec);
-    server_local_seconds = zk_rtc_to_unix_seconds(&server_local_time);
-    local_seconds = zk_rtc_to_unix_seconds(&apprtc_RtcTime);
-    diff_seconds = server_local_seconds - local_seconds;
-    if (diff_seconds < 0)
+    if (apprtc_RtcTime.ready != BOOL_TRUE)
     {
-        diff_seconds = -diff_seconds;
+        printf("[RTC] apply server local time directly\r\n");
+        zk_set_local_rtc(&server_local_time);
+        return BOOL_TRUE;
     }
-    printf("[RTC] time diff = %ld seconds\r\n", diff_seconds);
+
     if (diff_seconds > ZK_TIME_SYNC_THRESHOLD_SECONDS)
     {
-        printf("[RTC] diff > 30s, apply server local time\r\n");
+        printf("[RTC] diff > %lds, apply server local time\r\n", ZK_TIME_SYNC_THRESHOLD_SECONDS);
         zk_set_local_rtc(&server_local_time);
     }
     else
     {
-        printf("[RTC] diff <= 30s, skip sync\r\n");
+        printf("[RTC] diff <= %lds, skip sync\r\n", ZK_TIME_SYNC_THRESHOLD_SECONDS);
     }
     return BOOL_TRUE;
+}
+
+static boolean_en zk_apply_server_time_text(const char *time_text)
+{
+    return zk_apply_server_time_text_ex(time_text, BOOL_FALSE);
 }
 
 void zk_apply_server_time_from_header(const zk_message_header_t *header)
@@ -613,8 +649,38 @@ static void zk_ota_set_url(const char *url)
     zk_ota_url[sizeof(zk_ota_url) - 1] = '\0';
 }
 
+static void zk_ota_ack_clear(void)
+{
+    zk_ota_ack_state = ZK_OTA_ACK_STATE_IDLE;
+    memset(&zk_ota_ack_header, 0, sizeof(zk_ota_ack_header));
+    zk_ota_ack_pub_success_count = 0;
+    zk_ota_ack_pub_fail_count = 0;
+    zk_ota_ack_pub_timeout_count = 0;
+    zk_ota_ack_tick = 0;
+    zk_ota_ack_retry_count = 0;
+}
+
+static void zk_ota_ack_defer_start(const zk_message_header_t *header)
+{
+    if (header == NULL)
+    {
+        return;
+    }
+    memcpy(&zk_ota_ack_header, header, sizeof(zk_ota_ack_header));
+    zk_ota_ack_pub_success_count = nb_mqtt_get_publish_success_count();
+    zk_ota_ack_pub_fail_count = nb_mqtt_get_publish_fail_count();
+    zk_ota_ack_pub_timeout_count = nb_mqtt_get_publish_timeout_count();
+    zk_ota_ack_tick = Timer_GetTickCount();
+    zk_ota_ack_retry_count = 0;
+    zk_ota_ack_state = ZK_OTA_ACK_STATE_SEND;
+}
+
 static boolean_en zk_ota_is_busy(void)
 {
+    if (zk_ota_ack_state != ZK_OTA_ACK_STATE_IDLE)
+    {
+        return BOOL_TRUE;
+    }
     if (OTA_ENABLE_state != 0U)
     {
         return BOOL_TRUE;
@@ -697,12 +763,16 @@ void zk_mqtt_reset_session(void)
     zk_response_queue_count = 0;
     zk_response_queue_drop_count = 0;
     zk_login_ack_timeout_count = 0;
+    zk_login_wait_pub_success_count = 0;
+    zk_login_wait_pub_fail_count = 0;
     zk_login_wait_pub_timeout_count = 0;
     zk_ota_progress_pending = BOOL_FALSE;
     zk_ota_error_pending = BOOL_FALSE;
     zk_send_busy_fail_count = 0;
     zk_reboot_pending = BOOL_FALSE;
     zk_login_time_sync_pending = BOOL_FALSE;
+    zk_startup_time_force_pending = BOOL_FALSE;
+    zk_ota_ack_clear();
     zk_alarm_reset_states();
 }
 
@@ -1136,8 +1206,11 @@ int zk_publish_login_packet(void)
     {
         return -1;
     }
+    zk_login_wait_pub_success_count = nb_mqtt_get_publish_success_count();
+    zk_login_wait_pub_fail_count = nb_mqtt_get_publish_fail_count();
     zk_login_wait_pub_timeout_count = nb_mqtt_get_publish_timeout_count();
-    zk_login_state = ZK_LOGIN_STATE_WAIT_ACK;
+    zk_login_ack_timeout_count = 0;
+    zk_login_state = ZK_LOGIN_STATE_WAIT_PUBLISH;
     zk_login_tick = Timer_GetTickCount();
     return 0;
 }
@@ -1254,27 +1327,9 @@ boolean_en zk_dispatch_message(cJSON *root, const zk_message_header_t *header)
 
 static boolean_en zk_signal_query_process(uint32 now)
 {
-    if (online == 0 || pubsend_state_idle() == BOOL_FALSE)
-    {
-        return BOOL_FALSE;
-    }
-    if (zk_signal_query_tick != 0 &&
-        Timer_PassedDelay(zk_signal_query_tick, ZK_SIGNAL_QUERY_INTERVAL_MS) == BOOL_FALSE)
-    {
-        return BOOL_FALSE;
-    }
-    if (send_AT_Command_machine_finish() != BOOL_TRUE)
-    {
-        return BOOL_FALSE;
-    }
-
-    send_AT_Command_machine_star(zk_signal_qeng_cmd,
-                                 (uint8)strlen(zk_signal_qeng_cmd),
-                                 zk_signal_qeng_resp,
-                                 25,
-                                 1);
-    zk_signal_query_tick = now;
-    return BOOL_TRUE;
+    (void)now;
+    /* Runtime QENG shares the modem UART with MQTT publish and can break ACK timing. */
+    return BOOL_FALSE;
 }
 
 /** 添加运行时统计时间组到DT（调用前确保 zk_runtime_counter_process 已周期性执行） */
@@ -1712,6 +1767,78 @@ int zk_publish_ota_error(int err_code)
     return -1;
 }
 
+static boolean_en zk_ota_ack_process(uint32 now)
+{
+    if (zk_ota_ack_state == ZK_OTA_ACK_STATE_IDLE)
+    {
+        return BOOL_FALSE;
+    }
+
+    if (zk_ota_ack_state == ZK_OTA_ACK_STATE_SEND)
+    {
+        if (pubsend_state_idle() == BOOL_FALSE)
+        {
+            return BOOL_TRUE;
+        }
+        if (zk_publish_simple_response_now(&zk_ota_ack_header, 0) == 0)
+        {
+            zk_ota_ack_pub_success_count = nb_mqtt_get_publish_success_count();
+            zk_ota_ack_pub_fail_count = nb_mqtt_get_publish_fail_count();
+            zk_ota_ack_pub_timeout_count = nb_mqtt_get_publish_timeout_count();
+            zk_ota_ack_tick = now;
+            zk_ota_ack_state = ZK_OTA_ACK_STATE_WAIT_PUBLISH;
+            OTA_LOGI("cmd ack started id=%s\r\n", zk_ota_ack_header.id);
+            return BOOL_TRUE;
+        }
+        ++zk_ota_ack_retry_count;
+        if (zk_ota_ack_retry_count >= ZK_OTA_ACK_RETRY_LIMIT)
+        {
+            OTA_LOGE("cmd ack start failed id=%s retry=%u, skip download\r\n",
+                     zk_ota_ack_header.id,
+                     (unsigned int)zk_ota_ack_retry_count);
+            zk_ota_ack_clear();
+            return BOOL_TRUE;
+        }
+        zk_ota_ack_tick = now;
+        OTA_LOGW("cmd ack start retry id=%s retry=%u\r\n",
+                 zk_ota_ack_header.id,
+                 (unsigned int)zk_ota_ack_retry_count);
+        return BOOL_TRUE;
+    }
+
+    if (nb_mqtt_get_publish_success_count() != zk_ota_ack_pub_success_count)
+    {
+        OTA_LOGI("cmd ack published id=%s, start download local=%s\r\n",
+                 zk_ota_ack_header.id,
+                 firm_name_buffer);
+        zk_ota_ack_clear();
+        set_OTA_ENABLE();
+        return BOOL_TRUE;
+    }
+
+    if (nb_mqtt_get_publish_fail_count() != zk_ota_ack_pub_fail_count ||
+        nb_mqtt_get_publish_timeout_count() != zk_ota_ack_pub_timeout_count ||
+        Timer_PassedDelay(zk_ota_ack_tick, ZK_OTA_ACK_PUBLISH_TIMEOUT_MS))
+    {
+        ++zk_ota_ack_retry_count;
+        if (zk_ota_ack_retry_count >= ZK_OTA_ACK_RETRY_LIMIT)
+        {
+            OTA_LOGE("cmd ack publish failed id=%s retry=%u, skip download\r\n",
+                     zk_ota_ack_header.id,
+                     (unsigned int)zk_ota_ack_retry_count);
+            zk_ota_ack_clear();
+            return BOOL_TRUE;
+        }
+        OTA_LOGW("cmd ack publish retry id=%s retry=%u\r\n",
+                 zk_ota_ack_header.id,
+                 (unsigned int)zk_ota_ack_retry_count);
+        zk_ota_ack_state = ZK_OTA_ACK_STATE_SEND;
+        zk_ota_ack_tick = now;
+    }
+
+    return BOOL_TRUE;
+}
+
 void zk_notify_state_changed(void)
 {
     zk_change_report_pending = BOOL_TRUE;
@@ -1773,13 +1900,35 @@ void zk_mqtt_session_process(void)
         NVIC_SystemReset();
     }
 
-    if (zk_login_state == ZK_LOGIN_STATE_WAIT_ACK)
+    if (zk_login_state == ZK_LOGIN_STATE_WAIT_PUBLISH)
     {
+        if (nb_mqtt_get_publish_success_count() != zk_login_wait_pub_success_count)
+        {
+            zk_login_state = ZK_LOGIN_STATE_WAIT_ACK;
+            zk_login_ack_timeout_count = 0;
+            zk_login_tick = now;
+            return;
+        }
         if (nb_mqtt_get_publish_timeout_count() != zk_login_wait_pub_timeout_count)
         {
             zk_mqtt_force_reconnect("login_publish_timeout");
             return;
         }
+        if (nb_mqtt_get_publish_fail_count() != zk_login_wait_pub_fail_count)
+        {
+            zk_mqtt_force_reconnect("login_publish_fail");
+            return;
+        }
+        if (Timer_PassedDelay(zk_login_tick, ZK_LOGIN_PUBLISH_TIMEOUT_MS) == BOOL_TRUE)
+        {
+            zk_mqtt_force_reconnect("login_publish_stall");
+            return;
+        }
+        return;
+    }
+
+    if (zk_login_state == ZK_LOGIN_STATE_WAIT_ACK)
+    {
         if (Timer_PassedDelay(zk_login_tick, ZK_LOGIN_ACK_TIMEOUT_MS) == BOOL_FALSE)
         {
             return;
@@ -1805,6 +1954,11 @@ void zk_mqtt_session_process(void)
     if (zk_login_state == ZK_LOGIN_STATE_ONLINE)
     {
         if (zk_alarm_process() == BOOL_TRUE)
+        {
+            return;
+        }
+
+        if (zk_ota_ack_process(now) == BOOL_TRUE)
         {
             return;
         }
@@ -1851,7 +2005,9 @@ void zk_mqtt_session_process(void)
             if (zk_publish_time_request() == 0)
             {
                 zk_login_time_sync_pending = BOOL_FALSE;
+                zk_startup_time_force_pending = BOOL_TRUE;
                 zk_time_request_tick = now;
+                printf("[RTC] startup TmCali request sent, next ack will force sync\r\n");
             }
             return;
         }
@@ -2019,7 +2175,8 @@ boolean_en zk_mqtt_accept_login_ack(const zk_message_header_t *header)
     {
         return BOOL_FALSE;
     }
-    if (zk_login_state != ZK_LOGIN_STATE_WAIT_ACK)
+    if (zk_login_state != ZK_LOGIN_STATE_WAIT_ACK &&
+        zk_login_state != ZK_LOGIN_STATE_WAIT_PUBLISH)
     {
         return BOOL_FALSE;
     }
@@ -2036,7 +2193,7 @@ boolean_en zk_mqtt_accept_login_ack(const zk_message_header_t *header)
         zk_login_state = ZK_LOGIN_STATE_ONLINE;
         zk_login_ack_timeout_count = 0;
         zk_sync_online_period_timers(now);
-        zk_login_time_sync_pending = BOOL_TRUE;
+        zk_login_time_sync_pending = (zk_startup_time_sync_done == BOOL_TRUE) ? BOOL_FALSE : BOOL_TRUE;
         return BOOL_TRUE;
     }
     return BOOL_FALSE;
@@ -2456,6 +2613,9 @@ boolean_en zk_handle_request_message(cJSON *root, const zk_message_header_t *hea
 {
     cJSON *dt;
     cJSON *tm_cali;
+    const char *time_text;
+    boolean_en force_apply;
+    boolean_en applied;
 
     if (root == NULL || header == NULL)
     {
@@ -2470,7 +2630,29 @@ boolean_en zk_handle_request_message(cJSON *root, const zk_message_header_t *hea
     tm_cali = (dt != NULL) ? cJSON_GetObjectItem(dt, "TmCali") : NULL;
     if (tm_cali != NULL)
     {
-        (void)zk_apply_server_time_text(zk_json_get_rtc_time_text(tm_cali));
+        force_apply = zk_startup_time_force_pending;
+        applied = BOOL_FALSE;
+        time_text = zk_json_get_rtc_time_text(tm_cali);
+        if (time_text != NULL)
+        {
+            applied = zk_apply_server_time_text_ex(time_text, force_apply);
+        }
+        else
+        {
+            printf("[RTC] TmCali ack=%d, server UTC is header TM: %s\r\n",
+                   cJSON_IsNumber(tm_cali) ? tm_cali->valueint : 0,
+                   header->tm);
+            if (force_apply == BOOL_TRUE)
+            {
+                applied = zk_apply_server_time_text_ex(header->tm, BOOL_TRUE);
+            }
+        }
+        if (force_apply == BOOL_TRUE && applied == BOOL_TRUE)
+        {
+            zk_startup_time_force_pending = BOOL_FALSE;
+            zk_startup_time_sync_done = BOOL_TRUE;
+            printf("[RTC] startup force sync complete\r\n");
+        }
         zk_time_request_tick = Timer_GetTickCount();
         return BOOL_TRUE;
     }
@@ -2531,8 +2713,8 @@ boolean_en zk_handle_ota_message(cJSON *root, const zk_message_header_t *header)
     memset(firm_name_buffer, 0, 256);
     strncpy(firm_name_buffer, OTA_LOCAL_FIRMWARE_NAME, 255);
     OTA_LOGI("cmd received id=%s url=%s local=%s\r\n", zk_last_ota_id, url->valuestring, firm_name_buffer);
-    set_OTA_ENABLE();
-    zk_publish_simple_response(header, 0);
+    zk_ota_ack_defer_start(header);
+    OTA_LOGI("cmd accepted id=%s wait ack before download\r\n", zk_last_ota_id);
     return BOOL_TRUE;
 }
 

@@ -57,3 +57,4 @@ Thumbs.db
 # VS Code / IDE settings (optional but recommended to ignore)
 .vscode/
 .history/
+out/final_report/mqtt_login_publish_gate_20260705_014140.jsonl

@@ -42,7 +42,7 @@ ver 3. 2022.12.7 dali时序兼容不了新唐，改回来。
 #define TX_BUFF_LENGTH          540
 
 #ifndef APP_LOG_ENABLE
-#define APP_LOG_ENABLE 0
+#define APP_LOG_ENABLE 1
 #endif
 
 #ifndef APP_HEX_LOG_ENABLE

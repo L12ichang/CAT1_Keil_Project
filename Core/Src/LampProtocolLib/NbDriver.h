@@ -90,6 +90,7 @@ extern u8   OTA_ENABLE;
 boolean_en pubsend_state_finish(void);
 void pubsend_state_set_idle(void);
 boolean_en pubsend_state_idle(void);
+uint32 nb_mqtt_get_publish_success_count(void);
 uint32 nb_mqtt_get_publish_fail_count(void);
 uint32 nb_mqtt_get_publish_timeout_count(void);
 void  _4G_configModule_machine_star(void) ;
