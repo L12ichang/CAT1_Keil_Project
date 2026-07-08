@@ -10,6 +10,8 @@ Listings/
 Objects/
 DebugConfig/
 RTE/
+# 把测试文件中的文件不进行上报git
+tests/
 
 # ARM Compiler / Keil intermediate extensions
 *.o
@@ -35,6 +37,9 @@ RTE/
 JLinkLog.txt
 *.dbgconf
 *.jlink
+*.txt
+*.py
+*.pyc
 EventRecorderStub.scvd
 
 # Firmware Products (Explicitly allowed)
