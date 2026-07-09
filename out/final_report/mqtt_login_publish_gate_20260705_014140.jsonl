@@ -1,0 +1,2 @@
+{"event":"monitor_start","client_id":"codex-login-gate-1783186900","duration":220,"ts":"2026-07-05 01:41:40"}
+{"event":"monitor_finish","state":{"connected":false,"messages":0,"login_seen":false,"business_after_login":false,"cts":[]},"log_path":"D:\\keil_work\\CAT1_Keil_Project\\CAT1_Keil_Project\\out\\final_report\\mqtt_login_publish_gate_20260705_014140.jsonl","ts":"2026-07-05 01:45:20"}

@@ -1,0 +1,59 @@
+﻿? boot startup1
+Mar  4 2025,15:08:28
+from aprom
+checksum ok
+PLL
+PLL from HSE
+Jul  6 2026,08:51:35
+PLL
+[NB] boot state=CONNECTED connect_state=RESETING
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+[NB] connect_state AT_CFUN0 -> AT_CFUN1
+[NB] connect_state AT_CFUN1 -> AT_CPIN
+[NB] connect_state AT_CPIN -> AT_QENG
+[QENG] rsrp=-124.0dBm
+[NET] reg=LIMSRV
+[QENG] rsrp=-125.0dBm
+[NET] reg=LIMSRV
+[QENG] rsrp=-124.0dBm
+[NET] reg=NOCONN
+[NB] connect_state AT_QENG -> AT_RECVMODE
+[NB] connect_state AT_RECVMODE -> AT_VERSION
+[NB] connect_state AT_VERSION -> AT_KEEPALIVE
+[NB] connect_state AT_KEEPALIVE -> AT_IEMI
+[NB] connect_state AT_IEMI -> AT_QMTPING
+IMEI=864512081541939
+[NB] connect_state AT_QMTPING -> AT_IPPORT
+[AT][E] QMTOPEN failed reason=terminal
+ reload1
+[AT][E] AT failed reason=timeout
+[QENG] rsrp=-125.0dBm
+[NET] reg=NOCONN
+[NB] connect_state AT_QENG -> AT_RECVMODE
+[NB] connect_state AT_RECVMODE -> AT_VERSION
+[NB] connect_state AT_VERSION -> AT_KEEPALIVE
+[NB] connect_state AT_KEEPALIVE -> AT_IEMI
+[NB] connect_state AT_IEMI -> AT_QMTPING
+IMEI=864512081541939
+[NB] connect_state AT_QMTPING -> AT_IPPORT
+[NB] connect_state AT_IPPORT -> AT_QMTCONN
+[AT][E] QMTCONN failed reason=terminal
+[AT][E] AT failed reason=timeout
+[QENG] rsrp=-129.0dBm
+[NET] reg=NOCONN
+[NB] connect_state AT_QENG -> AT_RECVMODE
+[NB] connect_state AT_RECVMODE -> AT_VERSION
+[NB] connect_state AT_VERSION -> AT_KEEPALIVE
+[NB] connect_state AT_KEEPALIVE -> AT_IEMI
+[NB] connect_state AT_IEMI -> AT_QMTPING
+IMEI=864512081541939
+[NB] connect_state AT_QMTPING -> AT_IPPORT
+[NB] connect_state AT_IPPORT -> AT_QMTCONN
+[ICCID] start AT+QCCID max_attempts=3
+[ICCID] ok iccid=89860858102441946908
+[AT][E] QMTSUB failed reason=terminal
+[NB][E] config step=QMTCLOSE failed, wait net 30s before mqtt retry
+

@@ -1,0 +1,2 @@
+D:\keil_work\CAT1_Keil_Project\CAT1_Keil_Project\tools\ota_test\mqtt_ota_publish.py:71: DeprecationWarning: Callback API version 1 is deprecated, update to latest version
+  client = mqtt.Client(client_id=f"codex_ota_{args.imei}_{int(time.time())}", clean_session=True)

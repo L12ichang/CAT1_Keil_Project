@@ -1,0 +1,29 @@
+﻿� boot startup1
+Mar  4 2025,15:08:28
+from aprom
+checksum ok
+PLL
+PLL from HSE
+Jul  5 2026,03:33:14
+PLL
+[NB] boot state=CONNECTED connect_state=RESETING
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+[NB] connect_state AT_CFUN0 -> AT_CFUN1
+[NB] connect_state AT_CFUN1 -> AT_CPIN
+[NB] connect_state AT_CPIN -> AT_QENG
+[QENG] rsrp=-121.0dBm
+[QENG] rsrp=-121.0dBm
+[QENG] rsrp=-121.0dBm
+[QENG] rsrp=-121.0dBm
+[QENG] rsrp=-121.0dBm
+[NET] reg=LIMSRV
+[NB] connect_state AT_RECVMODE -> AT_VERSION
+[NB] connect_state AT_VERSION -> AT_KEEPALIVE
+[NB] connect_state AT_KEEPALIVE -> AT_IEMI
+[NB] connect_state AT_IEMI -> AT_QMTPING
+IMEI=864512081541939
+[NB] connect_state AT_QMTPING -> AT_IPPORT
+ reload1

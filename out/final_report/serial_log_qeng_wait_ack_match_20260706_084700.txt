@@ -1,0 +1,85 @@
+﻿? boot startup1
+Mar  4 2025,15:08:28
+from aprom
+checksum ok
+PLL
+PLL from HSE
+Jul  6 2026,08:46:40
+PLL
+[NB] boot state=CONNECTED connect_state=RESETING
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+4G_POWEON---------------
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+[NB] connect_state AT_CFUN0 -> AT_CFUN1
+[NB] connect_state AT_CFUN1 -> AT_CPIN
+[NB] connect_state AT_CPIN -> AT_QENG
+[NET] reg=SEARCH
+[NET] reg=SEARCH
+[QENG] rsrp=-128.0dBm
+[NET] reg=LIMSRV
+[QENG] rsrp=-124.0dBm
+[NET] reg=NOCONN
+[NB] connect_state AT_QENG -> AT_RECVMODE
+[NB] connect_state AT_RECVMODE -> AT_VERSION
+[NB] connect_state AT_VERSION -> AT_KEEPALIVE
+[NB] connect_state AT_KEEPALIVE -> AT_IEMI
+[NB] connect_state AT_IEMI -> AT_QMTPING
+IMEI=864512081541939
+[NB] connect_state AT_QMTPING -> AT_IPPORT
+ reload1
+[AT][E] QMTOPEN failed reason=terminal
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+[NB] connect_state AT_CFUN0 -> AT_CFUN1
+[NB] connect_state AT_CFUN1 -> AT_CPIN
+[NB] connect_state AT_CPIN -> AT_QENG
+[NET] reg=SEARCH
+[NET] reg=SEARCH
+[QENG] rsrp=-127.0dBm
+[NET] reg=LIMSRV
+[QENG] rsrp=-125.0dBm
+[NET] reg=LIMSRV
+[QENG] rsrp=-125.0dBm
+[NET] reg=LIMSRV
+[QENG] rsrp=-125.0dBm
+[NET] reg=NOCONN
+[NB] connect_state AT_QENG -> AT_RECVMODE
+[NB] connect_state AT_RECVMODE -> AT_VERSION
+[NB] connect_state AT_VERSION -> AT_KEEPALIVE
+[NB] connect_state AT_KEEPALIVE -> AT_IEMI
+[NB] connect_state AT_IEMI -> AT_QMTPING
+IMEI=864512081541939
+[NB] connect_state AT_QMTPING -> AT_IPPORT
+[AT][E] QMTOPEN failed reason=terminal
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+[NB] connect_state AT_CFUN0 -> AT_CFUN1
+[NB] connect_state AT_CFUN1 -> AT_CPIN
+[NB] connect_state AT_CPIN -> AT_QENG
+[NET] reg=SEARCH
+[NET] reg=SEARCH
+[QENG] rsrp=-125.0dBm
+[NET] reg=LIMSRV
+[QENG] rsrp=-124.0dBm
+[NET] reg=NOCONN
+[NB] connect_state AT_QENG -> AT_RECVMODE
+[NB] connect_state AT_RECVMODE -> AT_VERSION
+[NB] connect_state AT_VERSION -> AT_KEEPALIVE
+[NB] connect_state AT_KEEPALIVE -> AT_IEMI
+[NB] connect_state AT_IEMI -> AT_QMTPING
+IMEI=864512081541939
+[NB] connect_state AT_QMTPING -> AT_IPPORT
+[NB] connect_state AT_IPPORT -> AT_QMTCONN
+[AT][E] QMTCONN failed reason=terminal
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+4G_POWEON---------------
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+

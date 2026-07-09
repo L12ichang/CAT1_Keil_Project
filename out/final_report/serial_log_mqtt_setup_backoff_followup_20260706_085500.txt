@@ -1,0 +1,31 @@
+﻿[NET] reg=SEARCH
+[NET] reg=SEARCH
+[NET] reg=SEARCH
+[NET] reg=SEARCH
+[NET] reg=SEARCH
+[NET] reg=SEARCH
+[NET] reg=SEARCH
+[NET] reg=SEARCH
+[NET] reg=SEARCH
+[NET] reg=SEARCH
+[NET] reg=SEARCH
+[NET] reg=SEARCH
+[NET] reg=SEARCH
+[NET] reg=SEARCH
+[NET] reg=SEARCH
+[NET] reg=SEARCH
+[NET] reg=SEARCH
+[NET] reg=SEARCH
+[NET] reg=SEARCH
+[QENG] rsrp=-123.0dBm
+[NET] reg=NOCONN
+[NB] connect_state AT_QENG -> AT_RECVMODE
+[NB] connect_state AT_RECVMODE -> AT_VERSION
+[NB] connect_state AT_VERSION -> AT_KEEPALIVE
+[NB] connect_state AT_KEEPALIVE -> AT_IEMI
+[NB] connect_state AT_IEMI -> AT_QMTPING
+IMEI=864512081541939
+[NB] connect_state AT_QMTPING -> AT_IPPORT
+[NB] connect_state AT_IPPORT -> AT_QMTCONN
+[AT][E] QMTCONN failed reason=terminal
+

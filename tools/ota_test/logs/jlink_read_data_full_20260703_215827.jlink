@@ -1,0 +1,7 @@
+device STM32F103RC
+if SWD
+speed 4000
+connect
+savebin tools\ota_test\logs\data_main_full_20260703_215827.bin,0x08005000,0x800
+savebin tools\ota_test\logs\data_bak_full_20260703_215827.bin,0x08006800,0x800
+exit

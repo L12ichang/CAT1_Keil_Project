@@ -1,0 +1,10 @@
+device STM32F103RC
+if SWD
+speed 4000
+connect
+h
+mem32 0x200088C8 16
+mem32 0xE000ED28 4
+mem32 0xE000ED38 2
+g
+exit

@@ -1,0 +1,9 @@
+device STM32F103RC
+if SWD
+speed 4000
+connect
+h
+savebin D:\keil_work\CAT1_Keil_Project\CAT1_Keil_Project\out\final_report\data_main_full_20260704_122618.bin,0x08005000,0x800
+savebin D:\keil_work\CAT1_Keil_Project\CAT1_Keil_Project\out\final_report\data_bak_full_20260704_122618.bin,0x08006800,0x800
+g
+exit

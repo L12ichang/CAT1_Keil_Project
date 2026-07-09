@@ -1,0 +1,116 @@
+[NB] connect_state AT_CFUN0 -> AT_CFUN1
+[NB] connect_state AT_CFUN1 -> AT_CPIN
+[AT][E] CPIN failed reason=terminal
+4G_POWEOFF-RESET--------
+ü boot startup1
+Mar  4 2025,15:08:28
+from aprom
+checksum ok
+PLL
+PLL from HSE
+Jul  5 2026,13:32:21
+PLL
+[NB] boot state=CONNECTED connect_state=RESETING
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+[NB] connect_state AT_CFUN0 -> AT_CFUN1
+[NB] connect_state AT_CFUN1 -> AT_CPIN
+[AT][E] CPIN failed reason=terminal
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+[NB] connect_state AT_CFUN0 -> AT_CFUN1
+[NB] connect_state AT_CFUN1 -> AT_CPIN
+[AT][E] CPIN failed reason=terminal
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+4G_POWEOFF-RESET--------
+ reload1
+4G_POWEOFF_delay_FINISH_delay
+[AT][E] CFUN failed reason=timeout
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+[NB] connect_state AT_CFUN0 -> AT_CFUN1
+[NB] connect_state AT_CFUN1 -> AT_CPIN
+[AT][E] CPIN failed reason=terminal
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+[AT][E] CFUN failed reason=timeout
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+[NB] connect_state AT_CFUN0 -> AT_CFUN1
+[NB] connect_state AT_CFUN1 -> AT_CPIN
+[AT][E] CPIN failed reason=terminal
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+[NB] connect_state AT_CFUN0 -> AT_CFUN1
+[NB] connect_state AT_CFUN1 -> AT_CPIN
+[AT][E] CPIN failed reason=terminal
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+[AT][E] CFUN failed reason=timeout
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+[NB] connect_state AT_CFUN0 -> AT_CFUN1
+[NB] connect_state AT_CFUN1 -> AT_CPIN
+[AT][E] CPIN failed reason=terminal
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+[AT][E] CFUN failed reason=timeout
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+[NB] connect_state AT_CFUN0 -> AT_CFUN1
+[NB] connect_state AT_CFUN1 -> AT_CPIN
+[AT][E] CPIN failed reason=terminal
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+[NB] connect_state AT_CFUN0 -> AT_CFUN1
+[NB] connect_state AT_CFUN1 -> AT_CPIN
+[AT][E] CPIN failed reason=terminal
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+[NB] connect_state AT_CFUN0 -> AT_CFUN1
+[NB] connect_state AT_CFUN1 -> AT_CPIN
+[AT][E] CPIN failed reason=terminal
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+[AT][E] CFUN failed reason=timeout
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+[NB] connect_state AT_CFUN0 -> AT_CFUN1
+[NB] connect_state AT_CFUN1 -> AT_CPIN
+[AT][E] CPIN failed reason=terminal
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+[AT][E] CFUN failed reason=timeout
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+[NB] connect_state AT_CFUN0 -> AT_CFUN1
+[NB] connect_state AT_CFUN1 -> AT_CPIN
+[AT][E] CPIN failed reason=terminal
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay
+[NB] connect_state AT_CFUN0 -> AT_CFUN1
+[NB] connect_state AT_CFUN1 -> AT_CPIN
+[AT][E] CPIN failed reason=terminal
+4G_POWEOFF-RESET--------
+4G_POWEOFF_delay_FINISH_delay

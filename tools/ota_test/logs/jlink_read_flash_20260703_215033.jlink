@@ -1,0 +1,9 @@
+device STM32F103RC
+if SWD
+speed 4000
+connect
+mem16 0x1FFFF7E0 1
+savebin tools\ota_test\logs\app_head_20260703_215033.bin,0x08008000,0x400
+savebin tools\ota_test\logs\ota_backup_head_20260703_215033.bin,0x08024000,0x400
+savebin tools\ota_test\logs\data_head_20260703_215033.bin,0x08005000,0x400
+exit

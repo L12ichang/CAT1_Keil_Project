@@ -1,0 +1,6 @@
+device STM32F103RC
+if SWD
+speed 4000
+connect
+savebin out\baseline\jlink_boot.bin,0x08000000,0x2B20
+exit

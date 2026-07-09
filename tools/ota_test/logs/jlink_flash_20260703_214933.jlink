@@ -1,0 +1,11 @@
+device STM32F103RC
+if SWD
+speed 4000
+connect
+r
+h
+loadbin D:\keil_work\CAT1_Keil_Project\CAT1_Keil_Project\boot.bin,0x08000000
+verifybin D:\keil_work\CAT1_Keil_Project\CAT1_Keil_Project\boot.bin,0x08000000
+r
+g
+exit

@@ -1,0 +1,11 @@
+device STM32F103RC
+if SWD
+speed 4000
+connect
+r
+h
+loadfile D:\keil_work\CAT1_Keil_Project\CAT1_Keil_Project\MDK-ARM-8008000\out\cat1.hex
+verifyfile D:\keil_work\CAT1_Keil_Project\CAT1_Keil_Project\MDK-ARM-8008000\out\cat1.hex
+r
+g
+exit

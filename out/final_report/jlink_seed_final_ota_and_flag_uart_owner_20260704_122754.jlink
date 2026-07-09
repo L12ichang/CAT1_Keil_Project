@@ -1,0 +1,15 @@
+device STM32F103RC
+if SWD
+speed 4000
+connect
+r
+h
+loadbin D:\keil_work\CAT1_Keil_Project\CAT1_Keil_Project\MDK-ARM-8008000\out\cat1.bin,0x08024000
+verifybin D:\keil_work\CAT1_Keil_Project\CAT1_Keil_Project\MDK-ARM-8008000\out\cat1.bin,0x08024000
+loadbin D:\keil_work\CAT1_Keil_Project\CAT1_Keil_Project\out\final_report\sys_data_main_upgrade_flag.bin,0x08005000
+verifybin D:\keil_work\CAT1_Keil_Project\CAT1_Keil_Project\out\final_report\sys_data_main_upgrade_flag.bin,0x08005000
+loadbin D:\keil_work\CAT1_Keil_Project\CAT1_Keil_Project\out\final_report\sys_data_bak_upgrade_flag.bin,0x08006800
+verifybin D:\keil_work\CAT1_Keil_Project\CAT1_Keil_Project\out\final_report\sys_data_bak_upgrade_flag.bin,0x08006800
+r
+g
+exit

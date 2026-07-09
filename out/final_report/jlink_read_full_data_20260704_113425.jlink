@@ -1,0 +1,7 @@
+device STM32F103RC
+if SWD
+speed 4000
+connect
+savebin out\final_report\data_main_full_20260704_113425.bin,0x08005000,0x800
+savebin out\final_report\data_bak_full_20260704_113425.bin,0x08006800,0x800
+exit

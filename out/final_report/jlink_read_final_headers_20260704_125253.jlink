@@ -1,0 +1,12 @@
+if SWD
+speed 1000
+device STM32F103RC
+connect
+h
+savebin D:\keil_work\CAT1_Keil_Project\CAT1_Keil_Project\out\final_report\app_head_final_20260704_125253.bin,0x08008000,0x400
+savebin D:\keil_work\CAT1_Keil_Project\CAT1_Keil_Project\out\final_report\ota_backup_head_final_20260704_125253.bin,0x08024000,0x400
+savebin D:\keil_work\CAT1_Keil_Project\CAT1_Keil_Project\out\final_report\data_head_final_20260704_125253.bin,0x08005000,0x400
+mem32 0xE000ED08 1
+mem32 0xE000ED28 1
+g
+exit
