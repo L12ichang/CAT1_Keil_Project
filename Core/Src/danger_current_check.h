@@ -3,6 +3,7 @@
 #include "common.h"
 
 extern u8 danger_current_warn;
+extern u32 dangeo_out;
 
 extern void danger_current_timer(void);
 

@@ -1487,7 +1487,7 @@ void zk_add_ele_info_group(cJSON *dt_root)
     cJSON_AddItemToObject(ele_info, "ov", ov);
     cJSON_AddItemToObject(ele_info, "op", op);
     cJSON_AddNumberToObject(ele_info, "pwr", power_down_flag ? 1 : 0);
-    cJSON_AddNumberToObject(ele_info, "lc", danger_current_warn ? 30 : 0);
+    cJSON_AddNumberToObject(ele_info, "lc", (double)dangeo_out);
     cJSON_AddItemToObject(dt_root, "EleInfo", ele_info);
 }
 
