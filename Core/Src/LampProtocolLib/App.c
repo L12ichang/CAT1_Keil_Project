@@ -20,7 +20,6 @@
 #include "ntc.h"
 #include "sys_Vo_Io.h"
 #include "ota.h"
-#include "mqtt_zk_protocol.h"
 
 extern  u16  loginfirst_timeout_set;
 extern u8 driver_temperarure_warn;
@@ -365,33 +364,6 @@ void uploadAllDataPoint(void) {
     pack = finishUploadDataPoint(&length);
     sendTcpData(pack, length);
 }
-
- void upload_ota_progress_bar(u32 id ,u32 progress_bar  )
-{
-#if ZK_PROTOCOL_ONLY
-      (void)id;
-      (void)zk_publish_ota_progress(progress_bar >= 90U ? 100U : progress_bar);
-      return;
-#else
-      uint8 *pack;
-      uint16 length;
-      initUploadDataPoint();
-      runningStatus.driveradress=id;
-      addIntTypeDataPoint( DATA_POINT_ID_DRIVER_ADDRESS,runningStatus.driveradress);
-      if(progress_bar>=90)
-        {
-          addIntTypeDataPoint( DATA_POINT_ID_PROGRESS_BAR,progress_bar);
-          addIntTypeDataPoint( DATA_POINT_ID_OFFLIEN_REPORT,1);
-        }
-        else
-        {
-          addIntTypeDataPoint( DATA_POINT_ID_PROGRESS_BAR,progress_bar);
-        }
-      pack = finishUploadDataPoint(&length);
-      sendTcpData(pack, length);
-#endif
-}
-    
 
 void Offline_report(u32 id ,u32 offline )
 {

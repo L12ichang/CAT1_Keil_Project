@@ -1,12 +1,10 @@
 ﻿/*************************************************************
-ç¨åºåè½ï¼CAT.1æºæ
-§çµæºOTAåºä»¶æ´æ°
-å¼åç¯å¢ï¼keil 5.37
-è¯çåå·ï¼STM32F103CBT6/HK32F103CCT6A
-å¼åäººåï¼é»é¿å½?
-åä½åç§°ï¼å¹¿ä¸ä¸è±çµæºç§ææéå
-¬å¸
-ç¼è¾æ¥æï¼?026.5.4
+程序功能：CAT.1智能电源OTA固件更新
+开发环境：keil 5.37
+芯片型号：STM32F103CBT6/HK32F103CCT6A
+开发人员：黎长
+单位名称：广东东菱电源科技有限公司
+编辑日期：2026.5.4
 *************************************************************/
 #include "ota.h"
 #include "NbDriver.h"
@@ -22,8 +20,7 @@
 #include "watchdog.h"
 
 boolean_en get_checksum_status(void);
-extern void soft_reset(void); //å­å¨å¤±è´¥ç³»ç»å¤ä½
-static   uint16 recvLength = 0;//æ°æ®æ¥æ¶é¿åº¦
+static   uint16 recvLength = 0;//数据接收长度
 #if OTA_USE_QHTTPREADFILE_UFS && !OTA_DEBUG_DOWNLOAD_ONLY
 static   u8 *sbuff;
 #endif
@@ -34,10 +31,9 @@ static u32 tihs_time_SERVER_PICK_SIZE=0;
 static u32 last_total_size=0;
 static u32 firmware_total_size=0;
 static u32 save_byete_counter=0;
-#endif
 static u32 server_big_pick_counter=0;//
+#endif
 extern  void SET_NB_STAT_EPOWER_DOWN(void);
-extern   void upload_ota_progress_bar(u32 id ,u32 progress_bar   );
 extern void set_gateway_state_idle(void) ;
 static u8 POWERED_DOWN_read_count=0;
 static u32 http_get_timer=0;
@@ -49,11 +45,13 @@ static CONNECT_OTA_state_en ota_connect_state=CONNECT_OTA_STATE_IDLE;
 #if OTA_USE_QHTTPREADFILE_UFS && !OTA_DEBUG_DOWNLOAD_ONLY
 static u8 OTA_DATA_IS_READY=0;
 static u8 OTA_DATA_IS_finish=0;
-static u32  pfile=0;//åºä»¶å­èæéä½ç½®
+static u32  pfile=0;//固件字节指针位置
 #endif
-extern QUEUE  usartRecvQueue;//ä¸²å£æ°æ®æ¥æ¶éå
+extern QUEUE  usartRecvQueue;//串口数据接收队列
 extern volatile uint32 usart_queue_drop_count;
+#if OTA_USE_QHTTPREADFILE_UFS && !OTA_DEBUG_DOWNLOAD_ONLY
 static u8 last_server_big_pick=0;
+#endif
 #if OTA_USE_QHTTPREADFILE_UFS && !OTA_DEBUG_DOWNLOAD_ONLY
 static u16 SERVER_CHECSUM=0;
 static u16 checsum_temp=0;
@@ -159,7 +157,6 @@ uint16 pack_length=0;
 static  uint8 *pack_buf;
 static u8  have_get_pack_length=0;
 #endif
-static u32 wait_openota_timer=0;
 u32 congfig_delay_timer=0;
 #if OTA_USE_QHTTPREADFILE_UFS && !OTA_DEBUG_DOWNLOAD_ONLY
 typedef enum
@@ -172,7 +169,7 @@ DATA_STATE_44,   //D
 DATA_STATE_57,   //W
 DATA_STATE_4C,   //L
 DATA_STATE_3A,   //:
-DATA_STATE_20,   //ç©ºæ ¼
+DATA_STATE_20,   //空格
 DATA_STATE_GET_SUM,
 DATA_STATE_FINEISH
 } DATA_STATE_en  ;
@@ -2039,7 +2036,7 @@ static void ota_raw_start_close(const char *reason, u8 success_path)
 
 
 /************************************
-åè½æè¿°ï¼å¯å¨ç¡¬ä»¶å¤ä½?
+功能描述：启动硬件复位
 *************************************/
 void  _4G_OTA_machine_star(void)
 {
@@ -2051,7 +2048,9 @@ void  _4G_OTA_machine_star(void)
                 (unsigned int)OTA_STREAM_ALLOW_RAW_BIN_TEST);
        OTA_LOGI("code marker=ota_raw_tcp_v1\r\n");
        ota_connect_state=CONNECT_OTA_RESETING;
+#if OTA_USE_QHTTPREADFILE_UFS && !OTA_DEBUG_DOWNLOAD_ONLY
        server_big_pick_counter=0;
+#endif
        POWERED_DOWN_read_count=0;
        http_get_timer=0;
 #if !OTA_RAW_TCP_STREAM_DEBUG
@@ -2084,8 +2083,7 @@ void  _4G_OTA_machine_star(void)
 #endif
 }
 /************************************
-åè½æè¿°ï¼å¯å¨æå¡å¨åºä»¶ä¸è½½é
-ç½®
+功能描述：启动服务器固件下载配置
 *************************************/
 void  _4G_OTA_machine_contextid(void)
     {
@@ -2096,7 +2094,7 @@ void  _4G_OTA_machine_contextid(void)
 
     }
 /************************************
-åè½æè¿°ï¼æ¥è¯¢åºä»¶ä¸è½½å®å?
+功能描述：查询固件下载完成
 *************************************/
 boolean_en  _4G_OTA_machine_finish(void)
     {
@@ -2109,7 +2107,7 @@ boolean_en  _4G_OTA_machine_finish(void)
       }
     }
 /************************************
-åè½æè¿°ï¼åºä»¶ä¸è½½å¤ç?
+功能描述：固件下载处理
 *************************************/
 void _4G_OTA_machine(void)
 {
@@ -2120,7 +2118,7 @@ void _4G_OTA_machine(void)
       case CONNECT_OTA_STATE_IDLE:
             break;
        case CONNECT_OTA_RESETING:
-            resetNbModule();//æ¨¡åå¤ä½
+            resetNbModule();//模块复位
             ota_connect_state=CONNECT_OTA_READY;
             break;
 
@@ -2142,14 +2140,14 @@ void _4G_OTA_machine(void)
                               ota_connect_state=CONNECT_OTA_AT_QHTTPCFG_CINFIG;
                     }
                     else
-                    {     //æªè¯»å?
+                    {     //未读取到响应
                          if(POWERED_DOWN_read_count<2)
-                         { //éè¯»
+                         { //重读
                                 ota_connect_state= CONNECT_OTA_READY;
                           break;
                          }
                          else
-                         {//ç´æ¥èµ°ä¸å?
+                         {//直接往下走
                              POWERED_DOWN_read_count=0;
                          }
                       }
@@ -2158,7 +2156,7 @@ void _4G_OTA_machine(void)
 
              break;
         case CONNECT_OTA_AT_QHTTPCFG_CINFIG:
-             if(Timer_PassedDelay(congfig_delay_timer,400))  //OTA åè¿æ¥çæ¶åè¦ç­?00mS ä»¥ä¸
+             if(Timer_PassedDelay(congfig_delay_timer,400))  //OTA 切过来的时候要等 400mS 以上
              {
                    send_AT_Command_machine_star("AT+QMTCLOSE=0\r\n",strlen("AT+QMTCLOSE=0\r\n"),"OK", 5, 1);//+QMTCLOSE: <client_idx>,<result>+QMTCLOSE: 0,0
                    ota_connect_state= CONNECT_OTA_AT_QMTT_CLOSE;
@@ -2169,8 +2167,8 @@ void _4G_OTA_machine(void)
               if(send_AT_Command_machine_finish()==TRUE)
               {
                     // Close QMT and switch to OTA mode.
-                    set_gateway_state_idle() ;//ç½®ä½éä¿¡éé»ç¶æ?
-                    SET_NB_STAT_EPOWER_DOWN();//éç½®URCå¤çç¶æ?
+                    set_gateway_state_idle() ;//置位通信静默状态
+                    SET_NB_STAT_EPOWER_DOWN();//重置URC处理状态
                     OTA_ENABLE=1;
 #if OTA_RAW_TCP_STREAM_DEBUG
                     OTA_LOGI("raw tcp mode: bypass module HTTP stack\r\n");
@@ -2746,7 +2744,7 @@ void _4G_OTA_machine(void)
                  OTA_LOGD("url sent=%s\r\n", ota_get_download_url());
                  ota_log_raw_tx(common_send_buff);
                  send_AT_Command_machine_star(common_send_buff, strlen(common_send_buff), "OK",20, 0);
-                // send_AT_Command_machine_star("http://47.120.15.220:888/downloads/cat1.bin\r\n", strlen("http://47.120.15.220:888/downloads/cat1.bin\r\n"), "OK",20, 0);      //ä¸è¦å é¤
+                // send_AT_Command_machine_star("http://47.120.15.220:888/downloads/cat1.bin\r\n", strlen("http://47.120.15.220:888/downloads/cat1.bin\r\n"), "OK",20, 0);      //不要删除
                 //  send_AT_Command_machine_star("http://47.120.15.220:888/downloads/cat120250401162230.bin\r\n", strlen("http://47.120.15.220:888/downloads/cat120250401162230.bin\r\n"), "OK",20, 0);
                    ota_connect_state=CONNECT_OTA_AT_QHTTPURL_WAIT_OK;
              }
@@ -3199,8 +3197,7 @@ void _4G_OTA_machine(void)
                         }
                         ota_clear_rx_buffer();
                      }
-                } // ç­å¾
-æåå¨å­ååºæ¶æ¯<80S
+                } // 等待成功存储响应消息 < 80S
                 else
                 {
                      OTA_LOGE("qhttpreadfile timeout elapsed=%u limit=%u\r\n",
@@ -3333,107 +3330,8 @@ void _4G_OTA_machine(void)
      }
  }
 
- typedef enum
- {
-     OTA_PROGRESS_AT_REPORT_IDLE,
-     OTA_PROGRESS_REPORT_CONFIG,
-     OTA_PROGRESS_AT_REPORT_PROGRESS,
-     OTA_PROGRESS_AT_REPORT_CLOSE,
-     OTA_PROGRESS_AT_CANHGEBACKTO_OTA,
-     OTA_PROGRESS_AT_REPORT_FINISH,
- }OTA_PROGRESS_en;
- OTA_PROGRESS_en ota_progress_state=OTA_PROGRESS_AT_REPORT_IDLE;
- /************************************
-åè½æè¿°ï¼å¯å¨è¿åº¦ä¸æ?
-*************************************/
- void ota_progress_report_statr(void)
- {
-   ota_progress_state=OTA_PROGRESS_REPORT_CONFIG;
- }
-
 /************************************
-åè½æè¿°ï¼æ¥è¯¢è¿åº¦ä¸æ¥å®å?
-*************************************/
-boolean_en ota_progress_report_is_finish(void)
-{
-   if(ota_progress_state==OTA_PROGRESS_AT_REPORT_FINISH)
-   {
-    return BOOL_TRUE;
-   }
-   else
-   {
-       return BOOL_FALSE;
-   }
-
- }
-
-
-/************************************
-åè½æè¿°ï¼ä¸ä¼ åºä»¶è¿åº?
-æ³¨æï¼?   åªè½å¨OTAå
-³é­æ¶ä¸ä¼?
-*************************************/
-void upload_ota_progress_fsm_process(void)
-{
-   switch(ota_progress_state)
-   {
-       case OTA_PROGRESS_AT_REPORT_IDLE :
-                break;
-
-       case   OTA_PROGRESS_REPORT_CONFIG:
-           if(send_AT_Command_machine_finish()==TRUE)
-            {
-                OTA_ENABLE=0;// close OTA and switch to MQTT
-                 _4G_configModule_star_from_onestate( CONNECT_CONFIG_AT_qmtping) ;//ä»æä¸ä¸ªç¶æå¼å§å¯å?åéMQTTå¼å¯æä»?
-                 ota_progress_state=OTA_PROGRESS_AT_REPORT_PROGRESS;
-            }
-
-          break;
-       case    OTA_PROGRESS_AT_REPORT_PROGRESS:
-
-              if(_4G_configModule_machine_finish() ==BOOL_TRUE)
-              {
-                  if(last_server_big_pick)
-                  {
-                    upload_ota_progress_bar(DEVICE_ID ,90 );
-                  }
-                  else if(server_big_pick_counter==0)
-                  {
-                   upload_ota_progress_bar(DEVICE_ID ,30 );
-                  }
-                  else if(server_big_pick_counter==1)
-                  {
-                    upload_ota_progress_bar(DEVICE_ID ,50 );
-                  }
-                  wait_openota_timer =Timer_GetTickCount();//è·åæ¶é´ç¹ï¼è¿åº¦ä¸æ¥éè¦èæ¶100mSï¼?
-                  ota_progress_state=OTA_PROGRESS_AT_REPORT_CLOSE;
-               }
-                 break;
-
-        case   OTA_PROGRESS_AT_REPORT_CLOSE:
-               if (Timer_PassedDelay(wait_openota_timer, 200))    // Wait for progress data before QMTCLOSE.
-               {
-                 send_AT_Command_machine_star("AT+QMTCLOSE=0\r\n",strlen("AT+QMTCLOSE=0\r\n"),"OK", 2, 1);//+QMTCLOSE: <client_idx>,<result>+QMTCLOSE: 0,0//"+QMTCLOSE: 0,0"
-                 ota_progress_state=OTA_PROGRESS_AT_CANHGEBACKTO_OTA;
-               }
-               break;
-
-           case  OTA_PROGRESS_AT_CANHGEBACKTO_OTA:
-                if(send_AT_Command_machine_finish()==TRUE)
-                {
-                  OTA_ENABLE=1;
-                  ota_progress_state=OTA_PROGRESS_AT_REPORT_FINISH;
-                }
-                 break;
-
-           case OTA_PROGRESS_AT_REPORT_FINISH:
-             break;
-     }
-
-}
-
-/************************************
-åè½æè¿°ï¼è½¬ç§»åºä»¶æåæ¥è¯?
+功能描述：转移固件成功查询
 *************************************/
 boolean_en  mcu_copy_firmware_finish(void)
 {
@@ -3447,7 +3345,7 @@ boolean_en  mcu_copy_firmware_finish(void)
       }
 }
 /************************************
-åè½æè¿°ï¼æ¥æ¶åºä»¶ç¶ææ¥è¯?
+功能描述：接收固件状态查询
 *************************************/
 boolean_en  mcu_copy_firmware_getdata(void)
 {
@@ -3461,7 +3359,7 @@ boolean_en  mcu_copy_firmware_getdata(void)
 }
 
 /************************************
-åè½æè¿°ï¼å¼å§è½¬ç§»åºä»?
+功能描述：开始转移固件
 *************************************/
 void  mcu_copy_firmware_star(void)
      {
@@ -3496,24 +3394,24 @@ void  mcu_copy_firmware_star(void)
 
 
 /************************************
-åè½æè¿°ï¼å¼æè®¡ç®æ ¡éªå+
+功能描述：异或计算校验和+
 *************************************/
  #include <stdint.h>
-// è®¡ç® 16 ä½æ ¡éªå
+// 计算 16 位校验和
  u16 bak_frash_checksum_XOR(u32 size)
 {
     u16 checksum = 0;
     u8 *data;
     data=( u8 *)(OTABAKROM_STARTADDR );
-    // å¦ææ°æ®é¿åº¦ä¸ºå¥æ?
+    // 如果数据长度为奇数
     if (size % 2 != 0)
     {
-        // å°æåä¸ä¸ªå­ç¬¦è®¾ç½®ä¸ºé«?8 ä½?ä½?8 ä½è®¾ç½®ä¸º 0
+        // 将最后一个字节设置为高 8 位，低 8 位设置为 0
         checksum = data[size - 1] << 8;
         size--;
     }
 
-    // æ§è¡ 16 ä½?XOR è¿ç®
+    // 执行 16 位 XOR 运算
     for (u32 i = 0; i < size; i += 2)
     {
         uint16_t word = (data[i] << 8) | data[i + 1];
@@ -3525,10 +3423,9 @@ void  mcu_copy_firmware_star(void)
 
 
  /************************************
-åè½æè¿°ï¼æ£æµå¤ä»½åºçæ°æ®æ¯å¦æ­£ç¡®ï¼ç¡®è®¤ç¨åºçå®æ´æ§ã?
-è¾å
-¥åæ°ï¼æ 
-è¾åºè¿åï¼æ­£ç¡®è¿å?BOOL_TRUEï¼æ ¡éªä¸éè¿è¿å BOOL_FALSE
+功能描述：检测备份区的数据是否正确，确认程序的完整性
+输入参数：无
+输出返回：正确返回 BOOL_TRUE，校验不通过返回 BOOL_FALSE
 
 *************************************/
 boolean_en get_checksum_status_XOR( u16 sum, u32 size)
@@ -3555,10 +3452,9 @@ u32 sum32(u32 dat)
 }
 
 /************************************
-åè½æè¿°ï¼è®¡ç®ç¨åºåç§åçæ ¡éªå?
-è¾å
-¥åæ°ï¼æ°æ®çå¤§å°ï¼?å­èæ°ã?
-è¾åºè¿åï¼æ ¡éªå?
+功能描述：计算程序烧写后的校验和
+输入参数：数据的大小，以字节数计
+输出返回：校验和
 *************************************/
 u32 user_frash_checksum(u32 size)
 {
@@ -3568,7 +3464,7 @@ u32 user_frash_checksum(u32 size)
     {
         if(i<ADDR_CHECKSUM_OFFSET/4 || i>=(ADDR_SIZE_OFFSET+4)/4)
         {
-            tmp = *((__IO u32 *)OTABAKROM_STARTADDR + i);   //æ ¡éªå¤ä»½å?
+            tmp = *((__IO u32 *)OTABAKROM_STARTADDR + i);   //校验备份区
             sum += sum32(tmp);
         }
     }
@@ -3578,10 +3474,9 @@ u32 user_frash_checksum(u32 size)
 
 
 /************************************
-åè½æè¿°ï¼æ£æµåºç¨åºçæ°æ®æ¯å¦æ­£ç¡®ï¼ç¡®è®¤ç¨åºçå®æ´æ§ã?
-è¾å
-¥åæ°ï¼æ 
-è¾åºè¿åï¼æ­£ç¡®è¿å?BOOL_TRUEï¼æ ¡éªä¸éè¿è¿å BOOL_FALSE
+功能描述：检测应用区的数据是否正确，确认程序的完整性
+输入参数：无
+输出返回：正确返回 BOOL_TRUE，校验不通过返回 BOOL_FALSE
 
 *************************************/
 boolean_en get_checksum_status(void)
@@ -3627,7 +3522,7 @@ boolean_en get_checksum_status(void)
 
 
 /************************************
-åè½æè¿°ï¼åºä»¶è½¬ç§»å¤ç?
+功能描述：固件转移处理
 *************************************/
 
 void  mcu_copy_firmware_machine(void)
@@ -3647,7 +3542,6 @@ void  mcu_copy_firmware_machine(void)
         MCU_OTA_state=MCU_OTA_STATE_IDLE;
     }
 #else
-    upload_ota_progress_fsm_process();
    switch(MCU_OTA_state)
    {
         case  MCU_OTA_STATE_IDLE:
@@ -3655,14 +3549,13 @@ void  mcu_copy_firmware_machine(void)
                 break;
 
         case  MCU_OTA_STATE_RESETING:
-               //å¯å¨è½¬ç§»åºä»¶å°MCU
+               //启动转移固件到MCU
 
                 sprintf(common_send_buff,"+QFLST: \"UFS:%s\"",firm_name_buffer );
                 OTA_LOGI("module fs file check file=UFS:%s\r\n", firm_name_buffer);
-                send_AT_Command_machine_star("AT+QFLST\r\n",strlen("AT+QFLST\r\n"),common_send_buff,20,1);     // è¦æåæä»¶å¤§å°?    æå
-¥åºä»¶åå­ç¬¦ä¸²
-           //   send_AT_Command_machine_star("AT+QFLST\r\n",strlen("AT+QFLST\r\n"),"+QFLST: \"UFS:cat1.bin\"",20,1);     // è¦æåæä»¶å¤§å°?          //ä¸è¦å é¤
-             // send_AT_Command_machine_star("AT+QFLST\r\n",strlen("AT+QFLST\r\n"),"+QFLST: \"UFS:cat120250401162230.bin\"",20,1);     // è¦æåæä»¶å¤§å°?          //ä¸è¦å é¤
+                send_AT_Command_machine_star("AT+QFLST\r\n",strlen("AT+QFLST\r\n"),common_send_buff,20,1);     // 要提取文件大小，拼接固件名字字符串
+           //   send_AT_Command_machine_star("AT+QFLST\r\n",strlen("AT+QFLST\r\n"),"+QFLST: \"UFS:cat1.bin\"",20,1);     // 要提取文件大小          //不要删除
+             // send_AT_Command_machine_star("AT+QFLST\r\n",strlen("AT+QFLST\r\n"),"+QFLST: \"UFS:cat120250401162230.bin\"",20,1);     // 要提取文件大小          //不要删除
                  printf("_STROE_FINISH_OTA\n "); //+QFLST: "UFS:cat1.bin",24136
                  MCU_OTA_state=MCU_OTA_STATE_GETFILESIZE;
        break;
@@ -3673,11 +3566,11 @@ void  mcu_copy_firmware_machine(void)
             {/*
                   if (readLine(stringBuf, &recvLength, 0))
                     {
-                        //æåæä»¶ååç»­å¤ç?
+                        //提取文件名后续处理
 
                       text=strstr((const char *) stringBuf, "+QFLST: \"UFS:cat1.bin\",");
-                          printf("_å­ç¬¦ä½ç½®=%s\n",text);
-                       if(text!=NULL){   //æåæä»¶å¤§å°
+                          printf("_字符位置=%s\n",text);
+                       if(text!=NULL){   //提取文件大小
                           text+=23;
                             printf("______________firmware_size=%s\n",text);
                              while (*text != '\r') {
@@ -3691,8 +3584,8 @@ void  mcu_copy_firmware_machine(void)
                        }
                        else
                        {
-                           printf("______________firmware_size=æªè¿å
-¥\r\n");
+                           printf("______________firmware_size=未进�
+�\r\n");
 
                        }
 
@@ -3703,8 +3596,8 @@ void  mcu_copy_firmware_machine(void)
                 sprintf(common_send_buff_2,"AT+QFDWL=\"%s\"",firm_name_buffer );
                 OTA_LOGI("module fs download to mcu start file=%s\r\n", firm_name_buffer);
                 send_AT_Command_machine_star(common_send_buff,strlen(common_send_buff),common_send_buff_2,255,1); //+QFDWL: 152937,0a31 "CONNECT\r\n"  //???
-            //  send_AT_Command_machine_star("AT+QFDWL=\"cat1.bin\"\r\n",strlen("AT+QFDWL=\"cat1.bin\"\r\n"),"AT+QFDWL=\"cat1.bin\"",255,1); //+QFDWL: 152937,0a31 "CONNECT\r\n"  //ä¸è¦å é¤
-            //  send_AT_Command_machine_star("AT+QFDWL=\"cat120250401162230.bin\"\r\n",strlen("AT+QFDWL=\"cat120250401162230.bin\"\r\n"),"AT+QFDWL=\"cat120250401162230.bin\"",255,1); //+QFDWL: 152937,0a31 "CONNECT\r\n"  //ä¸è¦å é¤
+            //  send_AT_Command_machine_star("AT+QFDWL=\"cat1.bin\"\r\n",strlen("AT+QFDWL=\"cat1.bin\"\r\n"),"AT+QFDWL=\"cat1.bin\"",255,1); //+QFDWL: 152937,0a31 "CONNECT\r\n"  //不要删除
+            //  send_AT_Command_machine_star("AT+QFDWL=\"cat120250401162230.bin\"\r\n",strlen("AT+QFDWL=\"cat120250401162230.bin\"\r\n"),"AT+QFDWL=\"cat120250401162230.bin\"",255,1); //+QFDWL: 152937,0a31 "CONNECT\r\n"  //不要删除
                      MCU_OTA_state=MCU_OTA_STATE_QFDWL;
                 }
                 break;
@@ -3713,13 +3606,12 @@ void  mcu_copy_firmware_machine(void)
               if(send_AT_Command_machine_finish()==TRUE)
                {
                     flushQueue(&usartRecvQueue);
-                    memset(stringBuf,0x00,recvLength);//ä¸æ¸
-ç©ºä¼å¤èç¹æ¶é´è¿åºç¼å²
+                    memset(stringBuf,0x00,recvLength);//不清空会多耗点时间进出缓冲
                     recvLength=0;//
                     printf("----MCU_OTA_state=%d,=%d\n",MCU_OTA_state,MCU_OTA_state==MCU_OTA_STATE_QFDWL_GET_FIRMWARE);
                     OTA_LOGI("module fs transfer stream ready file=%s\r\n", firm_name_buffer);
                     MCU_OTA_state=MCU_OTA_STATE_QFDWL_GET_FIRMWARE;
-                    data_state=DATA_STATE_IDLE;//æå¼åºåæ£ç´?
+                    data_state=DATA_STATE_IDLE;//打开序列检测
                }
                break;
 
@@ -3817,7 +3709,7 @@ void  mcu_copy_firmware_machine(void)
                                            break;
 
                                       case DATA_STATE_3A:
-                                          if(dat==0x20)//ç©ºæ ¼
+                                          if(dat==0x20)//空格
                                            {
                                              //   log_u32(1,  dat);
                                                 data_state=DATA_STATE_20;
@@ -3830,7 +3722,7 @@ void  mcu_copy_firmware_machine(void)
                                        case DATA_STATE_20:
                                             stringBuf[recvLength] =dat;
                                              ++recvLength;
-                                             if(recvLength>21)  // æ°æ®è¿é¿æ¶èè
+                                             if(recvLength>21)  // 数据过长时考虑
                                               {
                                                   data_state=DATA_STATE_FINEISH;
                                                  break;
@@ -3852,15 +3744,15 @@ void  mcu_copy_firmware_machine(void)
                                              recvURC++;
                                             }
                                             recvURC++;
-                                           if( hexStrToByte((const char *)recvURC,4,buf, &chec_size) )   //4å­èå­ç¬¦checsumè½¬æä¸¤å­è?
+                                           if( hexStrToByte((const char *)recvURC,4,buf, &chec_size) )   //4字节字符checksum转成两字节
                                            {
-                                              checsum_temp=buf[0]<<8|buf[1];//è·åæ ¡éªå?
+                                              checsum_temp=buf[0]<<8|buf[1];//获取校验和
                                               printf("recvURC=%d\n",chec_size);
                                               printf("recvURC=%02x\n",buf[0]);
                                               printf("recvURC=%02x\n",buf[1]);
                                            }
-                                            //æåé¿åº¦åæ ¡éªå?
-                                            tihs_time_SERVER_PICK_SIZE=leng_temp;//æ¬æ¬¡ååºä»¶å¤§å°?
+                                            //提取长度和校验和
+                                            tihs_time_SERVER_PICK_SIZE=leng_temp;//本次分片固件大小
                                             if(leng_temp>0)
                                             {
                                                 last_server_big_pick=1;
@@ -3882,9 +3774,7 @@ void  mcu_copy_firmware_machine(void)
 
                                             }
                                              leng_temp=0;
-                                             memset(stringBuf,0x00,600);//ä¸æ¸
-ç©ºä¼éå¤è¯»ç¸åçå
-å®¹
+                                             memset(stringBuf,0x00,600);//不清空会重复读相同的内容
                                              recvLength=0;
                                              MCU_OTA_state= MCU_OTA_AT_QFLST;
                                              data_state=DATA_STATE_FINEISH;
@@ -3900,21 +3790,21 @@ void  mcu_copy_firmware_machine(void)
 
                   sprintf(common_send_buff,"AT+QFOPEN=\"%s\",2\r\n",firm_name_buffer );
                   OTA_LOGI("open module fs file file=%s\r\n", firm_name_buffer);
-                  send_AT_Command_machine_star(common_send_buff,strlen(common_send_buff),"+QFOPEN:",20,1);   //è·åæä»¶æé+QFOPEN: 1
-             // send_AT_Command_machine_star("AT+QFOPEN=\"cat1.bin\",2\r\n",strlen("AT+QFOPEN=\"cat1.bin\",2\r\n"),"+QFOPEN:",20,1);   //è·åæä»¶æé+QFOPEN: 1
-            //   send_AT_Command_machine_star("AT+QFOPEN=\"cat120250401162230.bin\",2\r\n",strlen("AT+QFOPEN=\"cat120250401162230.bin\",2\r\n"),"+QFOPEN:",20,1);   //è·åæä»¶æé+QFOPEN: 1
-                  pfile=0;//åºä»¶å­èåå§ä½ç½®
+                  send_AT_Command_machine_star(common_send_buff,strlen(common_send_buff),"+QFOPEN:",20,1);   //获取文件指针+QFOPEN: 1
+             // send_AT_Command_machine_star("AT+QFOPEN=\"cat1.bin\",2\r\n",strlen("AT+QFOPEN=\"cat1.bin\",2\r\n"),"+QFOPEN:",20,1);   //获取文件指针+QFOPEN: 1
+            //   send_AT_Command_machine_star("AT+QFOPEN=\"cat120250401162230.bin\",2\r\n",strlen("AT+QFOPEN=\"cat120250401162230.bin\",2\r\n"),"+QFOPEN:",20,1);   //获取文件指针+QFOPEN: 1
+                  pfile=0;//固件字节初始位置
                   MCU_OTA_state=MCU_OTA_AT_QFOPEN;
               break;
 
         case MCU_OTA_AT_QFOPEN:
              if(send_AT_Command_machine_finish()==TRUE )
              {
-                 //åç
+                 //分片
                  static   char common_temp[32] ="AT+QFSEEK=1,%u,0\r\n";
 
                  sprintf(common_send_buff,common_temp,pfile );
-                 send_AT_Command_machine_star(common_send_buff,strlen(common_send_buff),"OK",20,1);   //è®¾ç½®æä»¶æéä¸ºæä»¶çåå§ä½ç½®ã?
+                 send_AT_Command_machine_star(common_send_buff,strlen(common_send_buff),"OK",20,1);   //设置文件指针为文件的初始位置
                  MCU_OTA_state=MCU_OTA_AT_QFSEEK;
              }
             break;
@@ -3922,12 +3812,12 @@ void  mcu_copy_firmware_machine(void)
        case MCU_OTA_AT_QFSEEK:
              if(send_AT_Command_machine_finish()==TRUE)
              {
-               send_AT_Command_machine_star("AT+QFREAD=1,512\r\n",strlen("AT+QFREAD=1,512\r\n"),"CONNECT ",20,1);  //è¯»åæ°æ®ã?CONNECT 512\r\n"
+               send_AT_Command_machine_star("AT+QFREAD=1,512\r\n",strlen("AT+QFREAD=1,512\r\n"),"CONNECT ",20,1);  //读取数据 CONNECT 512\r\n"
                wait_data_timer =Timer_GetTickCount();
                MCU_OTA_state=MCU_OTA_AT_QFREAD;
              }
              break;
-        case MCU_OTA_AT_QFREAD:                        //è¯»åæ°æ®ã?
+        case MCU_OTA_AT_QFREAD:                        //读取数据
              if(send_AT_Command_machine_finish()==TRUE)
              {
                       if(have_get_pack_length==0)
@@ -3935,12 +3825,11 @@ void  mcu_copy_firmware_machine(void)
                           if( strstr((const char *) stringBuf, "CONNECT"))
                            {
                                 static  u16 pack_length_temp=0;
-                                pack_buf=stringBuf;   //stringBufå
-å®¹ï¼AT+QFREAD=1,512\r\nCONNECT 512\r\n
+                                pack_buf=stringBuf;   //stringBuf内容：AT+QFREAD=1,512\r\nCONNECT 512\r\n
                              // printf("CONNECTpack_buf=%s\n",pack_buf);
                                 pack_buf+=26;
                                 printf("CONNECTpack_buf=%s\n",pack_buf);
-                                while (*pack_buf !='\r' )//è¿éä»¥\rå¤æ­ç»å°¾ææ¶ä¼æ°æ®è¿å¤§ï¼æ¯å¦512ä¼åæ?1255ï¼åªå¥½ç¨pack_length_temp>PICK_SIZEæ¥æªå?
+                                while (*pack_buf !='\r' )//这里以\r判断结尾，有时会数据过大，比如512会变成1255，只好用pack_length_temp>PICK_SIZE来截取
                                {
                                     pack_length_temp =pack_length_temp * 10 + *pack_buf - '0';
                                     pack_buf++;
@@ -3962,22 +3851,19 @@ void  mcu_copy_firmware_machine(void)
                           }
                        }
 
-                 if (Timer_PassedDelay(wait_data_timer, 400))    //ç­?400MS æ°æ®æ¥æ¶å®?,å¤ªå°æ¥æ¶ä¸å®æ´æéè¯¯
+                 if (Timer_PassedDelay(wait_data_timer, 400))    //等 400MS 数据接收完成，太少接收不完整或错误
                  {
                      MCU_OTA_state=MCU_OTA_MCU_GETDATA;
                      have_get_pack_length=0;
                  if (Timer_PassedDelay(wait_data_timer, 300))
-                 {      //æ æ°æ®è¶
-æ?             *************å¾
-å¤çæ­»å¾ªç¯*********
+                 {      //无数据，避免进入死循环处理
                    //  MCU_OTA_state=MCU_OTA_AT_QFREAD_LOOP;
                  }
              }
              }
              break;
-        case MCU_OTA_MCU_GETDATA:        //ç±æ¥æ¶å¤çåæ?
-             if(OTA_DATA_IS_READY)       //æ¶ä¸å°éåå¾
-å?
+        case MCU_OTA_MCU_GETDATA:        //由接收处理切换
+             if(OTA_DATA_IS_READY)       //收不到重发标志
              {
                 OTA_DATA_IS_READY=0;
                 printf("3MCUå­å¨___________________\n");
@@ -4002,66 +3888,53 @@ void  mcu_copy_firmware_machine(void)
             break;
 
        case MCU_OTA_AT_QFREAD_LOOP:
-            if(pfile+PICK_SIZE<tihs_time_SERVER_PICK_SIZE)//å°äºæ¬æ¬¡åçæ?   //  åççº? pfile UFS æä»¶ä½ç½®
+            if(pfile+PICK_SIZE<tihs_time_SERVER_PICK_SIZE)//小于本次分片大小   //  分界线 pfile UFS 文件位置
             {
                   pfile+=PICK_SIZE;
                   static   char common_temp[32] ="AT+QFSEEK=1,%u,0\r\n";
                 //  static   char common_send_buff[64];
                   sprintf(common_send_buff,common_temp,pfile );
-                  send_AT_Command_machine_star(common_send_buff,strlen(common_send_buff),"OK",20,1);   //è®¾ç½®æä»¶æéä¸ºæä»¶çåå§ä½ç½®ã?
+                  send_AT_Command_machine_star(common_send_buff,strlen(common_send_buff),"OK",20,1);   //设置文件指针为文件的初始位置
                   MCU_OTA_state=MCU_OTA_AT_QFSEEK;
             }
             else
             {
                 printf("pfile=%u\n",pfile);
                 send_AT_Command_machine_star("AT+QFCLOSE=1\r\n",strlen("AT+QFCLOSE=1\r\n"),"OK",20,1);
-                MCU_OTA_state=MCU_OTA_GET_REPORT_PROGRESS;
-            }
-            break;
-
-       case  MCU_OTA_GET_REPORT_PROGRESS:
-            if(send_AT_Command_machine_finish()==TRUE)
-            {
-                  ota_progress_report_statr();//å¼å¯ä¸æ¥ï¼åè¿è¡ä¸ä¸æ­?
-                  MCU_OTA_state=MCU_OTA_GET_BIG_PICK; //
+                MCU_OTA_state=MCU_OTA_GET_BIG_PICK;
             }
             break;
 
        case MCU_OTA_GET_BIG_PICK:
-            if(ota_progress_report_is_finish())
-            {
-                 if( last_server_big_pick)//æå¡å¨åºä»¶æåä¸å¸?ä»ä¹æ¶åæ¸
-é?
+                 if( last_server_big_pick)//服务器固件最后一片时归零
                  {
                       OTA_LOGI("move firmware to flash complete bytes=%u\r\n", (unsigned int)save_byete_counter);
                       server_big_pick_counter=0;
                       save_byete_counter=0;
-                      pfile=0;//å°çæéä½ç½®å½é¶
+                      pfile=0;//小片指针位置归零
                       MCU_OTA_state=MCU_OTA_AT_QFCLOSE;
                   }
                   else  //
                   {
                       ++server_big_pick_counter;
-                        pfile=0; //å°çæéä½ç½®å½é¶
-                        ota_connect_state=CONNECT_OTA_AT_QFDEL;   //å»å é¤æ¨¡ååºä»?
-                        MCU_OTA_state=MCU_OTA_STATE_IDLE;         //ç­å¾
-æ°çæå¡å¨åºä»¶åçå¯å?
+                        pfile=0; //小片指针位置归零
+                        ota_connect_state=CONNECT_OTA_AT_QFDEL;   //去删除模块固件
+                        MCU_OTA_state=MCU_OTA_STATE_IDLE;         //等待新的服务器固件切片启动
                   }
-             }
              break;
 
           case MCU_OTA_AT_QFCLOSE :     //AT+QFCLOSE=1
               OTA_LOGI("verify firmware start size=%u xor=0x%04x\r\n",
                        (unsigned int)firmware_total_size,
                        SERVER_CHECSUM);
-              if( get_checksum_status_XOR( SERVER_CHECSUM, firmware_total_size)  )//ä¼ è¾å±æ ¡éª?                                     ---------- ä¼ è¾éè¯¯æ²¡æåç°-------------
+              if( get_checksum_status_XOR( SERVER_CHECSUM, firmware_total_size)  )//传输层校验                                     ---------- 传输错误没有发现-------------
               {
                      printf("---------------OTA_XOR_CHECK_OK\n");
-                     if( get_checksum_status())  //  åºç¨å±åºä»¶å®æ´æ§ç¶æè¯»å?
+                     if( get_checksum_status())  //  应用层固件完整性状态读取
                      {
                            OTA_LOGI("verify firmware complete result=ok size=%u\r\n", (unsigned int)firmware_total_size);
                            printf("---------------OTA_SUM_CHECK_OK\n");
-                           sys_data.sn=0xaa5555aa;//æ è®°ææ°åºä»¶
+                           sys_data.sn=0xaa5555aa;//标记有新固件
                            sys_data_store();
                            MCU_OTA_state=MCU_OTA_MCU_FINISH;
                      }
@@ -4069,29 +3942,27 @@ void  mcu_copy_firmware_machine(void)
                      {
                         OTA_LOGE("verify firmware failed: app checksum size=%u\r\n", (unsigned int)firmware_total_size);
                         printf("---------------OTA_SUM_CHECK_ERROR\n");
-                        sys_data.sn=3;//æ è®°åºä»¶ä¸è½½éè¯¯
+                        sys_data.sn=3;//标记固件下载错误
                         sys_data_store();
-                        changea_to_MQTT_modle();//åå°MQTT
-                        last_server_big_pick=0;//è¿ä¸ªæ¶åæ¸
-é?
+                        changea_to_MQTT_modle();//切到MQTT
+                        last_server_big_pick=0;//这个时候归零
                         MCU_OTA_state=MCU_OTA__COMPLETE;
                      }
               }
-              else //æ ¡éªéè¯¯
+              else //校验错误
               {
                     OTA_LOGE("verify firmware failed: transport xor expected=0x%04x size=%u\r\n",
                              SERVER_CHECSUM,
                              (unsigned int)firmware_total_size);
                     printf("------------OTA_XOR_CHECK_ERR\n");
-                    sys_data.sn=3;//æ è®°åºä»¶ä¸è½½éè¯¯
+                    sys_data.sn=3;//标记固件下载错误
                     sys_data_store();
-                    sbuff= ((u8*)(DATAROM_STARTADDR)) ;//æå°
+                    sbuff= ((u8*)(DATAROM_STARTADDR)) ;//打印
                     printf_buf(sbuff,64);
-                    sbuff= ((u8*)(BAKDATAROM_STARTADDR)) ;//æå°
+                    sbuff= ((u8*)(BAKDATAROM_STARTADDR)) ;//打印
                     printf_buf(sbuff,64);
-                    changea_to_MQTT_modle();//åå°MQTT
-                    last_server_big_pick=0;//è¿ä¸ªæ¶åæ¸
-é?
+                    changea_to_MQTT_modle();//切到MQTT
+                    last_server_big_pick=0;//这个时候归零
                     MCU_OTA_state=MCU_OTA__COMPLETE;
               }
                break;
@@ -4100,8 +3971,7 @@ void  mcu_copy_firmware_machine(void)
                     OTA_LOGI("upgrade start: mark new firmware and jump to boot\r\n");
                     printf("---------OTA å®æ¯------\n");
                     printf("---------ç³»ç»éå¯-------\n");
-                    last_server_big_pick=0;//æ¸
-é¶æ å¿ï¼é²æ­¢è·³è½¬å¤±è´¥åå½±åä¸æ¬¡OTA
+                    last_server_big_pick=0;//清零标志，防止跳转失败后影响下次OTA
                     server_big_pick_counter=0;
                     save_byete_counter=0;
                     firmware_total_size=0;
@@ -4111,9 +3981,9 @@ void  mcu_copy_firmware_machine(void)
                     sbuff= ((u8*)(DATAROM_STARTADDR)) ;
                     printf_buf(sbuff,64);
                     HAL_Delay(50);
-                    //è°å°bootå?
-                    extern void iap_jump2boot(void);  //-------------------å¦ææ²¡ææå°æ°æ®å»¶æ¶çè¯ä¼å½±åBOOTçè·³è½?
-                    MCU_OTA_state=MCU_OTA__COMPLETE;//è¿ä¸ªå°æ¹å¾éè¦ï¼ä¸å®è¦æ¾å¨iap_jump2boot()å½æ°ä¹åï¼å¦åè·³è½¬å¤±è´?
+                    //调到boot区
+                    extern void iap_jump2boot(void);  //-------------------如果没有打印数据延时的话会影响BOOT的跳转
+                    MCU_OTA_state=MCU_OTA__COMPLETE;//这个地方很重要，一定要放在iap_jump2boot()函数之前，否则跳转失败
                     iap_jump2boot();
       break;
 
@@ -4128,13 +3998,13 @@ void  mcu_copy_firmware_machine(void)
 }
 
 /**
-*@brief   å­å¨OTAæ¨¡åä¸æ¥çåºä»¶æµ
-*@param	  bufï¼æ¨¡åä¸æ¥çåºä»¶
-*@param	  lenthï¼åºä»¶é¿åº?
-*@return  æ?
+*@brief   存储OTA模块上报的固件流
+*@param	  buf：模块上报的固件
+*@param   lenth：固件长度
+*@return  无
 */
  void OTA_STROE_MCU(uint8 *buf,u16 lenth)
-{                //è§£æç»æ
+{                //解析结果
 #if !OTA_USE_QHTTPREADFILE_UFS
      OTA_LOGW("module fs store disabled: ignore len=%u\r\n", (unsigned int)lenth);
      (void)buf;
@@ -4146,17 +4016,17 @@ void  mcu_copy_firmware_machine(void)
      uint16 dataLength;
       dataLength=lenth;
      if(dataLength==PICK_SIZE|| (last_server_big_pick && dataLength==(u16)(last_total_size%PICK_SIZE)))
-      {  //æ¦æª"OK\r\n"
+      {  //拦截"OK\r\n"
             // printf("_________________________________save_byete_counterbingin=%u\n",save_byete_counter);
              flash_store(buf, dataLength, OTABAKROM_STARTADDR+save_byete_counter );  //-strlen("CONNECT 512\r\n")
-             save_byete_counter+=dataLength;//ç´¯è®¡å­èï¼å°åå?
+             save_byete_counter+=dataLength;//累计字节，地址累加
               printf("_________________________________save_byete_counter=%u\n",save_byete_counter);
              MCU_OTA_state=MCU_OTA_AT_QFREAD_LOOP;
              sbuff= ((u8*)(OTABAKROM_STARTADDR+save_byete_counter)) ;
              // printf_buf(sbuff-256,64);
              printf("1MCUå­å¨1\n");
-             OTA_DATA_IS_READY=1;  //æåpayloadæå
-             if(dataLength==(u16)(firmware_total_size%PICK_SIZE) &&last_server_big_pick)  //å¦ææåä¸çä¸º0ï¼ä¼ä¸ä¼åºBUGï¼?
+             OTA_DATA_IS_READY=1;  //提取payload成功
+             if(dataLength==(u16)(firmware_total_size%PICK_SIZE) &&last_server_big_pick)  //如果最后一片为0，会不会出BUG
              {
                 OTA_DATA_IS_finish=1;
               }

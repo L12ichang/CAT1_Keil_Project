@@ -12,6 +12,9 @@ DebugConfig/
 RTE/
 # 把测试文件中的文件不进行上报git
 tests/
+*.json
+out/
+*.jsonl
 
 # ARM Compiler / Keil intermediate extensions
 *.o

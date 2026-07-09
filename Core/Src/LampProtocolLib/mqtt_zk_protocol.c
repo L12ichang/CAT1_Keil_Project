@@ -1833,7 +1833,8 @@ static boolean_en zk_ota_ack_process(uint32 now)
         return BOOL_TRUE;
     }
 
-    if (nb_mqtt_get_publish_success_count() != zk_ota_ack_pub_success_count)
+    if (zk_ota_ack_state == ZK_OTA_ACK_STATE_WAIT_PUBLISH &&
+        nb_mqtt_get_publish_success_count() != zk_ota_ack_pub_success_count)
     {
         OTA_LOGI("cmd ack published id=%s, start download local=%s\r\n",
                  zk_ota_ack_header.id,
@@ -1843,9 +1844,10 @@ static boolean_en zk_ota_ack_process(uint32 now)
         return BOOL_TRUE;
     }
 
-    if (nb_mqtt_get_publish_fail_count() != zk_ota_ack_pub_fail_count ||
-        nb_mqtt_get_publish_timeout_count() != zk_ota_ack_pub_timeout_count ||
-        Timer_PassedDelay(zk_ota_ack_tick, ZK_OTA_ACK_PUBLISH_TIMEOUT_MS))
+    if (zk_ota_ack_state == ZK_OTA_ACK_STATE_WAIT_PUBLISH &&
+        (nb_mqtt_get_publish_fail_count() != zk_ota_ack_pub_fail_count ||
+         nb_mqtt_get_publish_timeout_count() != zk_ota_ack_pub_timeout_count ||
+         Timer_PassedDelay(zk_ota_ack_tick, ZK_OTA_ACK_PUBLISH_TIMEOUT_MS)))
     {
         ++zk_ota_ack_retry_count;
         if (zk_ota_ack_retry_count >= ZK_OTA_ACK_RETRY_LIMIT)

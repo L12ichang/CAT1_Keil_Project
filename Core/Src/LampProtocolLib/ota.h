@@ -68,7 +68,6 @@ typedef enum
     MCU_OTA_MCU_GETDATA,   
     MCU_OTA_AT_QFREAD_LOOP,                    //循环读取
     MCU_OTA_GET_BIG_PICK,                   //获取服务器大片
-    MCU_OTA_GET_REPORT_PROGRESS,
     MCU_OTA_AT_QFCLOSE,                        //AT+QFCLOSE=1 //关闭文件。
     MCU_OTA_MCU_FINISH,                        //已下载到MCU
     MCU_OTA__COMPLETE,
