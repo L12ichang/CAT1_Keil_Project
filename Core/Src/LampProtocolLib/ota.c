@@ -3116,6 +3116,9 @@ void _4G_OTA_machine(void)
               {
                     OTA_LOGI("stream verify ok: mark upgrade and jump boot size=%u\r\n",
                              (unsigned int)ota_stream_expected_size);
+                    zk_ota_report_mark_verified(ota_stream_header_checksum,
+                                                ota_stream_expected_size,
+                                                ota_stream_header_device_type);
                     sys_data.sn = 0xaa5555aa;
                     sys_data_store();
                     ota_feed_watchdog_if_enabled();

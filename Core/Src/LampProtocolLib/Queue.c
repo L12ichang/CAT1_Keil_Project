@@ -30,6 +30,7 @@ uint8 enqueue(PQUEUE Q, uint8 val)
         return 0;
     } else {
         Q->pBase[Q->rear] = val;
+        
         Q->rear = (Q->rear + 1) % Q->maxsize;
         return 1;
     }

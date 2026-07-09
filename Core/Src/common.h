@@ -23,7 +23,7 @@
 ver 2. 修正了命令bug，原因是dali回来的数据没有crc检验。支持iap的同步头脉冲 。
 ver 3. 2022.12.7 dali时序兼容不了新唐，改回来。
 */
-#define     APP_VERSION         (u16)2
+#define     APP_VERSION         (u16)22
 
 #define xdata
 

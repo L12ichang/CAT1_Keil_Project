@@ -17,6 +17,7 @@
 #include "sys_temp_over_protect.h"
 #include "factory_user_data.h"
 #include "sys_data.h"
+#include "hw_flash.h"
 #include "ntc.h"
 #include "main.h"
 #include <stdio.h>
@@ -76,11 +77,25 @@ static int zk_control_restore_brightness = 0;
 #define ZK_LOGIN_PUBLISH_TIMEOUT_MS (45UL * 1000UL)
 #define ZK_OTA_ACK_PUBLISH_TIMEOUT_MS (45UL * 1000UL)
 #define ZK_OTA_ACK_RETRY_LIMIT 3U
+#define ZK_OTA_REPORT_FLASH_MAGIC 0x5A4B4F54UL
+#define ZK_OTA_REPORT_FLASH_VERSION 1U
+#define ZK_OTA_REPORT_FLASH_OFFSET 0x300UL
+#define ZK_OTA_REPORT_FLASH_MAIN_ADDR (DATAROM_STARTADDR + FLASH_PAGE_SIZE + ZK_OTA_REPORT_FLASH_OFFSET)
+#define ZK_OTA_REPORT_FLASH_BACKUP_ADDR (BAKDATAROM_STARTADDR + FLASH_PAGE_SIZE + ZK_OTA_REPORT_FLASH_OFFSET)
+#define ZK_OTA_REPORT_SUCCESS_PROGRESS 100U
+#define ZK_OTA_REPORT_RETRY_DELAY_MS (10UL * 1000UL)
+#define ZK_OTA_REPORT_PUBLISH_TIMEOUT_MS (45UL * 1000UL)
 #define ZK_DEFAULT_TIMEZONE_HOURS 8
 #define ZK_SECONDS_PER_HOUR 3600L
 #define ZK_SECONDS_PER_DAY 86400L
 #define ZK_TIME_SYNC_THRESHOLD_SECONDS 30L
+#define ZK_OTA_STATIC_ASSERT_CONCAT_(a, b) a##b
+#define ZK_OTA_STATIC_ASSERT_CONCAT(a, b) ZK_OTA_STATIC_ASSERT_CONCAT_(a, b)
+#define ZK_OTA_STATIC_ASSERT(cond) typedef char ZK_OTA_STATIC_ASSERT_CONCAT(zk_ota_static_assert_, __LINE__)[(cond) ? 1 : -1]
 static void zk_apply_brightness(int brightness);
+cJSON *zk_cjson_create_tx_object(const char *context);
+cJSON *zk_create_root_from_header(const zk_message_header_t *header, int with_er, int er_code);
+int zk_send_json_root(cJSON *root, const char *topic);
 
 typedef struct
 {
@@ -94,6 +109,39 @@ typedef enum
     ZK_OTA_ACK_STATE_SEND,
     ZK_OTA_ACK_STATE_WAIT_PUBLISH,
 } zk_ota_ack_state_en;
+
+typedef enum
+{
+    ZK_OTA_REPORT_STATE_EMPTY = 0,
+    ZK_OTA_REPORT_STATE_PENDING = 1,
+    ZK_OTA_REPORT_STATE_VERIFIED = 2,
+    ZK_OTA_REPORT_STATE_REPORTED = 3,
+} zk_ota_report_state_en;
+
+typedef enum
+{
+    ZK_OTA_SUCCESS_REPORT_IDLE = 0,
+    ZK_OTA_SUCCESS_REPORT_WAIT_PUBLISH,
+} zk_ota_success_report_state_en;
+
+typedef struct
+{
+    u32 magic;
+    u16 version;
+    u16 size;
+    u32 seq;
+    u32 state;
+    char ota_id[8];
+    u32 url_hash;
+    u32 image_checksum;
+    u32 image_size;
+    u16 device_type;
+    u16 reserved;
+    u32 retry_count;
+    u32 checksum;
+} zk_ota_report_flash_record_t;
+
+ZK_OTA_STATIC_ASSERT((ZK_OTA_REPORT_FLASH_OFFSET + sizeof(zk_ota_report_flash_record_t)) <= FLASH_PAGE_SIZE);
 
 static zk_response_pending_item_t zk_response_queue[ZK_RESPONSE_QUEUE_SIZE];
 static u8 zk_response_queue_head = 0;
@@ -110,6 +158,330 @@ static u32 zk_ota_ack_pub_fail_count = 0;
 static u32 zk_ota_ack_pub_timeout_count = 0;
 static u32 zk_ota_ack_tick = 0;
 static u8 zk_ota_ack_retry_count = 0;
+static zk_ota_success_report_state_en zk_ota_success_report_state = ZK_OTA_SUCCESS_REPORT_IDLE;
+static zk_ota_report_flash_record_t zk_ota_success_report_record;
+static u32 zk_ota_success_pub_success_count = 0;
+static u32 zk_ota_success_pub_fail_count = 0;
+static u32 zk_ota_success_pub_timeout_count = 0;
+static u32 zk_ota_success_report_tick = 0;
+static u32 zk_ota_success_retry_tick = 0;
+
+static u16 zk_ota_report_checksum(zk_ota_report_flash_record_t *record)
+{
+    return crc16_modbus_get((unsigned char *)record,
+                            sizeof(*record) - sizeof(record->checksum));
+}
+
+static u32 zk_ota_report_url_hash(const char *text)
+{
+    u32 hash;
+
+    hash = 2166136261UL;
+    if (text == NULL)
+    {
+        return hash;
+    }
+    while (*text != '\0')
+    {
+        hash ^= (u8)(*text);
+        hash *= 16777619UL;
+        ++text;
+    }
+    return hash;
+}
+
+static boolean_en zk_ota_report_record_valid(zk_ota_report_flash_record_t *record)
+{
+    if (record == NULL)
+    {
+        return BOOL_FALSE;
+    }
+    if (record->magic != ZK_OTA_REPORT_FLASH_MAGIC ||
+        record->version != ZK_OTA_REPORT_FLASH_VERSION ||
+        record->size != sizeof(*record))
+    {
+        return BOOL_FALSE;
+    }
+    return ((u16)record->checksum == zk_ota_report_checksum(record)) ? BOOL_TRUE : BOOL_FALSE;
+}
+
+static boolean_en zk_ota_report_read_record(u32 addr,
+                                            zk_ota_report_flash_record_t *record)
+{
+    hw_flash_read_bytes(addr, (u8 *)record, sizeof(*record));
+    return zk_ota_report_record_valid(record);
+}
+
+static boolean_en zk_ota_report_read_latest(zk_ota_report_flash_record_t *record)
+{
+    zk_ota_report_flash_record_t main_record;
+    zk_ota_report_flash_record_t backup_record;
+    zk_ota_report_flash_record_t *selected;
+    boolean_en main_ok;
+    boolean_en backup_ok;
+
+    main_ok = zk_ota_report_read_record(ZK_OTA_REPORT_FLASH_MAIN_ADDR, &main_record);
+    backup_ok = zk_ota_report_read_record(ZK_OTA_REPORT_FLASH_BACKUP_ADDR, &backup_record);
+    selected = NULL;
+    if (main_ok == BOOL_TRUE && backup_ok == BOOL_TRUE)
+    {
+        selected = (main_record.seq >= backup_record.seq) ? &main_record : &backup_record;
+    }
+    else if (main_ok == BOOL_TRUE)
+    {
+        selected = &main_record;
+    }
+    else if (backup_ok == BOOL_TRUE)
+    {
+        selected = &backup_record;
+    }
+    if (selected == NULL)
+    {
+        return BOOL_FALSE;
+    }
+    if (record != NULL)
+    {
+        memcpy(record, selected, sizeof(*record));
+    }
+    return BOOL_TRUE;
+}
+
+static boolean_en zk_ota_report_write_record(u32 addr,
+                                             zk_ota_report_flash_record_t *record)
+{
+    hw_flash_write_bytes(addr, (u8 *)record, sizeof(*record));
+    return user_flash_check(addr, (u8 *)record, sizeof(*record));
+}
+
+static boolean_en zk_ota_report_store(zk_ota_report_flash_record_t *record)
+{
+    zk_ota_report_flash_record_t latest;
+    u32 next_seq;
+    boolean_en main_ok;
+    boolean_en backup_ok;
+
+    if (record == NULL)
+    {
+        return BOOL_FALSE;
+    }
+    next_seq = 1U;
+    if (zk_ota_report_read_latest(&latest) == BOOL_TRUE)
+    {
+        next_seq = latest.seq + 1U;
+        if (next_seq == 0U)
+        {
+            next_seq = 1U;
+        }
+    }
+    record->magic = ZK_OTA_REPORT_FLASH_MAGIC;
+    record->version = ZK_OTA_REPORT_FLASH_VERSION;
+    record->size = (u16)sizeof(*record);
+    record->seq = next_seq;
+    record->checksum = zk_ota_report_checksum(record);
+    main_ok = zk_ota_report_write_record(ZK_OTA_REPORT_FLASH_MAIN_ADDR, record);
+    backup_ok = zk_ota_report_write_record(ZK_OTA_REPORT_FLASH_BACKUP_ADDR, record);
+    return (main_ok == BOOL_TRUE || backup_ok == BOOL_TRUE) ? BOOL_TRUE : BOOL_FALSE;
+}
+
+void zk_ota_report_mark_pending(const char *ota_id, const char *url)
+{
+    zk_ota_report_flash_record_t record;
+
+    zk_ota_success_report_state = ZK_OTA_SUCCESS_REPORT_IDLE;
+    zk_ota_success_retry_tick = Timer_GetTickCount();
+    memset(&record, 0, sizeof(record));
+    record.state = ZK_OTA_REPORT_STATE_PENDING;
+    record.url_hash = zk_ota_report_url_hash(url);
+    if (ota_id != NULL)
+    {
+        strncpy(record.ota_id, ota_id, sizeof(record.ota_id) - 1);
+    }
+    if (zk_ota_report_store(&record) == BOOL_TRUE)
+    {
+        OTA_LOGI("ota report pending stored id=%s url_hash=0x%08x\r\n",
+                 record.ota_id,
+                 (unsigned int)record.url_hash);
+    }
+    else
+    {
+        OTA_LOGW("ota report pending store failed id=%s\r\n", record.ota_id);
+    }
+}
+
+void zk_ota_report_mark_verified(u32 checksum, u32 size, u16 device_type)
+{
+    zk_ota_report_flash_record_t record;
+
+    if (zk_ota_report_read_latest(&record) != BOOL_TRUE ||
+        (record.state != ZK_OTA_REPORT_STATE_PENDING &&
+         record.state != ZK_OTA_REPORT_STATE_VERIFIED))
+    {
+        memset(&record, 0, sizeof(record));
+        record.state = ZK_OTA_REPORT_STATE_PENDING;
+        strncpy(record.ota_id, zk_last_ota_id, sizeof(record.ota_id) - 1);
+    }
+    record.state = ZK_OTA_REPORT_STATE_VERIFIED;
+    record.image_checksum = checksum;
+    record.image_size = size;
+    record.device_type = device_type;
+    if (zk_ota_report_store(&record) == BOOL_TRUE)
+    {
+        OTA_LOGI("ota report verified stored id=%s checksum=0x%08x size=%u type=0x%04x\r\n",
+                 record.ota_id,
+                 (unsigned int)checksum,
+                 (unsigned int)size,
+                 (unsigned int)device_type);
+    }
+    else
+    {
+        OTA_LOGW("ota report verified store failed id=%s\r\n", record.ota_id);
+    }
+}
+
+static boolean_en zk_ota_report_app_matches(zk_ota_report_flash_record_t *record)
+{
+    u32 app_checksum;
+    u32 app_size;
+    u16 app_device_type;
+
+    if (record == NULL || record->state != ZK_OTA_REPORT_STATE_VERIFIED)
+    {
+        return BOOL_FALSE;
+    }
+    app_checksum = *((__IO u32 *)(APROM_STARTADDR + ADDR_CHECKSUM_OFFSET));
+    app_size = *((__IO u32 *)(APROM_STARTADDR + ADDR_SIZE_OFFSET)) & 0x00FFFFFFU;
+    app_device_type = *((__IO u16 *)(APROM_STARTADDR + ADDR_TYPE_OFFSET));
+    if (app_checksum == record->image_checksum &&
+        app_size == record->image_size &&
+        app_device_type == record->device_type)
+    {
+        return BOOL_TRUE;
+    }
+    return BOOL_FALSE;
+}
+
+static int zk_publish_ota_success_now(const char *ota_id)
+{
+    zk_message_header_t header;
+    cJSON *root;
+    cJSON *dt;
+    const char *topic;
+
+    if (ota_id == NULL || ota_id[0] == '\0')
+    {
+        return -1;
+    }
+    topic = zk_mqtt_get_config() != NULL ? zk_mqtt_cfg.pub_upgrade_topic : NULL;
+    if (topic == NULL || topic[0] == '\0')
+    {
+        return -1;
+    }
+    zk_fill_message_header(&header, ZK_SV_OTA, ota_id, ZK_CT_PROGRESS);
+    root = zk_create_root_from_header(&header, 0, 0);
+    if (root == NULL)
+    {
+        return -1;
+    }
+    dt = zk_cjson_create_tx_object("DT");
+    if (dt == NULL)
+    {
+        cJSON_Delete(root);
+        return -1;
+    }
+    cJSON_AddNumberToObject(dt, "progress", (double)ZK_OTA_REPORT_SUCCESS_PROGRESS);
+    cJSON_AddItemToObject(root, "DT", dt);
+    if (zk_send_json_root(root, topic) != 0)
+    {
+        cJSON_Delete(root);
+        return -1;
+    }
+    cJSON_Delete(root);
+    return 0;
+}
+
+static void zk_ota_success_report_retry_later(uint32 now)
+{
+    zk_ota_success_retry_tick = now;
+    zk_ota_success_report_state = ZK_OTA_SUCCESS_REPORT_IDLE;
+    if (zk_ota_success_report_record.retry_count < 0xFFFFFFFFUL)
+    {
+        zk_ota_success_report_record.retry_count++;
+        (void)zk_ota_report_store(&zk_ota_success_report_record);
+    }
+}
+
+static boolean_en zk_ota_success_report_process(uint32 now)
+{
+    zk_ota_report_flash_record_t record;
+
+    if (zk_ota_success_report_state == ZK_OTA_SUCCESS_REPORT_WAIT_PUBLISH)
+    {
+        if (nb_mqtt_get_publish_success_count() != zk_ota_success_pub_success_count)
+        {
+            zk_ota_success_report_record.state = ZK_OTA_REPORT_STATE_REPORTED;
+            if (zk_ota_report_store(&zk_ota_success_report_record) == BOOL_TRUE)
+            {
+                OTA_LOGI("ota success report published id=%s\r\n",
+                         zk_ota_success_report_record.ota_id);
+            }
+            else
+            {
+                OTA_LOGW("ota success report published but clear failed id=%s\r\n",
+                         zk_ota_success_report_record.ota_id);
+            }
+            zk_ota_success_report_state = ZK_OTA_SUCCESS_REPORT_IDLE;
+            return BOOL_TRUE;
+        }
+        if (nb_mqtt_get_publish_fail_count() != zk_ota_success_pub_fail_count ||
+            nb_mqtt_get_publish_timeout_count() != zk_ota_success_pub_timeout_count ||
+            Timer_PassedDelay(zk_ota_success_report_tick, ZK_OTA_REPORT_PUBLISH_TIMEOUT_MS))
+        {
+            OTA_LOGW("ota success report publish retry id=%s\r\n",
+                     zk_ota_success_report_record.ota_id);
+            zk_ota_success_report_retry_later(now);
+            return BOOL_TRUE;
+        }
+        return BOOL_TRUE;
+    }
+
+    if (Timer_PassedDelay(zk_ota_success_retry_tick, ZK_OTA_REPORT_RETRY_DELAY_MS) == BOOL_FALSE)
+    {
+        return BOOL_FALSE;
+    }
+    if (zk_ota_report_read_latest(&record) != BOOL_TRUE ||
+        record.state != ZK_OTA_REPORT_STATE_VERIFIED)
+    {
+        return BOOL_FALSE;
+    }
+    if (zk_ota_report_app_matches(&record) != BOOL_TRUE)
+    {
+        OTA_LOGW("ota success report waiting app match id=%s checksum=0x%08x size=%u type=0x%04x\r\n",
+                 record.ota_id,
+                 (unsigned int)record.image_checksum,
+                 (unsigned int)record.image_size,
+                 (unsigned int)record.device_type);
+        zk_ota_success_retry_tick = now;
+        return BOOL_FALSE;
+    }
+    if (pubsend_state_idle() == BOOL_FALSE)
+    {
+        return BOOL_TRUE;
+    }
+    if (zk_publish_ota_success_now(record.ota_id) == 0)
+    {
+        memcpy(&zk_ota_success_report_record, &record, sizeof(record));
+        zk_ota_success_pub_success_count = nb_mqtt_get_publish_success_count();
+        zk_ota_success_pub_fail_count = nb_mqtt_get_publish_fail_count();
+        zk_ota_success_pub_timeout_count = nb_mqtt_get_publish_timeout_count();
+        zk_ota_success_report_tick = now;
+        zk_ota_success_report_state = ZK_OTA_SUCCESS_REPORT_WAIT_PUBLISH;
+        OTA_LOGI("ota success report started id=%s\r\n", record.ota_id);
+        return BOOL_TRUE;
+    }
+    memcpy(&zk_ota_success_report_record, &record, sizeof(record));
+    zk_ota_success_report_retry_later(now);
+    return BOOL_TRUE;
+}
 
 static void *ZK_Cjson_Malloc(size_t size)
 {
@@ -1992,6 +2364,11 @@ void zk_mqtt_session_process(void)
             return;
         }
 
+        if (zk_ota_success_report_process(now) == BOOL_TRUE)
+        {
+            return;
+        }
+
         if (zk_ota_error_pending == BOOL_TRUE)
         {
             if (zk_publish_ota_error_now(zk_ota_error_code) == 0)
@@ -2739,6 +3116,7 @@ boolean_en zk_handle_ota_message(cJSON *root, const zk_message_header_t *header)
     strncpy(zk_last_ota_id, header->id, sizeof(zk_last_ota_id) - 1);
     zk_last_ota_id[sizeof(zk_last_ota_id) - 1] = '\0';
     zk_ota_set_url(url->valuestring);
+    zk_ota_report_mark_pending(zk_last_ota_id, url->valuestring);
     memset(firm_name_buffer, 0, 256);
     strncpy(firm_name_buffer, OTA_LOCAL_FIRMWARE_NAME, 255);
     OTA_LOGI("cmd received id=%s url=%s local=%s\r\n", zk_last_ota_id, url->valuestring, firm_name_buffer);

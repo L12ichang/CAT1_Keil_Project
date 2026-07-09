@@ -190,6 +190,8 @@ void zk_notify_state_changed(void);
 void zk_apply_plan_brightness(int brightness);
 int zk_publish_ota_progress(uint32 progress);
 int zk_publish_ota_error(int err_code);
+void zk_ota_report_mark_pending(const char *ota_id, const char *url);
+void zk_ota_report_mark_verified(u32 checksum, u32 size, u16 device_type);
 const char *zk_get_ota_url(void);
 
 #endif
