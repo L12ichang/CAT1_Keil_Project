@@ -15,6 +15,7 @@
 #include "danger_current_check.h"
 #include "sys_pow_drop_check.h"
 #include "sys_temp_over_protect.h"
+#include "factory_user_data.h"
 #include "sys_data.h"
 #include "ntc.h"
 #include "main.h"
@@ -617,6 +618,28 @@ static void zk_sync_online_period_timers(uint32 now)
 void zk_reset_config_period_timers(void)
 {
     zk_sync_online_period_timers(Timer_GetTickCount());
+}
+
+static boolean_en zk_is_over_temperature_protecting(void)
+{
+    int current_temp;
+
+    if (INNRE_TEMP_PRO_EN == 0U || INNRE_TEMP_PRO <= 0)
+    {
+        return BOOL_FALSE;
+    }
+    if (driver_temperarure_warn != 0U ||
+        sys_temp_over_protect_state == SYS_TEMP_OVER_PROTECT_STATE_OVER)
+    {
+        return BOOL_TRUE;
+    }
+    if (Ntctemp.Ntctemp <= 0)
+    {
+        return BOOL_FALSE;
+    }
+
+    current_temp = (Ntctemp.Ntctemp + 5) / 10;
+    return (current_temp >= (int)INNRE_TEMP_PRO) ? BOOL_TRUE : BOOL_FALSE;
 }
 
 static int zk_get_run_status_code(void)
@@ -1394,6 +1417,10 @@ void zk_add_run_status_group(cJSON *dt_root)
     }
 
     cJSON_AddItemToArray(sts, cJSON_CreateNumber(zk_get_run_status_code()));
+    if (zk_is_over_temperature_protecting() == BOOL_TRUE)
+    {
+        cJSON_AddItemToArray(sts, cJSON_CreateNumber(51));
+    }
     cJSON_AddItemToArray(bri, cJSON_CreateNumber(zk_get_current_brightness()));
     cJSON_AddItemToObject(run_status, "sts", sts);
     cJSON_AddItemToObject(run_status, "bri", bri);

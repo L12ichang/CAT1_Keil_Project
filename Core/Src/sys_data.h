@@ -172,7 +172,7 @@ typedef struct
   //OTA使能及相关标志
     u8  fa_Parambuf[128];
     u32 couter;
-    u32 ac_EnergyP;     //累积电能 Wh
+    u32 ac_EnergyP;     //累积电能 0.01Wh
     u8 lamp_power;  //0-100
     u8 day; //统计天数
     u16 today_Energy; //0.1wh

@@ -12,10 +12,8 @@
 #include "sys_pwm.h"
 #include "factory_user_data.h"
 
-#define OUTPUT_CURRENT_GAIN_X100   1011U
-#define OUTPUT_CURRENT_SCALE_NUM   100000U
 
-
+     
      
      
 #define DIM_STATE_0   0
@@ -485,8 +483,7 @@ void Out_noload_detect_fsm(void)                      //从直流PLC移植    �
 输出返回：无
 *************************************/
 void error_report_process(void)
-{
-    u32 current_denominator;
+{ 
 
     if(timer_ad==0)
     {
@@ -499,8 +496,7 @@ void error_report_process(void)
                }
                else
                {
-                   current_denominator = (u32)OUTPUT_CUR_SENSOR * OUTPUT_CURRENT_GAIN_X100;
-                   Io_value = (((u32)ADC_Value4 * OUTPUT_CURRENT_SCALE_NUM) + (current_denominator / 2U)) / current_denominator;      //  电流单位mA     参考电压3.3V    100毫欧/10.11倍    100W以下
+                   Io_value = ((u32)ADC_Value4*100000U)/((u32)OUTPUT_CUR_SENSOR*834U);      //  电流单位mA     参考电压3.3V    50毫欧/8.3333倍    100W以下
                }
 
   

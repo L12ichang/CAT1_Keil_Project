@@ -119,11 +119,16 @@ static u32  energy_tmp = 0; //有功电能， 断电归0     单位 0.01WH
 u8  ac_pf;
 static u16 _timer=0;
 static u16 minute=0;
+static u32 bl0942_energy_0_01wh_remainder = 0;
 static u32 bl0942_last_uart_error_count = 0;
+
+#define SYS_BL0942_ENERGY_ACCUM_DIVISOR 60U
 
    u8 bl0942data_ready;
 void sys_bl0942_timer(void)
 {
+    u32 energy_accum;
+
     if(_timer_for_read > 0)
     {
         --_timer_for_read;
@@ -132,10 +137,13 @@ void sys_bl0942_timer(void)
     if(_timer > 6000)//满一分钟
     {
           _timer=0;
-        
-        total_power_this_time+=(u32)ac_powerpa*10/60;//(mWH/60)    //上报以0.01WH单位
-        
-       // printf("total_power_this_time=%dmWH\n",(u16)total_power_this_time);
+
+        /* ac_powerpa is 0.01W. One minute of energy in 0.01Wh is ac_powerpa / 60. */
+        energy_accum = (u32)ac_powerpa + bl0942_energy_0_01wh_remainder;
+        total_power_this_time += energy_accum / SYS_BL0942_ENERGY_ACCUM_DIVISOR;
+        bl0942_energy_0_01wh_remainder = energy_accum % SYS_BL0942_ENERGY_ACCUM_DIVISOR;
+
+       // printf("total_power_this_time=%d(0.01Wh)\n",(u16)total_power_this_time);
         
         if(  ++ minute>=720)//每12小时(720分钟)存一次累积能耗到Flash
         {
