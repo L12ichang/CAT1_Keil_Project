@@ -50,7 +50,9 @@
 #define OTA_LOCAL_UFS_PATH_PREFIX           "UFS:"
 #define OTA_QHTTPREADFILE_ERR_MEMORY_ALLOC  729
 #define OTA_RAW_LOG_LINE_MAX                512U
+#ifndef OTA_RAW_HEX_LOG_ENABLE
 #define OTA_RAW_HEX_LOG_ENABLE              0U
+#endif
 #define OTA_RAW_TCP_CONTEXT_ID              1U
 #define OTA_RAW_TCP_CONNECT_ID              0U
 #define OTA_RAW_TCP_QIRD_LEN                512U

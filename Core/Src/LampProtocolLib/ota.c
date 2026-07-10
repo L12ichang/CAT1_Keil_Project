@@ -62,7 +62,9 @@ static int ota_http_status_code=0;
 #endif
 static u32 ota_http_content_length=0;
 static u8 ota_http_content_length_present=0;
+#if APP_OTA_LOG_ENABLE
 static int ota_last_readfile_err_code=0;
+#endif
 #if OTA_USE_QHTTPREADFILE_UFS
 static u8 ota_readfile_command_ok_logged=0;
 static u8 ota_diag_qflst_found=0;
@@ -98,7 +100,9 @@ static u32 ota_stream_last_rx_tick=0;
 #if !OTA_RAW_TCP_STREAM_DEBUG
 static u32 ota_stream_last_wait_log=0;
 #endif
+#if APP_OTA_LOG_ENABLE
 static u32 ota_stream_start_drop_count=0;
+#endif
 typedef enum
 {
     OTA_RAW_HTTP_HEADER,
@@ -133,10 +137,14 @@ static u32 ota_raw_http_chunk_size=0;
 static u8 ota_raw_http_chunk_ext=0;
 static u8 ota_raw_http_header_last4[4];
 static u8 ota_raw_http_header_last_pos=0;
+#if APP_OTA_LOG_ENABLE
 static int ota_raw_http_status_code=0;
+#endif
 static u8 ota_raw_http_status_present=0;
 static u8 ota_raw_body_done=0;
+#if APP_OTA_LOG_ENABLE
 static u8 ota_raw_socket_closed=0;
+#endif
 static u8 ota_raw_close_success=0;
 static u32 ota_raw_total_timer=0;
 static u32 ota_raw_idle_timer=0;
@@ -399,7 +407,9 @@ static void ota_raw_http_reset(void)
     ota_raw_http_chunk_size = 0;
     ota_raw_http_chunk_ext = 0;
     ota_raw_body_done = 0;
+#if APP_OTA_LOG_ENABLE
     ota_raw_socket_closed = 0;
+#endif
     ota_raw_close_success = 0;
     ota_raw_qisend_line_pos = 0;
     ota_raw_prompt_active = 0;
@@ -409,7 +419,9 @@ static void ota_raw_http_reset(void)
     ota_raw_prompt_tail_pos = 0;
     ota_raw_qird_remaining = 0;
     ota_raw_qird_zero_count = 0;
+#if APP_OTA_LOG_ENABLE
     ota_raw_http_status_code = 0;
+#endif
     ota_raw_http_status_present = 0;
     ota_raw_http_header_last_pos = 0;
     memset(ota_raw_qisend_line, 0, sizeof(ota_raw_qisend_line));
@@ -459,7 +471,9 @@ static void ota_raw_http_parse_header_line(const char *line)
             return;
         }
         status = (int)value;
+#if APP_OTA_LOG_ENABLE
         ota_raw_http_status_code = status;
+#endif
         ota_raw_http_status_present = 1U;
         if (status != 200)
         {
@@ -1489,7 +1503,9 @@ static boolean_en ota_stream_erase_backup_area(void)
     u32 page_error;
     u32 addr;
     u32 end_next;
+#if APP_OTA_LOG_ENABLE
     u32 page_count;
+#endif
 
     end_next = OTABAKROM_ENDADDR + 1U;
     if ((OTABAKROM_STARTADDR % FLASH_PAGE_SIZE) != 0U ||
@@ -1508,7 +1524,9 @@ static boolean_en ota_stream_erase_backup_area(void)
     ota_stream_program_pending = 0U;
     ota_stream_program_len = 0U;
     ota_stream_program_addr = 0U;
+#if APP_OTA_LOG_ENABLE
     page_count = OTA_STREAM_BACKUP_CAPACITY / FLASH_PAGE_SIZE;
+#endif
     OTA_LOGI("stream backup erase start addr=0x%08x size=%u pages=%u\r\n",
              (unsigned int)OTABAKROM_STARTADDR,
              (unsigned int)OTA_STREAM_BACKUP_CAPACITY,
@@ -1748,7 +1766,9 @@ static void ota_stream_reset(void)
     ota_stream_last_rx_tick = Timer_GetTickCount();
     ota_stream_last_wait_log = ota_stream_last_rx_tick;
 #endif
+#if APP_OTA_LOG_ENABLE
     ota_stream_start_drop_count = usart_queue_drop_count;
+#endif
 
     OTA_LOGI("stream backup=0x%08x cap=%u app_max=%u qdrop=%u\r\n",
              (unsigned int)OTABAKROM_STARTADDR,
@@ -2059,7 +2079,9 @@ void  _4G_OTA_machine_star(void)
 #endif
        ota_http_content_length=0;
        ota_http_content_length_present=0;
+#if OTA_USE_QHTTPREADFILE_UFS && APP_OTA_LOG_ENABLE
        ota_last_readfile_err_code=0;
+#endif
        ota_raw_host[0]='\0';
        ota_raw_path[0]='\0';
        ota_raw_port=80U;
@@ -2281,7 +2303,9 @@ void _4G_OTA_machine(void)
 
          case CONNECT_OTA_AT_RAW_QISEND:
                {
+#if OTA_RAW_QISEND_WITH_LEN || APP_OTA_LOG_ENABLE
                     u16 req_len;
+#endif
                     uint8 uart_ret;
                     int len;
                     int cmd_len;
@@ -2303,7 +2327,9 @@ void _4G_OTA_machine(void)
                         ota_raw_start_close("request_too_long", 0U);
                         break;
                     }
+#if OTA_RAW_QISEND_WITH_LEN || APP_OTA_LOG_ENABLE
                     req_len = (u16)len;
+#endif
 #if OTA_RAW_QISEND_WITH_LEN
                     cmd_len = snprintf(ota_raw_qisend_cmd,
                                        sizeof(ota_raw_qisend_cmd),
@@ -2482,7 +2508,9 @@ void _4G_OTA_machine(void)
                     ota_log_raw_rx(stringBuf, recvLength);
                     if (strstr((const char *)stringBuf, "+QIURC: \"closed\"") != NULL)
                     {
+#if APP_OTA_LOG_ENABLE
                         ota_raw_socket_closed = 1U;
+#endif
                     }
                     ota_clear_rx_buffer();
               }
@@ -2526,7 +2554,9 @@ void _4G_OTA_machine(void)
                         }
                         if (strstr((const char *)stringBuf, "+QIURC: \"closed\"") != NULL)
                         {
+#if APP_OTA_LOG_ENABLE
                             ota_raw_socket_closed = 1U;
+#endif
                         }
                         if (strstr((const char *)stringBuf, "ERROR") != NULL)
                         {
@@ -3179,7 +3209,9 @@ void _4G_OTA_machine(void)
                         {
                             OTA_LOGI("qhttpreadfile result err=%d\r\n", readfile_err);
                             OTA_LOGI("module fs save result err=%d\r\n", readfile_err);
+#if APP_OTA_LOG_ENABLE
                             ota_last_readfile_err_code = readfile_err;
+#endif
                             if (readfile_err != 0)
                             {
                                 OTA_LOGE("qhttpreadfile result err=%d\r\n", readfile_err);

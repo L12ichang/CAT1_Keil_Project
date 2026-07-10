@@ -4,7 +4,9 @@ param(
   [string]$Interface = "SWD",
   [int]$Speed = 4000,
   [Parameter(Mandatory = $true)][string]$Image,
-  [string]$Address = ""
+  [string]$Address = "",
+  [ValidateSet("ResetPin", "Software", "None")][string]$PostFlashReset = "ResetPin",
+  [int]$ProbeAfterRunMs = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -34,17 +36,41 @@ if ($ext -eq ".bin") {
   $verifyCommand = ""
 }
 
+$resetTypeCommand = ""
+if ($PostFlashReset -eq "ResetPin") {
+  $resetTypeCommand = "RSetType 2"
+}
+
+$postFlashCommands = ""
+if ($PostFlashReset -ne "None") {
+  $postFlashCommands = @"
+r
+g
+"@
+  if ($ProbeAfterRunMs -gt 0) {
+    $postFlashCommands += @"
+Sleep $ProbeAfterRunMs
+h
+regs
+mem32 0xE000ED08 1
+mem32 0xE000ED28 1
+mem32 0xE000ED2C 1
+mem32 0x40021024 1
+"@
+  }
+}
+
 $script = @"
 device $Device
 if $Interface
 speed $Speed
 connect
+$resetTypeCommand
 r
 h
 $loadCommand
 $verifyCommand
-r
-g
+$postFlashCommands
 exit
 "@
 

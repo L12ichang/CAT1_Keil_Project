@@ -1,4 +1,7 @@
 #include "zk_sunriset.h"
+
+#if ZK_ENABLE_SUNRISE_PLAN
+
 #include "zk_property.h"
 #include "sys_aip1302.h"
 #include <math.h>
@@ -191,3 +194,5 @@ int zk_sunriset_get(int *sr_minute, int *ss_minute)
 
     return ret;
 }
+
+#endif

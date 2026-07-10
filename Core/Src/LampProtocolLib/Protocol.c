@@ -6,6 +6,9 @@
 #include "App.h"
 #include "hw_gateway.h"
 #include "net_dim.h"
+
+#if LEGACY_DATAPOINT_PROTOCOL_ENABLE
+
 #define TCP_PROTOCOL_VERSION 0x01
 #define SEND_PACK_SIZE 255
 
@@ -577,3 +580,5 @@ uint8 *parseServerMessage(uint8 *pack, uint8 *msgType, uint8 *result)
 //    printf("return pack + 4;=%c\n",pack[3]);    
     return pack + 4;
 }
+
+#endif

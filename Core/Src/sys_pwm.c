@@ -22,7 +22,7 @@
 #if APP_PWM_DEBUG_ENABLE
 #define PWM_DBG(...) printf(__VA_ARGS__)
 #else
-#define PWM_DBG(...) do { if (0) { dma_printf(__VA_ARGS__); } } while (0)
+#define PWM_DBG(...) do {} while (0)
 #endif
 
 //#define SET_OUTCUR     sys_data.setcur
@@ -37,15 +37,22 @@ static u8 power_old; //第一次入网的时候才渐变，后面的不渐变，
 static u8 power_new;
 static u8 power_current;
 
+#if LEGACY_APP_PROCESS_ENABLE
 extern u32 fac_en_timer;
-extern u8  fa_test_EN; 
+extern u8  fa_test_EN;
+#else
+u32 fac_en_timer;
+u8  fa_test_EN;
+#endif
 
 
  void pwm_output(u8 persent)   //硬件输出
 {
      u16 pwm;
      u32 pwm_value;
+#if APP_PWM_DEBUG_ENABLE
      u8 init_persent = persent;
+#endif
 
       set_percent = persent;
       if( low_temp_detect_is_low(&pwm, persent) == BOOL_TRUE)
@@ -113,6 +120,7 @@ extern u8  fa_test_EN;
     PWM_DBG("  PWM_OFFSET     = %u\r\n", (u16)PWM_OFFSET);
     PWM_DBG("  PWM_USEFUL_RNG = %u\r\n", (u16)PWM_USEFUL_RANGE);
     PWM_DBG("  PWM_OUT_MAX    = %u\r\n", (u16)PWM_OUT_MAX);
+#if APP_PWM_DEBUG_ENABLE
     if (HWMAX_OUTCUR > 0 && fa_test_EN == 0)
     {
         u32 numerator   = (u32)persent * (u32)SET_OUTCUR * (u32)PWM_USEFUL_RANGE;
@@ -122,6 +130,7 @@ extern u8  fa_test_EN;
         PWM_DBG("  ratio(SET/HW)  = %lu / 1000\r\n",
                 ((u32)SET_OUTCUR * 1000U) / (u32)HWMAX_OUTCUR);
     }
+#endif
     PWM_DBG("  -> pwm_value   = %lu / %u\r\n", pwm_value, (u16)PWM_OUT_MAX);
     PWM_DBG("  -> duty        = %lu.%lu %%\r\n",
             (pwm_value * 100U) / PWM_OUT_MAX,

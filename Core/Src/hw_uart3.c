@@ -10,6 +10,8 @@
 #include "stm32f1xx_hal_gpio.h"
 #include <stdarg.h>
 
+#if APP_LOG_ENABLE || APP_OTA_LOG_ENABLE
+
 #define RCC_APB1Periph_USART3            ((uint32_t)0x00040000)
 #define RCC_APB2Periph_GPIOB             ((uint32_t)0x00000008)
 #define RCC_APB2Periph_AFIO              ((uint32_t)0x00000001)
@@ -199,3 +201,16 @@ void hw_uart3_process(void)
     //hw_uart3_dma_tx((uint8_t *)buffer, strlen(buffer));
 }
 
+#else
+
+int dma_printf(const char* format, ...)
+{
+    (void)format;
+    return 0;
+}
+
+void hw_uart3_dma_tx_complete(void)
+{
+}
+
+#endif

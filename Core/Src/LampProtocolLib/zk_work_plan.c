@@ -1,5 +1,7 @@
 #include "zk_work_plan.h"
+#if ZK_ENABLE_SUNRISE_PLAN
 #include "zk_sunriset.h"
+#endif
 #include "hw_flash.h"
 #include "sys_aip1302.h"
 #include <stdio.h>
@@ -990,11 +992,13 @@ static int zk_plan_find_current_match_for_cns(zk_plan_match_t *match, int cns)
     int job_index;
     int action_index;
     int effective_minute;   /* 实际执行分钟（考虑日出日落偏移后） */
+#if ZK_ENABLE_SUNRISE_PLAN
     int sr_minute;          /* 日出分钟（当日） */
     int ss_minute;          /* 日落分钟（当日） */
     int have_sun;           /* 日出日落计算是否有效 */
     int offset_minute;
     int offset_index;
+#endif
 
     if (match == NULL)
     {
@@ -1007,9 +1011,11 @@ static int zk_plan_find_current_match_for_cns(zk_plan_match_t *match, int cns)
     }
 
     /* 尝试获取日出日落（用于 type=2），失败时 type=2 跳过 */
+#if ZK_ENABLE_SUNRISE_PLAN
     sr_minute = 0;
     ss_minute = 0;
     have_sun = (zk_sunriset_get(&sr_minute, &ss_minute) == 0) ? 1 : 0;
+#endif
 
     zk_plan_current_datetime(&now);
     minute = (u16)(now.hour * 60U + now.min);
@@ -1033,11 +1039,18 @@ static int zk_plan_find_current_match_for_cns(zk_plan_match_t *match, int cns)
         {
             continue;
         }
+#if ZK_ENABLE_SUNRISE_PLAN
         /* type=2 且无法计算日出日落时跳过 */
         if (plan->type == 2 && have_sun == 0)
         {
             continue;
         }
+#else
+        if (plan->type == 2)
+        {
+            continue;
+        }
+#endif
 
         for (job_index = 0; job_index < plan->job_count && job_index < ZK_PLAN_MAX_JOBS; ++job_index)
         {
@@ -1052,6 +1065,7 @@ static int zk_plan_find_current_match_for_cns(zk_plan_match_t *match, int cns)
                 action = &job->actions[action_index];
 
                 /* 计算绝对分钟数：timetp=0 为时间点，timetp=1 为日落后时间段。 */
+#if ZK_ENABLE_SUNRISE_PLAN
                 if (plan->type == 2 && job->timetp == 1)
                 {
                     offset_minute = 0;
@@ -1062,6 +1076,7 @@ static int zk_plan_find_current_match_for_cns(zk_plan_match_t *match, int cns)
                     effective_minute = ss_minute + (int)plan->setoffset + offset_minute;
                 }
                 else
+#endif
                 {
                     effective_minute = action->minute;
                 }
@@ -1259,6 +1274,7 @@ static int zk_plan_build_nid_dt(cJSON *dt, void *ctx)
 
 static int zk_plan_build_sunriset_dt(cJSON *dt, void *ctx)
 {
+#if ZK_ENABLE_SUNRISE_PLAN
     cJSON *array;
     int sr_minute;
     int ss_minute;
@@ -1281,6 +1297,11 @@ static int zk_plan_build_sunriset_dt(cJSON *dt, void *ctx)
     cJSON_AddItemToArray(array, cJSON_CreateString(text));
     cJSON_AddItemToObject(dt, "sr", array);
     return 0;
+#else
+    (void)dt;
+    (void)ctx;
+    return -1;
+#endif
 }
 
 static int zk_plan_build_record_dt(cJSON *dt, void *ctx)

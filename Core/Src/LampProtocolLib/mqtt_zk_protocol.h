@@ -59,7 +59,9 @@
 #define ZK_CJSON_POOL_SIZE      8192
 #define ZK_CJSON_RX_POOL_SIZE   4096
 #define ZK_CJSON_TX_POOL_SIZE   4096
+#ifndef ZK_PROTOCOL_ONLY
 #define ZK_PROTOCOL_ONLY        1
+#endif
 #define ZK_FLASH_SAVE_ERROR     99
 
 typedef enum

@@ -218,14 +218,18 @@ void DMA1_Channel1_IRQHandler(void)
 
   /* USER CODE END DMA1_Channel1_IRQn 1 */
 }
+#if APP_LOG_ENABLE || APP_OTA_LOG_ENABLE
 extern DMA_HandleTypeDef hdma_usart3_tx;
+#endif
 
 void DMA1_Channel2_IRQHandler(void)
 {
   /* USER CODE BEGIN DMA1_Channel2_IRQn 0 */
 
   /* USER CODE END DMA1_Channel2_IRQn 0 */
+#if APP_LOG_ENABLE || APP_OTA_LOG_ENABLE
   HAL_DMA_IRQHandler(&hdma_usart3_tx);
+#endif
   /* USER CODE BEGIN DMA1_Channel2_IRQn 1 */
 
   /* USER CODE END DMA1_Channel2_IRQn 1 */

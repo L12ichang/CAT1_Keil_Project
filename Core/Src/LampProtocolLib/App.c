@@ -21,6 +21,8 @@
 #include "sys_Vo_Io.h"
 #include "ota.h"
 
+#if LEGACY_APP_PROCESS_ENABLE
+
 extern  u16  loginfirst_timeout_set;
 extern u8 driver_temperarure_warn;
 static  u8 longin_upload_flag=0;
@@ -623,3 +625,5 @@ void appProcess(void)
         }
     } 
 }
+
+#endif

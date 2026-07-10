@@ -23,7 +23,7 @@
 ver 2. 修正了命令bug，原因是dali回来的数据没有crc检验。支持iap的同步头脉冲 。
 ver 3. 2022.12.7 dali时序兼容不了新唐，改回来。
 */
-#define     APP_VERSION         (u16)22
+#define     APP_VERSION         (u16)23
 
 #define xdata
 
@@ -61,10 +61,34 @@ ver 3. 2022.12.7 dali时序兼容不了新唐，改回来。
 #define APP_OTA_LOG_ENABLE 1
 #endif
 
+#ifndef ZK_ENABLE_SUNRISE_PLAN
+#define ZK_ENABLE_SUNRISE_PLAN 0
+#endif
+
+#ifndef BL0942_USE_FLOAT_XCAP_COMPENSATION
+#define BL0942_USE_FLOAT_XCAP_COMPENSATION 0
+#endif
+
+#ifndef ZK_PROTOCOL_ONLY
+#define ZK_PROTOCOL_ONLY 1
+#endif
+
+#ifndef LEGACY_DATAPOINT_PROTOCOL_ENABLE
+#define LEGACY_DATAPOINT_PROTOCOL_ENABLE 0
+#endif
+
+#ifndef LEGACY_APP_PROCESS_ENABLE
+#define LEGACY_APP_PROCESS_ENABLE 0
+#endif
+
+#ifndef LEGACY_ACTIVE_ENABLE
+#define LEGACY_ACTIVE_ENABLE 0
+#endif
+
 #if APP_LOG_ENABLE
 #define LOG_PRINT(...) dma_printf(__VA_ARGS__)
 #else
-#define LOG_PRINT(...) do { if (0) { dma_printf(__VA_ARGS__); } } while (0)
+#define LOG_PRINT(...) do {} while (0)
 #endif
 
 #define LOGE(...) LOG_PRINT("[E] " __VA_ARGS__)
@@ -87,7 +111,7 @@ ver 3. 2022.12.7 dali时序兼容不了新唐，改回来。
 #if APP_LOG_ENABLE
 #define printf(...) dma_printf(__VA_ARGS__)
 #else
-#define printf(...) do { if (0) { dma_printf(__VA_ARGS__); } } while (0)
+#define printf(...) do {} while (0)
 #endif
 
 

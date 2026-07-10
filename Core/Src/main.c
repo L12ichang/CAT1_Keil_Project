@@ -203,7 +203,9 @@ int main(void)
     MX_DMA_Init();
     MX_ADC1_Init();	
     HAL_ADCEx_Calibration_Start(&hadc1);// 2.ADCУ׼
+#if APP_LOG_ENABLE || APP_OTA_LOG_ENABLE
     hw_uart3_init();
+#endif
     hw_uart2_init();
     hw_uart1_init();
     hw_tim2_init();
@@ -247,7 +249,9 @@ int main(void)
         dim_level = 100;                    /* 同步调光状态，确保RunSts上报亮灯+100%亮度 */
         sys_pwm_fade_output(0, 100);        /* 上电默认满功率输出（不走zk_apply_brightness避免误触发变化上报） *///������������
     }
+#if APP_LOG_ENABLE || APP_OTA_LOG_ENABLE
     hw_uart3_process();
+#endif
     sys_tick_process();
     zk_runtime_counter_process();
   

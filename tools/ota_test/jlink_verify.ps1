@@ -3,9 +3,10 @@ param(
   [string]$Device = "STM32F103RC",
   [string]$Interface = "SWD",
   [int]$Speed = 4000,
-  [ValidateSet("ResetPin", "Software")][string]$ResetMode = "ResetPin",
-  [int]$RunMs = 12000,
-  [switch]$Probe
+  [Parameter(Mandatory = $true)][string]$Image,
+  [Parameter(Mandatory = $true)][string]$Address,
+  [ValidateSet("None", "ResetPin", "Software")][string]$ResetMode = "None",
+  [int]$ProbeAfterRunMs = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,15 +23,22 @@ if (-not $JLinkExe) {
   }
 }
 
+$resolvedImage = (Resolve-Path $Image).Path
 $resetTypeCommand = ""
 if ($ResetMode -eq "ResetPin") {
   $resetTypeCommand = "RSetType 2"
 }
 
-$probeCommands = ""
-if ($Probe) {
-  $probeCommands = @"
-Sleep $RunMs
+$postCommands = ""
+if ($ResetMode -ne "None") {
+  $postCommands = @"
+r
+g
+
+"@
+  if ($ProbeAfterRunMs -gt 0) {
+    $postCommands += @"
+Sleep $ProbeAfterRunMs
 h
 regs
 mem32 0xE000ED08 1
@@ -38,6 +46,7 @@ mem32 0xE000ED28 1
 mem32 0xE000ED2C 1
 mem32 0x40021024 1
 "@
+  }
 }
 
 $script = @"
@@ -46,14 +55,14 @@ if $Interface
 speed $Speed
 connect
 $resetTypeCommand
-r
-g
-$probeCommands
+h
+verifybin $resolvedImage,$Address
+$postCommands
 exit
 "@
 
 $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
-$scriptPath = Join-Path $logDir "jlink_reset_$stamp.jlink"
-$logPath = Join-Path $logDir "jlink_reset_$stamp.log"
+$scriptPath = Join-Path $logDir "jlink_verify_$stamp.jlink"
+$logPath = Join-Path $logDir "jlink_verify_$stamp.log"
 $script | Out-File -Encoding ascii -LiteralPath $scriptPath
 & $JLinkExe -CommanderScript $scriptPath 2>&1 | Tee-Object -FilePath $logPath

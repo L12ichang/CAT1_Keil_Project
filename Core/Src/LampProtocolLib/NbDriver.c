@@ -75,6 +75,7 @@ typedef enum
 } NB_ICCID_FAIL_REASON_EN;
 
 static NB_ICCID_FAIL_REASON_EN iccid_fail_reason = NB_ICCID_FAIL_NONE;
+#if APP_LOG_ENABLE
 static u8 iccid_last_digit_count = 0;
 
 static const char *nb_state_name(NB_STATE value)
@@ -118,9 +119,11 @@ static const char *connect_state_name(CONNECT_CONFIG_state_en value)
         default: return "UNKNOWN";
     }
 }
+#endif
 
 static void nb_trace_state_change(void)
 {
+#if APP_LOG_ENABLE
     static boolean_en inited = BOOL_FALSE;
     static NB_STATE last_nb_state = NB_STATE_POWER_DOWN;
     static CONNECT_CONFIG_state_en last_connect_state = CONNECT_CONFIG_STATE_IDLE;
@@ -151,6 +154,7 @@ static void nb_trace_state_change(void)
                nb_state_name(state));
         last_nb_state = state;
     }
+#endif
 }
 
  extern   boolean_en  _4g_reset_finish(void) ;
@@ -358,6 +362,7 @@ static u8 nb_at_command_max_attempts(void)
     return 5U;
 }
 
+#if APP_LOG_ENABLE
 static const char *nb_at_command_tag(void)
 {
     if (atcommand == 0)
@@ -398,13 +403,18 @@ static const char *nb_at_command_tag(void)
     }
     return "AT";
 }
+#endif
 
 static void send_AT_Command_machine_mark_failed(const char *reason)
 {
     sendcommand_failed = BOOL_TRUE;
+#if APP_LOG_ENABLE
     printf("[AT][E] %s failed reason=%s\n",
            nb_at_command_tag(),
            (reason != 0) ? reason : "unknown");
+#else
+    (void)reason;
+#endif
 }
 
 static boolean_en send_AT_Command_machine_failed(void)
@@ -465,6 +475,7 @@ static boolean_en nb_net_registered_for_mqtt(void)
     return BOOL_FALSE;
 }
 
+#if APP_LOG_ENABLE
 static const char *nb_iccid_fail_reason_name(void)
 {
     switch (iccid_fail_reason)
@@ -476,6 +487,7 @@ static const char *nb_iccid_fail_reason_name(void)
         default: return "unknown";
     }
 }
+#endif
 
 static void nb_set_default_iccid(void)
 {
@@ -589,7 +601,9 @@ static void clear_iccid_data(void)
     memset(simCardICCID, 0, sizeof(simCardICCID));
     iccid_ready = BOOL_FALSE;
     iccid_fail_reason = NB_ICCID_FAIL_NONE;
+#if APP_LOG_ENABLE
     iccid_last_digit_count = 0;
+#endif
 }
 
 static boolean_en nb_imei_is_ready(void)
@@ -652,7 +666,9 @@ static void capture_iccid_from_line(const u8 *line)
     u8 digit_count;
 
     digit_count = copy_digits_from_line(digits, sizeof(digits), line, 20);
+#if APP_LOG_ENABLE
     iccid_last_digit_count = digit_count;
+#endif
     if (digit_count >= 19)
     {
         memset(simCardICCID, 0, sizeof(simCardICCID));

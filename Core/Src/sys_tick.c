@@ -42,7 +42,9 @@ static volatile u32 sys_tick_max_lag_ticks = 0;
 
 extern void main_timer(void);
 extern void hw_tim4_cap1_timer(void);
+#if APP_LOG_ENABLE || APP_OTA_LOG_ENABLE
 extern void hw_uart3_timer(void);
+#endif
 
 /************************************
 功能描述：M0自带的24位定时器循环一周（233016us 72M主频）中断一次, 
@@ -128,7 +130,9 @@ void sys_timer_1ms(void)
         _timer = 0;
         buzzer_timer();
          main_timer();
+#if APP_LOG_ENABLE || APP_OTA_LOG_ENABLE
         hw_uart3_timer();
+#endif
         updateTimeTick(10);
     }
     

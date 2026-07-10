@@ -325,8 +325,10 @@ u16 sqrt_16(u32 M)
 
 #define PI        3.1415926f
 u64 isqrt64(u64 n);
+#if BL0942_USE_FLOAT_XCAP_COMPENSATION
 float sqrt_float(float num) ;
 float square(float num) ;
+#endif
 
 /* 
 i0 未校正前的电流， 单位A
@@ -335,6 +337,7 @@ f是交流频率 ,  单位HZ，通常是 50或者60
 cap电容值,单位 f 。 
 返回校正后的电流，单位A。
 */
+#if BL0942_USE_FLOAT_XCAP_COMPENSATION
 float get_xcap_current_creent(float i0, float pf, float Uac, float f, float cap)
 {
     return sqrt_float(square(i0*pf) + square((2.0f*PI*f*cap*Uac) + i0*sqrt_float(1.0f-pf*pf)));
@@ -351,6 +354,7 @@ float sqrt_float(float num)
     if (num < 0) return -1.0f;  // 负数返回-1表示错误
     return sqrtf(num);          // 使用标准库的sqrtf函数
 }
+#endif
 
 
 
@@ -652,21 +656,21 @@ void sys_bl0942_process(void)
                   }
                   else
                   {
- #if 0   // 普通容性无功补偿算法  占用0.5KROM 耗时53us
+#if !BL0942_USE_FLOAT_XCAP_COMPENSATION
            //extern  u32 sys_tick_get_tick(void);
                   // u32 t1=    sys_tick_get_tick();
-                 float  operation_tmp0;
+                  u32   operation_tmp0;
                   u32   operation_tmp1 ;
                   u32   operation_tmp2 ;
-                  float operation_tmp3 ;
+                  u32   operation_tmp3 ;
                   u32   operation_tmp33;
                   u16   operation_tmp4 ;
                   u32   operation_tmp5 ;
-                        operation_tmp0 =(float)(ac_pf)*ac_pf/10000;  //PF的平方
-                        operation_tmp1  =(u32)(operation_tmp0*ac_current*ac_current);   //(i*PF)平方
-                        operation_tmp2=(u32)((double)2*3.14*50*CX*ac_voltage_8209/(double)1000000);//(2*PI*Fin*CX*Vin)
-                        operation_tmp3  =(float)1-operation_tmp0;//1-PF平方
-                        operation_tmp33=(u32)(operation_tmp3*65536);
+                        operation_tmp0 = (u32)ac_pf * (u32)ac_pf;  // PF^2, scale 10000
+                        operation_tmp1 = (u32)(((u64)ac_current * (u64)ac_current * (u64)operation_tmp0) / 10000U);
+                        operation_tmp2 = (u32)(((u64)31416U * (u64)CX * (u64)ac_voltage_8209) / 100000000U);
+                        operation_tmp3 = (operation_tmp0 < 10000U) ? (10000U - operation_tmp0) : 0U;
+                        operation_tmp33=(u32)(((u64)operation_tmp3 * 65536U) / 10000U);
                         operation_tmp4  = sqrt_16( (u32)(operation_tmp33) ) ;//开1-PF平方
                         operation_tmp5=ac_current*operation_tmp4/256+operation_tmp2;//
                         Z_ac_current=(sqrt_16((operation_tmp1+operation_tmp5*operation_tmp5)*256))/16;//总耗时53us
@@ -684,7 +688,7 @@ void sys_bl0942_process(void)
                          printf("pingfang=%d\n",operation_tmp5); 
                          */
                     
-  #else    //公式调运算库  占用2.5KROM 耗时222us   
+#else    //公式调运算库  占用2.5KROM 耗时222us   
                      //   u32 t1=    sys_tick_get_tick();  
                           Z_ac_current=(u16)(get_xcap_current_creent( (float)ac_current/1000,(float)ac_pf/100, (float)ac_voltage_8209/10,(float)50,(float)CX/100/1000000)*1000);
                     
@@ -728,7 +732,7 @@ void sys_bl0942_process(void)
 
                  }
 
-  #endif
+#endif
                   }
 
                 //计量数据更新完一次
