@@ -75,6 +75,10 @@ static u32 ota_qflds_free_size=0;
 static u32 ota_qflds_total_size=0;
 static u8 ota_qflds_command_sent=0;
 #endif
+/* 原始流式 OTA 下载上下文。
+ * ota_stream_page_buf/ota_stream_program_buf 负责在串口接收与 Flash 实际编程之间做页级缓存，
+ * ota_stream_expected_size/received/flushed 负责跟踪期望长度、已接收长度与已落盘长度，
+ * ota_stream_header_* 则保存镜像头解析结果，供最终校验和 Boot 跳转判断复用。 */
 static u8 ota_stream_page_buf[FLASH_PAGE_SIZE];
 static u8 ota_stream_program_buf[FLASH_PAGE_SIZE];
 static u32 ota_stream_expected_size=0;
@@ -103,6 +107,9 @@ static u32 ota_stream_last_wait_log=0;
 #if APP_OTA_LOG_ENABLE
 static u32 ota_stream_start_drop_count=0;
 #endif
+/* 原始 TCP 模式下的 HTTP 字节流解析状态机。
+ * 它负责把 QIRD 返回的原始字节拆分成 HTTP 头、普通包体或 chunked 包体，
+ * 最终把纯固件字节转交给 ota_stream_write_byte() 写入 OTA 备份区。 */
 typedef enum
 {
     OTA_RAW_HTTP_HEADER,
@@ -122,6 +129,9 @@ typedef enum
     OTA_RAW_PROMPT_ERROR,
     OTA_RAW_PROMPT_TIMEOUT
 } ota_raw_prompt_result_en;
+/* 原始 TCP 下载会话上下文。
+ * 这些变量保存 URL 解析结果、HTTP 头解析中间状态、QISEND 提示符等待状态以及
+ * 当前 QIRD 待读数据长度，供 _4G_OTA_machine() 的多个状态节点共享。 */
 static char ota_raw_host[80];
 static char ota_raw_path[128];
 static u16 ota_raw_port=80;
@@ -181,6 +191,9 @@ DATA_STATE_20,   //空格
 DATA_STATE_GET_SUM,
 DATA_STATE_FINEISH
 } DATA_STATE_en  ;
+/* 模块文件系统中转链路的 QFDWL URC 解析状态机。
+ * 该状态机逐字节识别 "+QFDWL: <size>,<xor>"，
+ * 用于提取本次服务器分片总长度和传输层 XOR 校验值。 */
 static DATA_STATE_en  data_state=DATA_STATE_IDLE;
 #endif
 
@@ -430,6 +443,10 @@ static void ota_raw_http_reset(void)
     memset(ota_raw_http_line, 0, sizeof(ota_raw_http_line));
 }
 
+/* 解析单行 HTTP 响应头。
+ * 输入：line 为去除 CRLF 后的单行头字段文本。
+ * 输出：无，结果直接写入 ota_raw_http_status_code、ota_raw_http_content_length 等全局上下文。
+ * 关联：由 ota_raw_http_header_byte() 在拼出完整一行后调用，决定后续走固定长度包体还是 chunked 解析分支。 */
 static void ota_raw_http_parse_header_line(const char *line)
 {
     const char *p;
@@ -514,6 +531,11 @@ static void ota_raw_http_parse_header_line(const char *line)
     }
 }
 
+/* 逐字节推进 HTTP 头解析状态。
+ * 输入：dat 为从 QIRD 数据区读出的单个原始字节。
+ * 输出：无。
+ * 关联：检测 "\r\n\r\n" 头结束边界，并在头部结束后把 Content-Length 传递给 ota_stream_set_expected_size()，
+ * 以便后续镜像写入与结束判定使用统一长度基准。 */
 static void ota_raw_http_header_byte(u8 dat)
 {
     ota_raw_http_header_last4[ota_raw_http_header_last_pos & 3U] = dat;
@@ -574,6 +596,10 @@ static void ota_raw_http_header_byte(u8 dat)
     }
 }
 
+/* 处理普通 HTTP 包体字节。
+ * 输入：dat 为已确认属于 HTTP 包体的单个固件字节。
+ * 输出：BOOL_TRUE 表示字节已成功送入 OTA 备份区缓存；BOOL_FALSE 表示写入流程已出现错误。
+ * 关联：内部调用 ota_stream_write_byte() 完成长度统计、镜像头尝试解析和页缓存刷新。 */
 static boolean_en ota_raw_http_body_byte(u8 dat)
 {
     if (ota_stream_write_byte(dat) != BOOL_TRUE)
@@ -595,6 +621,10 @@ static boolean_en ota_raw_http_body_byte(u8 dat)
     return BOOL_TRUE;
 }
 
+/* 处理 chunked 传输中的包体字节。
+ * 输入：dat 为当前 chunk 数据段中的单个字节。
+ * 输出：BOOL_TRUE 表示当前字节已被成功消费；BOOL_FALSE 表示镜像写入失败。
+ * 关联：当当前 chunk 剩余字节数归零时，会切换到 CR/LF 处理状态，等待下一段 chunk 长度。 */
 static boolean_en ota_raw_http_chunk_data_byte(u8 dat)
 {
     if (ota_raw_http_chunk_remaining == 0U)
@@ -614,6 +644,10 @@ static boolean_en ota_raw_http_chunk_data_byte(u8 dat)
     return BOOL_TRUE;
 }
 
+/* 原始 TCP 模式下的 HTTP 字节总入口。
+ * 输入：dat 为模块 QIRD 返回的任意一个原始接收字节。
+ * 输出：BOOL_TRUE 表示当前字节处理成功；BOOL_FALSE 表示协议格式错误或镜像写入失败。
+ * 关联：CONNECT_OTA_AT_RAW_QIRD_DATA 状态通过本函数在 HTTP 头解析、chunk 解码和镜像落盘之间切换。 */
 static boolean_en ota_raw_http_consume_byte(u8 dat)
 {
     switch (ota_raw_http_state)
@@ -700,6 +734,10 @@ static boolean_en ota_raw_http_consume_byte(u8 dat)
     }
 }
 
+/* 从 "+QIRD: <len>" 文本中提取本轮可读原始数据长度。
+ * 输入：line 为整行 URC 文本，read_len 为输出参数。
+ * 输出：成功时返回 BOOL_TRUE，并把数据段长度写入 *read_len。
+ * 关联：_4G_OTA_machine() 在 CONNECT_OTA_AT_RAW_QIRD 状态用它决定后续需要从串口队列消费多少字节。 */
 static boolean_en ota_parse_qird_len(const char *line, u16 *read_len)
 {
     const char *p;
@@ -994,6 +1032,10 @@ static void ota_raw_log_prompt_timeout(void)
              ota_log_line_buffer);
 }
 
+/* 等待模块返回 QISEND 发送窗口提示。
+ * 输入：timeout_ms 为等待 '>' 提示符或 ERROR 响应的超时阈值。
+ * 输出：返回 OTA_RAW_PROMPT_OK/ERROR/TIMEOUT/WAITING，用于驱动原始 TCP 发送状态流转。
+ * 关联：CONNECT_OTA_AT_RAW_QISEND_DATA 状态依赖本函数判断模块是否已允许发送 HTTP 请求报文。 */
 static ota_raw_prompt_result_en ota_raw_wait_prompt(u32 timeout_ms)
 {
     u8 dat;
@@ -1458,11 +1500,19 @@ static u32 ota_stream_read_le32(const u8 *buf, u16 offset)
            ((u32)buf[offset + 3U] << 24);
 }
 
+/* 从镜像头缓存读取 16 位小端字段。
+ * 输入：buf 为镜像头缓存首地址，offset 为字段偏移。
+ * 输出：返回转换后的 16 位数值。
+ * 关联：ota_stream_try_parse_header() 用该函数解析设备类型等 16 位头字段。 */
 static u16 ota_stream_read_le16(const u8 *buf, u16 offset)
 {
     return (u16)(((u16)buf[offset]) | ((u16)buf[offset + 1U] << 8));
 }
 
+/* 判断镜像长度是否位于本设备允许的升级范围内。
+ * 输入：size 为镜像总字节数。
+ * 输出：合法返回 BOOL_TRUE；超出备份区容量或应用允许上限返回 BOOL_FALSE。
+ * 关联：HTTP Content-Length、镜像头长度字段与最终校验流程都会复用该约束。 */
 static boolean_en ota_stream_size_in_range(u32 size)
 {
     if (size < OTA_STREAM_HEADER_MIN_LEN)
@@ -1476,6 +1526,10 @@ static boolean_en ota_stream_size_in_range(u32 size)
     return BOOL_TRUE;
 }
 
+/* 设定当前 OTA 下载任务的目标镜像长度。
+ * 输入：size 为待接收镜像总大小，source 用于记录长度来源（如 HTTP 头或固件头）。
+ * 输出：成功返回 BOOL_TRUE，并刷新 ota_stream_expected_size/ota_stream_expected_known。
+ * 关联：原始 TCP 和模块 HTTP 两条链路都通过该接口建立统一的长度判断标准。 */
 static boolean_en ota_stream_set_expected_size(u32 size, const char *source)
 {
     if (ota_stream_size_in_range(size) == BOOL_FALSE)
@@ -1496,6 +1550,10 @@ static boolean_en ota_stream_set_expected_size(u32 size, const char *source)
     return BOOL_TRUE;
 }
 
+/* 擦除 MCU OTA 备份区。
+ * 输入：无。
+ * 输出：成功返回 BOOL_TRUE；地址非法或任意页擦除失败返回 BOOL_FALSE。
+ * 关联：这是镜像编程前的硬件前置步骤，后续 ota_stream_program_bytes() 和 OTA_STROE_MCU() 都依赖该区域已被清空。 */
 static boolean_en ota_stream_erase_backup_area(void)
 {
     FLASH_EraseInitTypeDef erase_init;
@@ -1535,6 +1593,7 @@ static boolean_en ota_stream_erase_backup_area(void)
     HAL_FLASH_Unlock();
     for (addr = OTABAKROM_STARTADDR; addr < end_next; addr += FLASH_PAGE_SIZE)
     {
+        // 按页擦除并周期性喂狗，避免长时间 Flash 操作导致系统被看门狗复位。
         page_error = 0xFFFFFFFFU;
         erase_init.TypeErase = FLASH_TYPEERASE_PAGES;
         erase_init.PageAddress = addr;
@@ -1563,6 +1622,10 @@ static boolean_en ota_stream_programming_blocked(void)
     return (ota_connect_state == CONNECT_OTA_AT_RAW_QIRD_DATA) ? BOOL_TRUE : BOOL_FALSE;
 }
 
+/* 校验刚写入 Flash 的数据是否与源缓存一致。
+ * 输入：addr 为备份区起始地址，buf 为期望内容，len 为校验长度。
+ * 输出：全部一致返回 BOOL_TRUE；发现任意字节不一致返回 BOOL_FALSE。
+ * 关联：作为 ota_stream_program_bytes() 的后置保护，用于发现 Flash 编程失败或数据总线异常。 */
 static boolean_en ota_stream_verify_programmed_bytes(u32 addr, const u8 *buf, u16 len)
 {
     u16 i;
@@ -1582,6 +1645,10 @@ static boolean_en ota_stream_verify_programmed_bytes(u32 addr, const u8 *buf, u1
     return BOOL_TRUE;
 }
 
+/* 将一段缓存数据真正写入 OTA 备份区 Flash。
+ * 输入：addr 为目的地址，buf 为待写字节流，len 为写入长度。
+ * 输出：成功返回 BOOL_TRUE；擦除未完成、地址越界或 HAL_FLASH_Program 失败时返回 BOOL_FALSE。
+ * 关联：这是原始 TCP 直写备份区链路的核心落盘函数。 */
 static boolean_en ota_stream_program_bytes(u32 addr, const u8 *buf, u16 len)
 {
     HAL_StatusTypeDef status;
@@ -1612,6 +1679,7 @@ static boolean_en ota_stream_program_bytes(u32 addr, const u8 *buf, u16 len)
     HAL_FLASH_Unlock();
     for (pos = 0U; pos < len; pos = (u16)(pos + 2U))
     {
+        // STM32F1 以半字为最小编程粒度，奇数字节长度时高字节补 0xFF。
         halfword = (u16)buf[pos];
         if ((pos + 1U) < len)
         {
@@ -1641,6 +1709,10 @@ static boolean_en ota_stream_program_bytes(u32 addr, const u8 *buf, u16 len)
     return ota_stream_verify_programmed_bytes(addr, buf, len);
 }
 
+/* 提交已经暂存好的待编程页。
+ * 输入：无。
+ * 输出：成功返回 BOOL_TRUE；若仍处于 QIRD 数据窗口或底层 Flash 编程失败则返回 BOOL_FALSE。
+ * 关联：该函数把 ota_stream_program_buf 中的页数据真正写入 OTABAKROM，并同步 ota_stream_flushed 进度。 */
 static boolean_en ota_stream_program_pending_page(void)
 {
     if (ota_stream_program_pending == 0U)
@@ -1673,6 +1745,10 @@ static boolean_en ota_stream_program_pending_page(void)
     return BOOL_TRUE;
 }
 
+/* 将当前页缓存封装为待编程页任务。
+ * 输入：无。
+ * 输出：成功返回 BOOL_TRUE；若已有待写页尚未提交或目标地址越界则返回 BOOL_FALSE。
+ * 关联：ota_stream_write_byte() 在页满或镜像结束时调用该函数，把串口接收缓存切换为 Flash 编程任务。 */
 static boolean_en ota_stream_stage_current_page(void)
 {
     u32 addr;
@@ -1723,6 +1799,10 @@ static boolean_en ota_stream_stage_current_page(void)
     return ota_stream_program_pending_page();
 }
 
+/* 在安全时机刷新所有待编程页。
+ * 输入：无。
+ * 输出：全部待写页处理完成返回 BOOL_TRUE；否则返回 BOOL_FALSE。
+ * 关联：QIRD trailer 收到 OK 后以及最终备份区校验前都会调用，确保末尾不足一页的数据也被落盘。 */
 static boolean_en ota_stream_program_ready_pages(void)
 {
     if (ota_stream_programming_blocked() == BOOL_TRUE)
@@ -1744,6 +1824,10 @@ static boolean_en ota_stream_program_ready_pages(void)
     return BOOL_TRUE;
 }
 
+/* 复位一次流式下载任务的上下文。
+ * 输入：无。
+ * 输出：无。
+ * 关联：在 qhttpread/raw tcp 开始接收镜像前调用，清零长度统计、页缓存状态、镜像头解析结果和错误标志。 */
 static void ota_stream_reset(void)
 {
     ota_stream_expected_size = 0;
@@ -1793,6 +1877,10 @@ static void ota_stream_reset(void)
     }
 }
 
+/* 尝试从当前页缓存中的镜像头提取升级元数据。
+ * 输入：无，直接读取 ota_stream_page_buf 中已接收的头部字节。
+ * 输出：镜像头合法返回 BOOL_TRUE；长度非法、设备类型不匹配或头部冲突返回 BOOL_FALSE。
+ * 关联：一旦解析成功，会建立 ota_stream_header_* 与 ota_stream_expected_size，供最终完整性校验复用。 */
 static boolean_en ota_stream_try_parse_header(void)
 {
     u32 raw_size;
@@ -1866,6 +1954,10 @@ static boolean_en ota_stream_flush_page(void)
     return ota_stream_stage_current_page();
 }
 
+/* 流式镜像写入的单字节入口。
+ * 输入：dat 为去除 HTTP 包装后的纯固件字节。
+ * 输出：成功返回 BOOL_TRUE；若镜像头非法、页刷新失败或已出现 Flash 错误则返回 BOOL_FALSE。
+ * 关联：原始 TCP 与模块 HTTP 直读两条下载路径都会通过本函数统一完成长度统计、页缓存累积与页刷新。 */
 static boolean_en ota_stream_write_byte(u8 dat)
 {
     if (ota_stream_finished || ota_stream_flash_error)
@@ -1928,6 +2020,10 @@ static boolean_en ota_stream_write_byte(u8 dat)
 }
 
 #if !OTA_RAW_TCP_STREAM_DEBUG
+/* 从串口接收队列批量提取 qhttpread 包体并写入备份区。
+ * 输入：无，数据源为 usartRecvQueue。
+ * 输出：无，处理结果通过 ota_stream_finished 与 ota_stream_flash_error 等全局状态体现。
+ * 关联：CONNECT_OTA_AT_QHTTPREAD_STREAM 状态周期性调用该函数，实现“收队列 -> 页缓存 -> Flash”流水线。 */
 static void ota_stream_process_queue(void)
 {
     u8 dat;
@@ -1967,6 +2063,10 @@ static void ota_stream_process_queue(void)
 }
 #endif
 
+/* 对下载后的备份区镜像执行最终校验。
+ * 输入：无。
+ * 输出：校验全部通过返回 BOOL_TRUE；长度不一致、镜像头非法或应用层校验失败返回 BOOL_FALSE。
+ * 关联：这是跳转 Boot 前的最后闸门，会联合检查接收字节数、落盘字节数与 get_checksum_status() 结果。 */
 static boolean_en ota_stream_verify_backup(void)
 {
     if (ota_stream_flash_error)
@@ -2135,6 +2235,10 @@ void _4G_OTA_machine(void)
 {
      ota_feed_watchdog_if_enabled();
 
+     /* OTA 下载主状态机。
+      * 输入：模块 AT 指令响应、串口接收队列中的二进制固件流以及超时定时器状态。
+      * 输出：通过 ota_connect_state 驱动网络下载流程，通过 MCU_OTA_state 驱动升级完成后的收尾动作。
+      * 关联：统一覆盖原始 TCP 直写备份区、模块 HTTP 直读备份区和模块文件系统诊断/清理链路。 */
      switch(ota_connect_state)
     {
       case CONNECT_OTA_STATE_IDLE:
@@ -2153,7 +2257,6 @@ void _4G_OTA_machine(void)
                     if( strstr((const char *) stringBuf, "POWERED DOWN"))
                      {
                             ota_connect_state=CONNECT_OTA_RESETING;
-                            printf("__________________æ¨¡åéä¸çµ___________________\n");
                            break;
                      }
                     else if( strstr((const char *) stringBuf, "RDY"))
@@ -2209,6 +2312,7 @@ void _4G_OTA_machine(void)
          case CONNECT_OTA_AT_RAW_QICLOSE:
               if(send_AT_Command_machine_finish()==TRUE)
               {
+                    // 原始 TCP 直写模式的准备阶段：先解析下载 URL，再擦除本地 OTA 备份区。
                     ota_log_stringbuf_rx_if_present();
                      if (ota_parse_http_url_for_raw_tcp() != BOOL_TRUE)
                      {
@@ -2310,6 +2414,7 @@ void _4G_OTA_machine(void)
                     int len;
                     int cmd_len;
 
+                    // 组装最小 GET 请求报文，后续通过 QISEND 直接送给升级服务器。
                     len = snprintf(common_send_buff,
                                    sizeof(common_send_buff),
                                    "GET %s HTTP/1.1\r\n"
@@ -2443,6 +2548,7 @@ void _4G_OTA_machine(void)
                         ota_log_raw_rx(stringBuf, recvLength);
                         if (strstr((const char *)stringBuf, "SEND OK") != NULL)
                         {
+                            // 发送成功后正式进入镜像接收阶段，重置 HTTP 解析器和镜像流上下文。
                             OTA_LOGI("raw tcp send ok\r\n");
                             ota_stream_reset();
                             ota_raw_http_reset();
@@ -2471,6 +2577,7 @@ void _4G_OTA_machine(void)
 
          case CONNECT_OTA_AT_RAW_WAIT_DATA:
               ota_feed_watchdog_if_enabled();
+              // 循环发起 QIRD 拉流，同时监控总超时、空闲超时、协议错误和镜像结束条件。
               if (ota_stream_flash_error || ota_raw_http_state == OTA_RAW_HTTP_ERROR)
               {
                     ota_raw_start_close("raw_stream_error", 0U);
@@ -2581,6 +2688,7 @@ void _4G_OTA_machine(void)
 
                     ota_feed_watchdog_if_enabled();
                     qird_feed_counter = 0U;
+                    // 在 QIRD 数据窗口中逐字节推进 HTTP 解析状态机，并把纯固件字节送入 OTA 备份区。
                     while (ota_raw_qird_remaining > 0U && dequeue(&usartRecvQueue, &dat))
                     {
                         if (ota_raw_http_consume_byte(dat) != BOOL_TRUE)
@@ -2625,6 +2733,7 @@ void _4G_OTA_machine(void)
                         if (strstr((const char *)stringBuf, "OK") != NULL)
                         {
                             ota_clear_rx_buffer();
+                            // 每轮 QIRD 事务结束后立即刷新可写页，防止尾页长期滞留在 RAM 缓冲中。
                             if (ota_stream_program_ready_pages() != BOOL_TRUE)
                             {
                                 ota_stream_flash_error = 1U;
@@ -2925,6 +3034,7 @@ void _4G_OTA_machine(void)
                     send_AT_Command_machine_star(buff,strlen(buff),"CONNECT",20, 0);
                     ota_connect_state=CONNECT_OTA_AT_QHTTPGET_HEADER;
 #else
+                    // 模块 HTTP 栈模式先完成 GET，请求成功后再进入 qhttpread 二进制流读取阶段。
                     snprintf(buff, sizeof(buff), "AT+QHTTPGET=%u\r\n", (unsigned int)OTA_QHTTPGET_WAIT_SEC);
                     OTA_LOGI("qhttpget start wait=%us\r\n", (unsigned int)OTA_QHTTPGET_WAIT_SEC);
                     OTA_LOGD("http url=%s\r\n", ota_get_download_url());
@@ -3017,6 +3127,7 @@ void _4G_OTA_machine(void)
                 break;
 
        case CONNECT_OTA_AT_QHTTPREAD:
+                // 模块 HTTP 直读链路：数据不落 UFS，直接通过串口流写入 MCU OTA 备份区。
                 snprintf(common_send_buff,
                          sizeof(common_send_buff),
                          "AT+QHTTPREAD=%u\r\n",
@@ -3072,6 +3183,7 @@ void _4G_OTA_machine(void)
 
         case CONNECT_OTA_AT_QHTTPREAD_STREAM:
               ota_feed_watchdog_if_enabled();
+              // 连续从串口接收队列抽取 qhttpread 包体，并在内部完成页缓存与 Flash 刷新。
               ota_stream_process_queue();
               if (ota_stream_flash_error)
               {
@@ -3142,6 +3254,7 @@ void _4G_OTA_machine(void)
 #endif
 
         case CONNECT_OTA_AT_STREAM_VERIFY:
+              // 下载完成后的统一出口：只有备份区镜像长度与校验都通过，才允许标记新固件并跳转 Boot。
               if (ota_stream_verify_backup() == BOOL_TRUE)
               {
                     OTA_LOGI("stream verify ok: mark upgrade and jump boot size=%u\r\n",
@@ -3164,6 +3277,7 @@ void _4G_OTA_machine(void)
 
 #if OTA_USE_QHTTPREADFILE_UFS
        case CONNECT_OTA_AT_QHTTPREADFILE:
+                // 备用下载链路：固件先落到模块 UFS，随后再由 mcu_copy_firmware_machine() 搬运到 MCU 备份区。
                 snprintf(common_send_buff,
                          sizeof(common_send_buff),
                          "AT+QHTTPREADFILE=\"%s%s\",%u\r\n",
@@ -3248,6 +3362,7 @@ void _4G_OTA_machine(void)
               break;
         case CONNECT_OTA_AT_QHTTPREADFILE_QFLST_DIAG:
              ota_feed_watchdog_if_enabled();
+             // 诊断模块 UFS 是否真的生成了固件文件，便于区分“无 URC”与“下载失败”两类问题。
              if(!Timer_PassedDelay(http_get_timer, OTA_QHTTPREADFILE_DIAG_TIMEOUT_MS))
              {
                 if (readLine(stringBuf, &recvLength, 0))
@@ -3422,6 +3537,9 @@ void  mcu_copy_firmware_star(void)
          OTA_DATA_IS_finish=0;
          data_state=DATA_STATE_IDLE;
          tihs_time_SERVER_PICK_SIZE=0;
+         /* 初始化模块文件系统搬运链路。
+          * 输入：firm_name_buffer 指向已经保存到模块 UFS 的固件文件名。
+          * 输出：无，状态机会从 MCU_OTA_STATE_RESETING 开始完成文件定位、分片读取、写入备份区和最终校验。 */
 #endif
 #endif
      }
@@ -3432,7 +3550,10 @@ void  mcu_copy_firmware_star(void)
 功能描述：异或计算校验和+
 *************************************/
  #include <stdint.h>
-// 计算 16 位校验和
+/* 计算备份区镜像的 16 位传输层异或校验。
+ * 输入：size 为参与计算的固件字节数。
+ * 输出：返回与模块 +QFDWL URC 中携带格式一致的 16 位 XOR 校验值。
+ * 关联：用于校验“服务器分片 -> 模块文件 -> MCU 备份区”搬运链路是否发生字节损坏。 */
  u16 bak_frash_checksum_XOR(u32 size)
 {
     u16 checksum = 0;
@@ -3584,7 +3705,9 @@ void  mcu_copy_firmware_machine(void)
                 break;
 
         case  MCU_OTA_STATE_RESETING:
-               //启动转移固件到MCU
+               /* 启动模块文件系统转存流程。
+                * 输入：firm_name_buffer 指定 UFS 中待搬运固件文件名。
+                * 输出：成功后进入 MCU_OTA_STATE_GETFILESIZE，准备请求 QFDWL 元信息。 */
 
                 sprintf(common_send_buff,"+QFLST: \"UFS:%s\"",firm_name_buffer );
                 OTA_LOGI("module fs file check file=UFS:%s\r\n", firm_name_buffer);
@@ -3625,6 +3748,7 @@ void  mcu_copy_firmware_machine(void)
                        }
 
                     }*/
+                // QFDWL 会先返回整片固件大小和传输层 XOR 校验值，再进入按 512 字节读取阶段。
                 printf("----MCU_OTA_state=%d,=%d\n",MCU_OTA_state,MCU_OTA_state==MCU_OTA_STATE_QFDWL_GET_FIRMWARE);
                 static char common_send_buff_2[64];
                 sprintf(common_send_buff,"AT+QFDWL=\"%s\"\r\n",firm_name_buffer );
@@ -3640,6 +3764,7 @@ void  mcu_copy_firmware_machine(void)
           case  MCU_OTA_STATE_QFDWL :
               if(send_AT_Command_machine_finish()==TRUE)
                {
+                    // 清空上一轮串口残留后，正式进入 QFDWL URC 解析状态。
                     flushQueue(&usartRecvQueue);
                     memset(stringBuf,0x00,recvLength);//不清空会多耗点时间进出缓冲
                     recvLength=0;//
@@ -3658,6 +3783,10 @@ void  mcu_copy_firmware_machine(void)
                        static uint8 buf[2];
                        static u16 chec_size=0;
                        //    watchdog_feed_dog();
+                       /* 逐字节识别 "+QFDWL: <size>,<xor>"。
+                        * 输入：usartRecvQueue 中的模块 URC 文本流。
+                        * 输出：更新 tihs_time_SERVER_PICK_SIZE、firmware_total_size 与 SERVER_CHECSUM，
+                        * 为后续 QFSEEK/QFREAD 分块搬运建立边界与传输层校验基准。 */
                        while (dequeue(&usartRecvQueue, &dat))       //+QFDWL: 152937,0a31   //2B 51 46 44 57 4C 3A
                        {
                               //  log_u32(1,  dat);
@@ -3823,6 +3952,7 @@ void  mcu_copy_firmware_machine(void)
               break;
                case MCU_OTA_AT_QFLST:
 
+                  // 打开模块 UFS 文件，获取后续 QFSEEK/QFREAD 使用的文件句柄。
                   sprintf(common_send_buff,"AT+QFOPEN=\"%s\",2\r\n",firm_name_buffer );
                   OTA_LOGI("open module fs file file=%s\r\n", firm_name_buffer);
                   send_AT_Command_machine_star(common_send_buff,strlen(common_send_buff),"+QFOPEN:",20,1);   //获取文件指针+QFOPEN: 1
@@ -3835,6 +3965,7 @@ void  mcu_copy_firmware_machine(void)
         case MCU_OTA_AT_QFOPEN:
              if(send_AT_Command_machine_finish()==TRUE )
              {
+                 // 根据当前偏移 pfile 移动模块文件指针，为下一次 512 字节读取做准备。
                  //分片
                  static   char common_temp[32] ="AT+QFSEEK=1,%u,0\r\n";
 
@@ -3847,6 +3978,7 @@ void  mcu_copy_firmware_machine(void)
        case MCU_OTA_AT_QFSEEK:
              if(send_AT_Command_machine_finish()==TRUE)
              {
+               // 每轮固定读取 512 字节，实际 Flash 落盘由 OTA_STROE_MCU() 完成。
                send_AT_Command_machine_star("AT+QFREAD=1,512\r\n",strlen("AT+QFREAD=1,512\r\n"),"CONNECT ",20,1);  //读取数据 CONNECT 512\r\n"
                wait_data_timer =Timer_GetTickCount();
                MCU_OTA_state=MCU_OTA_AT_QFREAD;
@@ -3898,6 +4030,7 @@ void  mcu_copy_firmware_machine(void)
              }
              break;
         case MCU_OTA_MCU_GETDATA:        //由接收处理切换
+             // 等待 OTA_STROE_MCU() 把当前小片成功写入备份区，然后再推进下一次 QFSEEK/QFREAD。
              if(OTA_DATA_IS_READY)       //收不到重发标志
              {
                 OTA_DATA_IS_READY=0;
@@ -3923,6 +4056,7 @@ void  mcu_copy_firmware_machine(void)
             break;
 
        case MCU_OTA_AT_QFREAD_LOOP:
+            // 如果当前服务器大分片还没读完，则继续移动文件指针；否则关闭文件并转入整片校验流程。
             if(pfile+PICK_SIZE<tihs_time_SERVER_PICK_SIZE)//小于本次分片大小   //  分界线 pfile UFS 文件位置
             {
                   pfile+=PICK_SIZE;
@@ -3941,6 +4075,7 @@ void  mcu_copy_firmware_machine(void)
             break;
 
        case MCU_OTA_GET_BIG_PICK:
+                 // 根据 last_server_big_pick 判断当前是否已经拿到服务器下发的最后一片固件。
                  if( last_server_big_pick)//服务器固件最后一片时归零
                  {
                       OTA_LOGI("move firmware to flash complete bytes=%u\r\n", (unsigned int)save_byete_counter);
@@ -3962,6 +4097,9 @@ void  mcu_copy_firmware_machine(void)
               OTA_LOGI("verify firmware start size=%u xor=0x%04x\r\n",
                        (unsigned int)firmware_total_size,
                        SERVER_CHECSUM);
+              /* 双层完整性校验：
+               * 1. get_checksum_status_XOR() 校验搬运链路未丢字节、未错字节；
+               * 2. get_checksum_status() 校验镜像头声明的应用层校验和与备份区实际内容一致。 */
               if( get_checksum_status_XOR( SERVER_CHECSUM, firmware_total_size)  )//传输层校验                                     ---------- 传输错误没有发现-------------
               {
                      printf("---------------OTA_XOR_CHECK_OK\n");
@@ -4004,6 +4142,7 @@ void  mcu_copy_firmware_machine(void)
 
           case   MCU_OTA_MCU_FINISH:
                     OTA_LOGI("upgrade start: mark new firmware and jump to boot\r\n");
+                    // 所有搬运与校验完成后，写入升级标记并跳转 Boot，交由引导程序执行正式升级。
                     printf("---------OTA å®æ¯------\n");
                     printf("---------ç³»ç»éå¯-------\n");
                     last_server_big_pick=0;//清零标志，防止跳转失败后影响下次OTA
@@ -4050,6 +4189,10 @@ void  mcu_copy_firmware_machine(void)
 #else
      uint16 dataLength;
       dataLength=lenth;
+     /* 模块文件系统搬运链路的数据落盘入口。
+      * 输入：buf 为 QFREAD 返回的纯固件负载，lenth 为本轮负载长度。
+      * 输出：无，通过 flash_store() 写入 OTABAKROM 备份区，并通过 OTA_DATA_IS_READY/OTA_DATA_IS_finish
+      * 通知 mcu_copy_firmware_machine() 继续拉取下一片或结束校验。 */
      if(dataLength==PICK_SIZE|| (last_server_big_pick && dataLength==(u16)(last_total_size%PICK_SIZE)))
       {  //拦截"OK\r\n"
             // printf("_________________________________save_byete_counterbingin=%u\n",save_byete_counter);

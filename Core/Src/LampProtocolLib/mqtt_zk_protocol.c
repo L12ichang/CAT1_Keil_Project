@@ -371,7 +371,7 @@ static int zk_publish_ota_success_now(const char *ota_id)
     {
         return -1;
     }
-    topic = zk_mqtt_get_config() != NULL ? zk_mqtt_cfg.pub_upgrade_topic : NULL;
+    topic = zk_mqtt_get_config() != NULL ? zk_mqtt_cfg.pub_topic : NULL;
     if (topic == NULL || topic[0] == '\0')
     {
         return -1;
@@ -2063,7 +2063,7 @@ static int zk_publish_ota_progress_now(uint32 progress)
     {
         return -1;
     }
-    topic = zk_mqtt_get_config() != NULL ? zk_mqtt_cfg.pub_upgrade_topic : NULL;
+    topic = zk_mqtt_get_config() != NULL ? zk_mqtt_cfg.pub_topic : NULL;
     if (topic == NULL || topic[0] == '\0')
     {
         return -1;
@@ -2096,7 +2096,7 @@ int zk_publish_ota_progress(uint32 progress)
 {
     if (zk_last_ota_id[0] == '\0' ||
         zk_mqtt_get_config() == NULL ||
-        zk_mqtt_cfg.pub_upgrade_topic[0] == '\0')
+        zk_mqtt_cfg.pub_topic[0] == '\0')
     {
         return -1;
     }
@@ -2120,7 +2120,7 @@ static int zk_publish_ota_error_now(int err_code)
     {
         return -1;
     }
-    topic = zk_mqtt_get_config() != NULL ? zk_mqtt_cfg.pub_upgrade_topic : NULL;
+    topic = zk_mqtt_get_config() != NULL ? zk_mqtt_cfg.pub_topic : NULL;
     if (topic == NULL || topic[0] == '\0')
     {
         return -1;
@@ -2153,7 +2153,7 @@ int zk_publish_ota_error(int err_code)
 {
     if (zk_last_ota_id[0] == '\0' ||
         zk_mqtt_get_config() == NULL ||
-        zk_mqtt_cfg.pub_upgrade_topic[0] == '\0')
+        zk_mqtt_cfg.pub_topic[0] == '\0')
     {
         return -1;
     }
