@@ -110,6 +110,10 @@ static u32  _cf_cnt_bak=0;
 static u8  _cf_over_cnt=0;
 static u32  energy_tmp = 0; //有功电能， 断电归0     单位 0.01WH
 
+static u32 bl0942_energy_counter_raw = 0;
+static u32 bl0942_energy_clear_base = 0;
+static boolean_en bl0942_energy_clear_pending = BOOL_FALSE;
+
 //u32 xdata i_rms;
 //u32 xdata v_rms;
 //u32 xdata i_fast_rms;
@@ -599,17 +603,24 @@ void sys_bl0942_process(void)
 //                        tmp = tmp-_cf_cnt_first;
 //                    }
                    // printf("tmp=%ld\n", tmp);
-                    energy_this_time = get_ac_energy(tmp);
+                    bl0942_energy_counter_raw = get_ac_energy(tmp);
                     if(_cf_over_cnt > 0)
                     {
-                        energy_this_time = ONE_CYCLE_ENERGY*_cf_over_cnt + energy_this_time;
+                        bl0942_energy_counter_raw = ONE_CYCLE_ENERGY*_cf_over_cnt + bl0942_energy_counter_raw;
                     }
+                    if (bl0942_energy_clear_pending == BOOL_TRUE)
+                    {
+                        bl0942_energy_clear_base = bl0942_energy_counter_raw;
+                        bl0942_energy_clear_pending = BOOL_FALSE;
+                    }
+                    energy_this_time = (bl0942_energy_counter_raw >= bl0942_energy_clear_base) ?
+                                       (bl0942_energy_counter_raw - bl0942_energy_clear_base) : 0U;
                     //更换贝岭计量芯片
                     // UPDATE_AC_ENERGYP(energy_this_time);
 
                     //printf("energy=%ld\n",energy_this_time);
-                    tmp = energy_this_time - energy_tmp;
-                    energy_tmp = energy_this_time;
+                    tmp = bl0942_energy_counter_raw - energy_tmp;
+                    energy_tmp = bl0942_energy_counter_raw;
                     _ac_EnergyP = _ac_EnergyP + tmp;
                   //更换贝岭计量芯片  
                   //  STORE_AC_ENERGYP(_ac_EnergyP);
@@ -790,6 +801,20 @@ void sys_bl0942_power_down_save(void)
 {
     sys_data.ac_EnergyP += total_power_this_time;
     total_power_this_time = 0;
+}
+
+void sys_bl0942_energy_stats_clear(void)
+{
+    /* The next valid CF sample becomes the new zero point for rEc. */
+    bl0942_energy_clear_base = bl0942_energy_counter_raw;
+    bl0942_energy_clear_pending = BOOL_TRUE;
+    energy_this_time = 0U;
+    total_power_this_time = 0U;
+    bl0942_energy_0_01wh_remainder = 0U;
+    minute = 0U;
+    _ac_EnergyP = 0U;
+    sys_data.ac_EnergyP = 0U;
+    sys_data.today_Energy = 0U;
 }
 
 void sys_bl0942_init(void)

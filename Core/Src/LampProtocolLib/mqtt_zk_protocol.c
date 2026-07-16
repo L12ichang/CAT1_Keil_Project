@@ -2952,8 +2952,25 @@ boolean_en zk_handle_control_message(cJSON *root, const zk_message_header_t *hea
         }
         if (restore_type == 5)
         {
-            sys_data.ac_EnergyP = 0;
-            sys_data.today_Energy = 0;
+            boolean_en runtime_ok;
+            boolean_en energy_main_ok;
+            boolean_en energy_backup_ok;
+
+            sys_bl0942_energy_stats_clear();
+            sys_data_store();
+            energy_main_ok = user_flash_check(DATAROM_STARTADDR,
+                                              (u8 *)&sys_data,
+                                              (u16)sizeof(sys_data));
+            energy_backup_ok = user_flash_check(BAKDATAROM_STARTADDR,
+                                                (u8 *)&sys_data,
+                                                (u16)sizeof(sys_data));
+            runtime_ok = zk_runtime_stats_clear();
+            if ((energy_main_ok != BOOL_TRUE && energy_backup_ok != BOOL_TRUE) ||
+                runtime_ok != BOOL_TRUE)
+            {
+                zk_publish_simple_response(header, ZK_FLASH_SAVE_ERROR);
+                return BOOL_TRUE;
+            }
         }
         zk_publish_simple_response(header, 0);
         return BOOL_TRUE;

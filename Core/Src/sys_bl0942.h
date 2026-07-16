@@ -9,6 +9,7 @@ extern void sys_bl0942_init(void);
 extern void sys_bl0942_power_on(void);
 extern void sys_bl0942_power_off(void);
 extern void sys_bl0942_power_down_save(void);
+extern void sys_bl0942_energy_stats_clear(void);
 extern u32 bl0942_checksum_error_count;
 extern u32 bl0942_timeout_count;
 extern u32 bl0942_uart_error_count;

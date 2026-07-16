@@ -244,6 +244,38 @@ void zk_runtime_counter_process(void)
 
 /* ========== 访问函数（供协议层构建JSON使用） ========== */
 
+boolean_en zk_runtime_stats_clear(void)
+{
+    uint32 old_boot_run;
+    uint32 old_total_run_base;
+    uint32 now;
+
+    if (zk_runtime_loaded != BOOL_TRUE)
+    {
+        zk_runtime_stats_init();
+    }
+
+    zk_runtime_counter_process();
+    old_boot_run = zk_boot_run_seconds;
+    old_total_run_base = zk_total_run_base_seconds;
+
+    zk_boot_run_seconds = 0U;
+    zk_total_run_base_seconds = 0U;
+
+    if (zk_runtime_flash_store_current() != BOOL_TRUE)
+    {
+        zk_boot_run_seconds = old_boot_run;
+        zk_total_run_base_seconds = old_total_run_base;
+        return BOOL_FALSE;
+    }
+
+    now = Timer_GetTickCount();
+    zk_runtime_last_tick = now;
+    zk_runtime_last_save_tick = now;
+    zk_runtime_powerdown_saved = BOOL_FALSE;
+    return BOOL_TRUE;
+}
+
 uint32 zk_runtime_get_boot_run_seconds(void)
 {
     return zk_boot_run_seconds;
