@@ -2867,6 +2867,8 @@ static void zk_apply_brightness(int brightness)
 
 void zk_apply_plan_brightness(int brightness)
 {
+    /* A newer plan action supersedes any temporary control restore snapshot. */
+    zk_cancel_control_restore();
     zk_apply_brightness(brightness);
 }
 
