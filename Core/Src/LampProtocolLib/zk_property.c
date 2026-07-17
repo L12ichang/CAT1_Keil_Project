@@ -307,6 +307,8 @@ void zk_device_config_init(void)
 {
     zk_device_config_set_defaults(&zk_dev_cfg);
     (void)zk_property_flash_load(&zk_dev_cfg);
+    /* Firmware identity is defined by this image, not by persisted settings. */
+    zk_dev_cfg.sver = APP_VERSION;
     zk_device_config_refresh_iccid();
 }
 
