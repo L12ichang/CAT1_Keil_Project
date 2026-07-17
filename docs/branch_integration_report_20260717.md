@@ -51,11 +51,21 @@
 | 合并 MQTT 修正后 | 0 Error / 0 Warning；Code 88086，RO 5026，RW 1692，ZI 33684 | 98/98 通过 | APP 93320 bytes |
 | 合并全参数校准后 | 0 Error / 0 Warning；Code 95874，RO 5142，RW 1764，ZI 33884 | 基线 98/98 + 校准 17/17，共 115/115 通过 | APP 101256 bytes；范围 `0x08008000..0x08020B87`，小于 `0x08024000` |
 | `Release-MinSize` | 0 Error / 0 Warning；Code 77334，RO 2402，RW 1692，ZI 32932 | 与上述同源测试集 | APP 79976 bytes；范围 `0x08008000..0x0801B867`，低于 88 KiB ROM 上限 |
+| 最终 `main` | 两个目标均为 0 Error / 0 Warning；尺寸与上述对应目标一致 | 基线/工具契约 99/99 + 校准 17/17，共 116/116 通过 | program 与 Release-MinSize 镜像检查均通过；合并镜像结构逐字节校验通过 |
 
 `tools/check_keil_app_image.py` 对 program 与 Release-MinSize 产物均通过：设备类型 `0x0003`、程序长度与校验和一致、APP 基址和安全边界一致。
 
 ## 6. 当前验证边界
 
 - 本轮完成了可在本机自动执行的软件单元/契约测试、Keil 两个目标的全量构建、镜像头、校验和、Flash 分区和 ROM 体积验证。
-- 当前没有可确认属于本任务的在线设备身份、MQTT 凭据和安全台架条件，因此未自动发布 OTA、未改变实机 Flash，也未执行带载电流/温升/长稳性能测试。历史验收脚本还引用 2026-07-10 的固定制品尺寸和现场日志，不能作为本次新校准固件的实时通过证据。
+- 已通过 USB 识别到 SEGGER J-Link，并以只读 `verifybin` 对 `0x08008000` 处的 Release-MinSize 制品执行核验；J-Link 成功连接 Cortex-M3，目标电压约 3.27 V，但首个字节即发现板上固件 `0x28` 与当前制品 `0x40` 不一致。该操作未擦除、未烧写 Flash，核验后设备已复位并恢复运行。
+- 上述实机核验同时发现原 `jlink_verify.ps1` 会在 Commander 日志报告失败时错误返回成功；已在 `fa2cc30` 中修正为同时检查进程退出码和日志中的 `Verify successful.`，并补充契约测试。修正后的脚本已用同一固件不匹配场景验证，能够正确向调用方传播失败。
+- 当前没有本任务可用的 MQTT 凭据和限流安全台架条件，因此未自动发布 OTA、未改变实机 Flash，也未执行带载电流/温升/长稳性能测试。历史验收脚本还引用 2026-07-10 的固定制品尺寸和现场日志，不能作为本次新校准固件的实时通过证据。
 - 上线前仍需在限流安全台架执行：J-Link 烧录回读、启动/登录、调光全范围、断电恢复、校准双槽容错、计量精度、温升、长稳和受保护 OTA。未取得这些实机证据前，本报告只证明软件构建和离线验证通过。
+
+## 7. 最终收尾状态
+
+- 整合分支的已验证节点标记为 `integration/validated-20260717`；盘点前主线和历史 stash 分别标记为 `archive/main-pre-integration-20260717`、`archive/pre-size-optimization-stash-20260709`，保证删除冗余引用后仍可追溯。
+- GitHub 默认分支已由 `optimize/firmware-size-performance` 调整为 `main`；远端冗余开发分支均已删除，`origin/HEAD` 指向 `refs/heads/main`。
+- 本地临时工作树、已合并开发分支和旧 stash 均已清理；最终本地分支和远端跟踪分支各仅保留 `main`。
+- 独立压缩副本已移至仓库外 `D:\keil_work\CAT1_Keil_Project\archives\20260717`，由其中的 `README.md` 记录文件哈希、大小和差异结论。
