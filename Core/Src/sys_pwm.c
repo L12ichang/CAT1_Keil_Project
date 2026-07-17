@@ -1,270 +1,441 @@
-
-/*************************************************************
-程序功能：PWM输出
-开发环境：keil 5.37
-芯片型号：STM32F103CBT6/HK32F103CCT6A
-开发人员：王道军
-单位名称：广东东菱电源科技有限公司
-编辑日期：2024.7.1
-*************************************************************/
 #include "sys_pwm.h"
-
 #include "sys_data.h"
 #include "sys_temp_over_protect.h"
 #include "hw_tim1_pwm2.h"
 #include "sys_Vo_Io.h"
 #include "factory_user_data.h"
-#define TIMEOUT_MAX      200
-#define PWM_OUT_MAX      1000
-#define PWM_OFFSET   (u16)(OP_PWM_OFFSET)  //由于光耦的延迟问题增加3%输出
-#define PWM_USEFUL_RANGE    (u16)(PWM_OUT_MAX-PWM_OFFSET)  //
+#include "current_cal_storage.h"
 
-#if APP_PWM_DEBUG_ENABLE
-#define PWM_DBG(...) printf(__VA_ARGS__)
-#else
-#define PWM_DBG(...) do {} while (0)
-#endif
+#define TIMEOUT_MAX 200U
 
-//#define SET_OUTCUR     sys_data.setcur
-//#define HWMAX_OUTCUR   sys_data.hwmaxcur
+#define SYS_PWM_PROTECT_LOW_TEMP     0x0001U
+#define SYS_PWM_PROTECT_INPUT_LOW    0x0002U
+#define SYS_PWM_PROTECT_INPUT_HIGH   0x0004U
+#define SYS_PWM_PROTECT_HIGH_TEMP    0x0008U
+#define SYS_PWM_PROTECT_OVER_CURRENT 0x0010U
 
-#define  hw_set_pwm(pwm)     hw_tim1_pwm2_set_PWM_OUT(pwm)//+++++++
 u8 reload;
-u16 set_percent;
-static u8 _timer = TIMEOUT_MAX;
-static boolean_en _fade = BOOL_FALSE;
-static u8 power_old; //第一次入网的时候才渐变，后面的不渐变，因为调光0-100，没有101 
+u8 set_percent;
+u8 net_entery_flag;
+u8 has_entery_at_first;
+
+static u8 pwm_fade_timer = TIMEOUT_MAX;
+static boolean_en pwm_fade_active = BOOL_FALSE;
+static u8 power_old;
 static u8 power_new;
 static u8 power_current;
+static sys_pwm_source_en normal_source = SYS_PWM_SOURCE_INTERNAL;
+static boolean_en calibration_lock_active = BOOL_FALSE;
+static sys_pwm_status_t pwm_status;
 
 #if LEGACY_APP_PROCESS_ENABLE
 extern u32 fac_en_timer;
-extern u8  fa_test_EN;
+extern u8 fa_test_EN;
 #else
 u32 fac_en_timer;
-u8  fa_test_EN;
+u8 fa_test_EN;
 #endif
 
-
- void pwm_output(u8 persent)   //硬件输出
+static u8 sys_pwm_apply_percent_protection(u8 percent, u16 *protect_code)
 {
-     u16 pwm;
-     u32 pwm_value;
-#if APP_PWM_DEBUG_ENABLE
-     u8 init_persent = persent;
-#endif
+    u16 limited;
+    u16 code;
 
-      set_percent = persent;
-      if( low_temp_detect_is_low(&pwm, persent) == BOOL_TRUE)
-      {printf("low_temp_detect_\n");
-        if(pwm<persent)
-        {
-            persent = pwm; //温度保护取最低那个输出
-        }
-
-      }
-      if( DC_low_voltage_detect_is_low(&pwm,persent)==BOOL_TRUE)
-      { printf("DC_low_voltage_detec\n");
-         if(pwm<persent)
-        {
-            persent = pwm; //温度保护和低压保护，取最低那个输出
-        }
-
-      }
-        if(High_voltage_detect_is_high(&pwm, persent) == BOOL_TRUE)
-        {
-            printf("high_voltage\n");
-              //                log_u16(1,pwm);
-            if(pwm<persent)
-            {
-                persent = pwm; //温度保护和低压保护，取最低那个输出
-            }
-        }
-          if(temp_detect_is_over(&pwm, persent) == BOOL_TRUE)
-        {
-             printf("high_temp\n");
-              //                log_u16(1,pwm);
-             printf("persent=%d\n",persent);
-             printf("tempPWM=%d\n",pwm);
-            if(pwm<persent)
-            {
-                persent = pwm; //温度保护和低压保护，取最低那个输出
-
-            }
-        }
-
-      if(fa_test_EN==0)
-      {
-         if(HWMAX_OUTCUR == 0)
-         {
-             pwm_value = 0;
-             PWM_DBG("[PWM] HWMAX_OUTCUR=0 -> pwm_value=0\r\n");
-         }
-         else
-         {
-             pwm_value = ((u32)persent * (u32)SET_OUTCUR * (u32)PWM_USEFUL_RANGE) / ((u32)HWMAX_OUTCUR * 100U);
-         }
-      }
-      else   //产测模式
-      {
-        pwm_value = ((u32)persent * (u32)PWM_USEFUL_RANGE) / 100U;
-        PWM_DBG("[PWM] fac_test mode -> pwm_value=%lu\r\n", pwm_value);
-      }
-
-    /* PWM 调试日志：可观察完整计算过程与电子负载对比 */
-    PWM_DBG("====== PWM Calc ======\r\n");
-    PWM_DBG("  brightness     = %u %%\r\n", init_persent);
-    PWM_DBG("  eff_persent    = %u %%\r\n", persent);
-    PWM_DBG("  SET_OUTCUR     = %u mA\r\n", (u16)SET_OUTCUR);
-    PWM_DBG("  HWMAX_OUTCUR   = %u mA\r\n", (u16)HWMAX_OUTCUR);
-    PWM_DBG("  PWM_OFFSET     = %u\r\n", (u16)PWM_OFFSET);
-    PWM_DBG("  PWM_USEFUL_RNG = %u\r\n", (u16)PWM_USEFUL_RANGE);
-    PWM_DBG("  PWM_OUT_MAX    = %u\r\n", (u16)PWM_OUT_MAX);
-#if APP_PWM_DEBUG_ENABLE
-    if (HWMAX_OUTCUR > 0 && fa_test_EN == 0)
+    code = 0U;
+    limited = percent;
+    if (low_temp_detect_is_low(&limited, percent) == BOOL_TRUE)
     {
-        u32 numerator   = (u32)persent * (u32)SET_OUTCUR * (u32)PWM_USEFUL_RANGE;
-        u32 denominator = (u32)HWMAX_OUTCUR * 100U;
-        PWM_DBG("  numerator      = %lu\r\n", numerator);
-        PWM_DBG("  denominator    = %lu\r\n", denominator);
-        PWM_DBG("  ratio(SET/HW)  = %lu / 1000\r\n",
-                ((u32)SET_OUTCUR * 1000U) / (u32)HWMAX_OUTCUR);
+        code |= SYS_PWM_PROTECT_LOW_TEMP;
+        percent = (limited < percent) ? (u8)limited : percent;
     }
-#endif
-    PWM_DBG("  -> pwm_value   = %lu / %u\r\n", pwm_value, (u16)PWM_OUT_MAX);
-    PWM_DBG("  -> duty        = %lu.%lu %%\r\n",
-            (pwm_value * 100U) / PWM_OUT_MAX,
-            ((pwm_value * 1000U) / PWM_OUT_MAX) % 10U);
-    PWM_DBG("======================\r\n");
+    limited = percent;
+    if (DC_low_voltage_detect_is_low(&limited, percent) == BOOL_TRUE)
+    {
+        code |= SYS_PWM_PROTECT_INPUT_LOW;
+        percent = (limited < percent) ? (u8)limited : percent;
+    }
+    limited = percent;
+    if (High_voltage_detect_is_high(&limited, percent) == BOOL_TRUE)
+    {
+        code |= SYS_PWM_PROTECT_INPUT_HIGH;
+        percent = (limited < percent) ? (u8)limited : percent;
+    }
+    limited = percent;
+    if (temp_detect_is_over(&limited, percent) == BOOL_TRUE)
+    {
+        code |= SYS_PWM_PROTECT_HIGH_TEMP;
+        percent = (limited < percent) ? (u8)limited : percent;
+    }
+    if (Error_1_OL != 0U)
+    {
+        code |= SYS_PWM_PROTECT_OVER_CURRENT;
+        percent = 0U;
+    }
+    if (protect_code != NULL)
+    {
+        *protect_code = code;
+    }
+    return percent;
+}
 
-    hw_set_pwm((u16)pwm_value);
+static u8 sys_pwm_legacy_network_percent(u8 percent)
+{
+    if (MID == 4U && percent > 9U && percent < 27U)
+    {
+        percent = (u8)(percent - 3U);
+    }
+    if (percent < 5U)
+    {
+        percent = 0U;
+    }
+    return percent;
+}
+
+static u16 sys_pwm_legacy_percent_to_logical(u8 percent)
+{
+    u32 value;
+    u16 logical_max;
+
+    logical_max = hw_tim1_pwm2_get_logical_max();
+    if (fa_test_EN != 0U)
+    {
+        value = ((u32)percent * logical_max) / 100U;
+    }
+    else if (HWMAX_OUTCUR == 0U)
+    {
+        value = 0U;
+    }
+    else
+    {
+        value = ((u32)percent * (u32)SET_OUTCUR * logical_max) /
+                ((u32)HWMAX_OUTCUR * 100U);
+    }
+    if (value > logical_max)
+    {
+        value = logical_max;
+    }
+    return (u16)value;
+}
+
+static void sys_pwm_commit_logical(u16 requested,
+                                   u16 applied,
+                                   u8 requested_percent,
+                                   u8 effective_percent,
+                                   u16 protect_code)
+{
+    u16 logical_max;
+
+    logical_max = hw_tim1_pwm2_get_logical_max();
+    if (applied > logical_max)
+    {
+        applied = logical_max;
+    }
+    hw_tim1_pwm2_set_PWM_OUT(applied);
+    pwm_status.requested_percent = requested_percent;
+    pwm_status.effective_percent = effective_percent;
+    pwm_status.requested_logical_pwm = requested;
+    pwm_status.applied_logical_pwm = hw_tim1_pwm2_get_logical_pwm();
+    pwm_status.compare_value = hw_tim1_pwm2_get_compare();
+    pwm_status.protect_code = protect_code;
+    pwm_status.output_enabled = hw_tim1_pwm2_output_enabled();
+    pwm_status.calibration_locked = calibration_lock_active;
+    pwm_status.limited = (requested != pwm_status.applied_logical_pwm) ? BOOL_TRUE : BOOL_FALSE;
+}
+
+static void sys_pwm_apply_normal(u8 requested_percent, sys_pwm_source_en source)
+{
+    const current_cal_curve_t *curve;
+    u8 mapped_percent;
+    u8 effective_percent;
+    u16 protect_code;
+    u16 logical;
+
+    if (calibration_lock_active == BOOL_TRUE)
+    {
+        return;
+    }
+    if (requested_percent > 100U)
+    {
+        requested_percent = 100U;
+    }
+    set_percent = requested_percent;
+    normal_source = source;
+    mapped_percent = requested_percent;
+    curve = current_cal_storage_active_curve();
+    if (curve == NULL && source == SYS_PWM_SOURCE_NETWORK)
+    {
+        mapped_percent = sys_pwm_legacy_network_percent(mapped_percent);
+    }
+    if (source == SYS_PWM_SOURCE_NETWORK)
+    {
+        dim_bak_to_low_acin = mapped_percent;
+    }
+    effective_percent = sys_pwm_apply_percent_protection(mapped_percent, &protect_code);
+    if (curve != NULL && fa_test_EN == 0U)
+    {
+        logical = current_cal_curve_interpolate(curve, effective_percent);
+    }
+    else
+    {
+        logical = sys_pwm_legacy_percent_to_logical(effective_percent);
+    }
+    sys_pwm_commit_logical(logical, logical, requested_percent, effective_percent, protect_code);
+}
+
+void pwm_output(u8 percent)
+{
+    if (calibration_lock_active == BOOL_TRUE)
+    {
+        return;
+    }
+    pwm_fade_active = BOOL_FALSE;
+    power_old = percent;
+    sys_pwm_apply_normal(percent, SYS_PWM_SOURCE_INTERNAL);
 }
 
 void sys_pwm_timer(void)
 {
-    u32 tmp;
-    
-    if(_fade)
+    u32 delta;
+
+    if (pwm_fade_active == BOOL_TRUE && calibration_lock_active != BOOL_TRUE)
     {
-        if(_timer < TIMEOUT_MAX)
+        if (pwm_fade_timer < TIMEOUT_MAX)
         {
-            ++_timer;
-            if(power_new > power_old)
+            ++pwm_fade_timer;
+            if (power_new > power_old)
             {
-                tmp = power_new - power_old;
-                power_current = power_old + tmp*_timer/TIMEOUT_MAX;
-                pwm_output(power_current);
+                delta = power_new - power_old;
+                power_current = (u8)(power_old + delta * pwm_fade_timer / TIMEOUT_MAX);
             }
             else
             {
-                tmp = power_old - power_new;
-                power_current = power_old - tmp*_timer/TIMEOUT_MAX;
-                pwm_output(power_current);
+                delta = power_old - power_new;
+                power_current = (u8)(power_old - delta * pwm_fade_timer / TIMEOUT_MAX);
             }
+            sys_pwm_apply_normal(power_current, normal_source);
         }
         else
         {
-            _fade = BOOL_FALSE;
+            pwm_fade_active = BOOL_FALSE;
             power_old = power_new;
-            pwm_output(power_new);
+            sys_pwm_apply_normal(power_new, normal_source);
         }
     }
-    
-    
-    if(fac_en_timer>0)
+    if (fac_en_timer > 0U)
     {
-       --fac_en_timer;
-        if(fac_en_timer==0&&fa_test_EN!=0)
-        {
-         // fa_test_EN=0;        //产测超时退出
-          //  sys_pwm_reload();    //刷新PWM
-        }
+        --fac_en_timer;
     }
 }
 
-void sys_pwm_fade_output(u8 oldpower, u8 newpower) //本文被调    启动渐变
+void sys_pwm_fade_output(u8 oldpower, u8 newpower)
 {
+    if (calibration_lock_active == BOOL_TRUE)
+    {
+        return;
+    }
     power_current = oldpower;
     power_old = oldpower;
     power_new = newpower;
-    pwm_output(oldpower);
-    if(power_old != power_new)
+    sys_pwm_apply_normal(oldpower, normal_source);
+    if (power_old != power_new && calibration_lock_active != BOOL_TRUE)
     {
-        _timer = 0;
-        _fade = BOOL_TRUE;
+        pwm_fade_timer = 0U;
+        pwm_fade_active = BOOL_TRUE;
     }
 }
 
-// persent 0-100
-u8 net_entery_flag=0 ;
-u8 has_entery_at_first=0;
-
-void sys_pwm_output(u8 persent)   
+static void sys_pwm_output_from(u8 percent, sys_pwm_source_en source)
 {
-    if(persent == 0)
+    if (calibration_lock_active == BOOL_TRUE)
     {
-        _fade = BOOL_FALSE;
-        power_old = persent;
-        pwm_output(persent);   // hw_set_pwm((u32)PWM_USEFUL_RANGE*persent/100);        
+        return;
+    }
+    normal_source = source;
+    if (percent == 0U)
+    {
+        pwm_fade_active = BOOL_FALSE;
+        power_old = 0U;
+        sys_pwm_apply_normal(0U, source);
+        return;
+    }
+    if (pwm_fade_active == BOOL_TRUE)
+    {
+        sys_pwm_fade_output(power_current, percent);
+    }
+    else if (source == SYS_PWM_SOURCE_NETWORK &&
+             net_entery_flag != 0U && has_entery_at_first == 0U)
+    {
+        has_entery_at_first = 1U;
+        sys_pwm_fade_output(power_current, percent);
     }
     else
     {
-        if(_fade)
-        {
-            sys_pwm_fade_output(power_current, persent);
-        }
-        else
-        {
-           // if(power_old == 0)  //第一次入网的时候才渐变，后面的不渐变，因为调光0-100，没有101 net_entery && has_entery_at_first==0
-            if( net_entery_flag && has_entery_at_first==0)
-            { 
-                has_entery_at_first=1;// 第一次入网进来要渐变
-                printf("fade_first_____");
-                sys_pwm_fade_output(power_current, persent);//入网进来时，要把半载改为服务器的值
-                
-            }
-            else
-            {                
-                power_old = persent;
-                printf("netdimpersent=%d\n",persent); 
-                pwm_output(persent);        
-            }
-        }
+        power_old = percent;
+        sys_pwm_apply_normal(percent, source);
     }
-    //sys_temp_over_protect_recovery_to_idle();
 }
 
-// persent 0-100
-void sys_pwm_output_for_temp_protect(u8 persent)    //未调用
+void sys_pwm_output(u8 percent)
 {
-    power_old = persent;
-    _fade = BOOL_FALSE;
-    pwm_output(persent);          
+    sys_pwm_output_from(percent, SYS_PWM_SOURCE_INTERNAL);
 }
-void sys_pwm_output_on_fade(u8 persent)             //未调用
+
+void sys_pwm_output_network(u8 percent)
 {
-    power_old = persent;
-    _fade = BOOL_FALSE;
-    pwm_output(persent);        
+    sys_pwm_output_from(percent, SYS_PWM_SOURCE_NETWORK);
+}
+
+void sys_pwm_output_offline(u8 percent)
+{
+    sys_pwm_output_from(percent, SYS_PWM_SOURCE_OFFLINE);
+}
+
+void sys_pwm_output_for_temp_protect(u8 percent)
+{
+    pwm_output(percent);
+}
+
+void sys_pwm_output_on_fade(u8 percent)
+{
+    pwm_output(percent);
 }
 
 void sys_pwm_reload(void)
 {
-     reload = 1;
-	 printf(" reload1\r\n");
+    reload = 1U;
 }
-
 
 void sys_pwm_process(void)
 {
-  
-    if(reload==1)
+    if (reload != 0U)
     {
-      reload=0;
-        printf(" reload1persent=%d\n",set_percent);  
-      sys_pwm_output( set_percent );
+        reload = 0U;
+        if (calibration_lock_active != BOOL_TRUE)
+        {
+            sys_pwm_apply_normal((u8)set_percent, normal_source);
+        }
     }
-    
 }
 
+void sys_pwm_calibration_lock(void)
+{
+    calibration_lock_active = BOOL_TRUE;
+    pwm_fade_active = BOOL_FALSE;
+    reload = 0U;
+    sys_pwm_force_off();
+}
 
+void sys_pwm_calibration_unlock(void)
+{
+    calibration_lock_active = BOOL_FALSE;
+    pwm_fade_active = BOOL_FALSE;
+    reload = 0U;
+    sys_pwm_force_off();
+}
+
+boolean_en sys_pwm_calibration_is_locked(void)
+{
+    return calibration_lock_active;
+}
+
+boolean_en sys_pwm_calibration_set_direct(u16 logical_pwm)
+{
+    sys_pwm_status_t safety_status;
+    u16 protect_code;
+    u16 logical_max;
+    u8 safety_percent;
+
+    if (calibration_lock_active != BOOL_TRUE)
+    {
+        return BOOL_FALSE;
+    }
+    logical_max = hw_tim1_pwm2_get_logical_max();
+    if (logical_pwm > logical_max)
+    {
+        return BOOL_FALSE;
+    }
+    if (logical_pwm == 0U)
+    {
+        sys_pwm_commit_logical(0U, 0U, 0U, 0U, 0U);
+        return BOOL_TRUE;
+    }
+    if (sys_pwm_calibration_safety_ready() != BOOL_TRUE)
+    {
+        sys_pwm_get_status(&safety_status);
+        if (safety_status.protect_code != 0U)
+        {
+            sys_pwm_commit_logical(logical_pwm, 0U, 0U, 0U,
+                                   safety_status.protect_code);
+        }
+        return BOOL_FALSE;
+    }
+    safety_percent = sys_pwm_apply_percent_protection(100U, &protect_code);
+    if (protect_code != 0U || safety_percent != 100U)
+    {
+        sys_pwm_commit_logical(logical_pwm, 0U, 0U, safety_percent, protect_code);
+        return BOOL_FALSE;
+    }
+    sys_pwm_commit_logical(logical_pwm, logical_pwm, 0U, 100U, 0U);
+    return BOOL_TRUE;
+}
+
+boolean_en sys_pwm_calibration_set_percent(const current_cal_curve_t *curve, u8 percent)
+{
+    u16 logical;
+
+    if (calibration_lock_active != BOOL_TRUE || curve == NULL || percent > 100U)
+    {
+        return BOOL_FALSE;
+    }
+    logical = current_cal_curve_interpolate(curve, percent);
+    return sys_pwm_calibration_set_direct(logical);
+}
+
+boolean_en sys_pwm_calibration_safety_ready(void)
+{
+    sys_vo_io_snapshot_t snapshot;
+    u16 protect_code;
+    u8 safety_percent;
+
+    if (calibration_lock_active != BOOL_TRUE)
+    {
+        return BOOL_FALSE;
+    }
+    if (sys_vo_io_get_snapshot(&snapshot) != BOOL_TRUE)
+    {
+        sys_pwm_force_off();
+        return BOOL_FALSE;
+    }
+    safety_percent = sys_pwm_apply_percent_protection(100U, &protect_code);
+    if (protect_code != 0U || safety_percent != 100U)
+    {
+        sys_pwm_commit_logical(pwm_status.requested_logical_pwm,
+                               0U,
+                               pwm_status.requested_percent,
+                               0U,
+                               protect_code);
+        return BOOL_FALSE;
+    }
+    return BOOL_TRUE;
+}
+
+void sys_pwm_force_off(void)
+{
+    hw_tim1_pwm2_set_PWM_OUT(0U);
+    memset(&pwm_status, 0, sizeof(pwm_status));
+    pwm_status.applied_logical_pwm = hw_tim1_pwm2_get_logical_pwm();
+    pwm_status.compare_value = hw_tim1_pwm2_get_compare();
+    pwm_status.calibration_locked = calibration_lock_active;
+}
+
+void sys_pwm_get_status(sys_pwm_status_t *status)
+{
+    if (status != NULL)
+    {
+        *status = pwm_status;
+        status->applied_logical_pwm = hw_tim1_pwm2_get_logical_pwm();
+        status->compare_value = hw_tim1_pwm2_get_compare();
+        status->output_enabled = hw_tim1_pwm2_output_enabled();
+        status->calibration_locked = calibration_lock_active;
+    }
+}

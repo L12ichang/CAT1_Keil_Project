@@ -1,5 +1,7 @@
 #include "mqtt_zk_protocol.h"
 #include "zk_runtime_stats.h"
+#include "zk_calibration_property.h"
+#include "current_calibration.h"
 #include "zk_alarm.h"
 #include "zk_property.h"
 #include "zk_protocol_internal.h"
@@ -18,6 +20,7 @@
 #include "factory_user_data.h"
 #include "sys_data.h"
 #include "hw_flash.h"
+#include "flash_address_assignment.h"
 #include "ntc.h"
 #include "main.h"
 #include <stdio.h>
@@ -142,6 +145,7 @@ typedef struct
 } zk_ota_report_flash_record_t;
 
 ZK_OTA_STATIC_ASSERT((ZK_OTA_REPORT_FLASH_OFFSET + sizeof(zk_ota_report_flash_record_t)) <= FLASH_PAGE_SIZE);
+ZK_OTA_STATIC_ASSERT((ZK_OTA_REPORT_FLASH_OFFSET + sizeof(zk_ota_report_flash_record_t)) <= CURRENT_CAL_FLASH_SLOT_OFFSET);
 
 static zk_response_pending_item_t zk_response_queue[ZK_RESPONSE_QUEUE_SIZE];
 static u8 zk_response_queue_head = 0;
@@ -1070,7 +1074,7 @@ static void zk_ota_ack_defer_start(const zk_message_header_t *header)
     zk_ota_ack_state = ZK_OTA_ACK_STATE_SEND;
 }
 
-static boolean_en zk_ota_is_busy(void)
+boolean_en zk_ota_is_busy(void)
 {
     if (zk_ota_ack_state != ZK_OTA_ACK_STATE_IDLE)
     {
@@ -1683,6 +1687,10 @@ boolean_en zk_dispatch_message(cJSON *root, const zk_message_header_t *header)
         return BOOL_FALSE;
     }
     zk_apply_server_time_from_header(header);
+    if (zk_handle_calibration_property(root, header))
+    {
+        return BOOL_TRUE;
+    }
     if (zk_handle_property_read(root, header))
     {
         return BOOL_TRUE;
@@ -2895,7 +2903,6 @@ boolean_en zk_handle_control_message(cJSON *root, const zk_message_header_t *hea
     {
         return BOOL_FALSE;
     }
-
     dt = cJSON_GetObjectItem(root, "DT");
     if (dt == NULL || !cJSON_IsObject(dt))
     {
@@ -2912,6 +2919,14 @@ boolean_en zk_handle_control_message(cJSON *root, const zk_message_header_t *hea
             zk_patrol_report_pending = BOOL_TRUE;
             return BOOL_TRUE;
         }
+    }
+    if (current_calibration_is_active() == BOOL_TRUE)
+    {
+        zk_publish_simple_response(header, 12);
+        return BOOL_TRUE;
+    }
+    if (do_node != NULL && cJSON_IsString(do_node) && do_node->valuestring != NULL)
+    {
         if (strcmp(do_node->valuestring, "reboot") == 0)
         {
             zk_publish_simple_response(header, 0);
@@ -3098,6 +3113,12 @@ boolean_en zk_handle_ota_message(cJSON *root, const zk_message_header_t *header)
     if (strcmp(header->sv, ZK_SV_OTA) != 0 || strcmp(header->ct, ZK_CT_WRITE) != 0)
     {
         return BOOL_FALSE;
+    }
+    if (current_calibration_is_active() == BOOL_TRUE)
+    {
+        OTA_LOGW("cmd rejected: calibration busy id=%s\r\n", header->id);
+        zk_publish_simple_response(header, 12);
+        return BOOL_TRUE;
     }
 
     dt = cJSON_GetObjectItem(root, "DT");

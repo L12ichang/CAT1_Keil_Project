@@ -12,6 +12,8 @@
 TIM_HandleTypeDef htim1;
 
 u8 pwm_on;
+static u16 pwm_last_logical;
+static u16 pwm_last_compare;
 
 #define TIM1_PWM2_CYCLE     3600
 
@@ -33,9 +35,12 @@ void hw_tim1_pwm2_set_off(void)
 
 void hw_tim1_pwm2_set_PWM_OUT(u16 pwm)//pwm输出
 {
-    if(pwm>1000)
+    u16 logical_max;
+
+    logical_max = hw_tim1_pwm2_get_logical_max();
+    if(pwm > logical_max)
     {
-     pwm=1000;
+     pwm = logical_max;
     }
     if(pwm>0)        
     {
@@ -51,8 +56,34 @@ void hw_tim1_pwm2_set_PWM_OUT(u16 pwm)//pwm输出
 #if APP_PWM_DEBUG_ENABLE
     printf("pwm=%d\r\n",pwm);
 #endif
-   __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, pwm+PWM_OFFSET);  //负逻辑
-      
+   pwm_last_logical = pwm;
+   pwm_last_compare = (u16)(pwm + PWM_OFFSET);
+   __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, pwm_last_compare);  //负逻辑
+
+}
+
+u16 hw_tim1_pwm2_get_logical_pwm(void)
+{
+    return pwm_last_logical;
+}
+
+u16 hw_tim1_pwm2_get_compare(void)
+{
+    return pwm_last_compare;
+}
+
+u16 hw_tim1_pwm2_get_logical_max(void)
+{
+    if (PWM_OFFSET >= PWM_MAX)
+    {
+        return 0U;
+    }
+    return (u16)(PWM_MAX - PWM_OFFSET);
+}
+
+boolean_en hw_tim1_pwm2_output_enabled(void)
+{
+    return (pwm_on != 0U) ? BOOL_TRUE : BOOL_FALSE;
 }
 
 void hw_tim1_pwm2_init(void)
@@ -97,6 +128,8 @@ void hw_tim1_pwm2_init(void)
     }
     HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
      __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 1000);  //0%输出
+     pwm_last_logical = 0U;
+     pwm_last_compare = 1000U;
 
 }
 

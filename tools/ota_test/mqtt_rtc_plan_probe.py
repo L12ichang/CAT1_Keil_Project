@@ -71,7 +71,7 @@ def main() -> int:
     parser.add_argument("--log-dir", type=Path, default=Path("tools/ota_test/logs"))
     args = parser.parse_args()
 
-    pub_topic = f"MS/{args.imei}/pcp2dev"
+    pub_topic = f"MS/{args.imei}/plt2dev"
     topics = [
         f"MS/{args.imei}/dev2pcp",
         f"MS/{args.imei}/dev2plt",

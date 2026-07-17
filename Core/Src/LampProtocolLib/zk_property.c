@@ -7,6 +7,9 @@
 #include "sys_data.h"
 #include "sys_pwm.h"
 #include "hw_flash.h"
+#include "current_calibration.h"
+#include "current_cal_storage.h"
+#include "current_cal_curve.h"
 #include <string.h>
 
 extern uint8 simCardICCID[22];
@@ -1159,6 +1162,7 @@ boolean_en zk_handle_property_write(cJSON *root, const zk_message_header_t *head
     int reset_period_timers;
     int update_rtc;
     int factory_changed;
+    u32 old_profile_crc;
 
     if (root == NULL || header == NULL)
     {
@@ -1182,6 +1186,12 @@ boolean_en zk_handle_property_write(cJSON *root, const zk_message_header_t *head
     svr = cJSON_GetObjectItem(dt, "Svr");
     rtc = cJSON_GetObjectItem(dt, "RTC");
     factory = cJSON_GetObjectItem(dt, "Factory");
+
+    if (factory != NULL && current_calibration_is_active() == BOOL_TRUE)
+    {
+        zk_publish_simple_response(header, 12);
+        return BOOL_TRUE;
+    }
 
     handled = 0;
     if (gis != NULL)
@@ -1224,6 +1234,7 @@ boolean_en zk_handle_property_write(cJSON *root, const zk_message_header_t *head
     update_rtc = (rtc != NULL) ? 1 : 0;
     memcpy(factory_buf, sys_data.fa_Parambuf, sizeof(factory_buf));
     factory_changed = 0;
+    old_profile_crc = current_cal_profile_crc();
 
     if (gis != NULL && (err = zk_apply_gis_config(gis, &candidate)) != 0)
     {
@@ -1278,6 +1289,10 @@ boolean_en zk_handle_property_write(cJSON *root, const zk_message_header_t *head
         memcpy(sys_data.fa_Parambuf, factory_buf, sizeof(factory_buf));
         factory_user_load_data();
         sys_data_store();
+        if (old_profile_crc != current_cal_profile_crc())
+        {
+            (void)current_cal_storage_invalidate();
+        }
         sys_pwm_reload();
     }
 

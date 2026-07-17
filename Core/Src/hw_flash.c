@@ -224,6 +224,118 @@ void hw_flash_write_bytes(uint32_t flash_addr, u8 *buffer, uint32_t length)
 
 }
 
+HAL_StatusTypeDef hw_flash_update_bytes_checked(uint32_t flash_addr,
+                                                const u8 *buffer,
+                                                uint32_t length)
+{
+    FLASH_EraseInitTypeDef erase_init;
+    HAL_StatusTypeDef status;
+    u32 page_error;
+    u32 sector_addr;
+    u32 sector_offset;
+    u32 i;
+
+    if (buffer == NULL || length == 0U)
+    {
+        return HAL_ERROR;
+    }
+    sector_addr = flash_addr - (flash_addr % FLASH_PAGE_SIZE);
+    sector_offset = flash_addr - sector_addr;
+    if ((sector_offset + length) > FLASH_PAGE_SIZE)
+    {
+        return HAL_ERROR;
+    }
+
+    hw_flash_read_bytes(sector_addr, temp_buf_byte, FLASH_PAGE_SIZE);
+    memcpy_u8(temp_buf_byte + sector_offset, (u8 *)buffer, length);
+
+    status = HAL_FLASH_Unlock();
+    if (status != HAL_OK)
+    {
+        return status;
+    }
+    page_error = 0U;
+    erase_init.TypeErase = FLASH_TYPEERASE_PAGES;
+    erase_init.PageAddress = sector_addr;
+    erase_init.NbPages = 1U;
+    status = HAL_FLASHEx_Erase(&erase_init, &page_error);
+    if (status == HAL_OK)
+    {
+        for (i = 0U; i < FLASH_PAGE_SIZE; i += 4U)
+        {
+            status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD,
+                                       sector_addr + i,
+                                       *((u32 *)(temp_buf_byte + i)));
+            if (status != HAL_OK)
+            {
+                break;
+            }
+        }
+    }
+    (void)HAL_FLASH_Lock();
+    if (status != HAL_OK)
+    {
+        return status;
+    }
+    return (user_flash_check(sector_addr, temp_buf_byte, FLASH_PAGE_SIZE) == BOOL_TRUE) ?
+           HAL_OK : HAL_ERROR;
+}
+
+/*
+ * Program already-erased aligned words without erasing the containing page.
+ * This is intentionally separate from the page read/modify/write helper so a
+ * record validity marker can be committed as the final atomic Flash step.
+ */
+HAL_StatusTypeDef hw_flash_program_bytes_checked(uint32_t flash_addr,
+                                                 const u8 *buffer,
+                                                 uint32_t length)
+{
+    HAL_StatusTypeDef status;
+    u32 offset;
+    u32 current_word;
+    u32 requested_word;
+
+    if (buffer == NULL || length == 0U ||
+        (flash_addr & 3U) != 0U || (length & 3U) != 0U)
+    {
+        return HAL_ERROR;
+    }
+
+    for (offset = 0U; offset < length; offset += 4U)
+    {
+        current_word = *((volatile u32 *)(flash_addr + offset));
+        memcpy(&requested_word, buffer + offset, sizeof(requested_word));
+        if ((current_word & requested_word) != requested_word)
+        {
+            return HAL_ERROR;
+        }
+    }
+
+    status = HAL_FLASH_Unlock();
+    if (status != HAL_OK)
+    {
+        return status;
+    }
+    for (offset = 0U; offset < length; offset += 4U)
+    {
+        memcpy(&requested_word, buffer + offset, sizeof(requested_word));
+        status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD,
+                                   flash_addr + offset,
+                                   requested_word);
+        if (status != HAL_OK)
+        {
+            break;
+        }
+    }
+    (void)HAL_FLASH_Lock();
+    if (status != HAL_OK)
+    {
+        return status;
+    }
+    return (user_flash_check(flash_addr, (u8 *)buffer, (u16)length) == BOOL_TRUE) ?
+           HAL_OK : HAL_ERROR;
+}
+
 
 
 
