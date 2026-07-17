@@ -10,8 +10,7 @@ Listings/
 Objects/
 DebugConfig/
 RTE/
-# 把测试文件中的文件不进行上报git
-tests/
+# Test sources are versioned; generated data stays ignored.
 *.json
 out/
 *.jsonl
@@ -41,7 +40,6 @@ JLinkLog.txt
 *.dbgconf
 *.jlink
 *.txt
-*.py
 !tools/ota_test/mqtt_ota_guarded_validate.py
 !tools/ota_test/mqtt_bl0942_telemetry_check.py
 !tools/ota_test/mqtt_ntc_threshold_test.py
@@ -50,6 +48,7 @@ JLinkLog.txt
 !tools/ota_test/mqtt_plan_execution_test.py
 !tools/ota_test/release_minsize_acceptance_audit.py
 !tools/ota_test/jlink_verify.ps1
+__pycache__/
 *.pyc
 EventRecorderStub.scvd
 

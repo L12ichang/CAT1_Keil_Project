@@ -7,10 +7,12 @@
 编辑日期：2024.7.1
 *************************************************************/
 #include "sys_Vo_Io.h"
+#include "Portable.h"
 #include "sys_data.h"
 #include "adc.h"
 #include "sys_pwm.h"
 #include "factory_user_data.h"
+#include "ntc.h"
 
 
      
@@ -30,6 +32,7 @@ extern u16  ac_voltage_8209;   //交流电的电压，单位 V
 #define  INPUT_VOLTAGE   ac_voltage_8209   
  u32 Io_value;
  u32 Po_value;
+static u32 vo_io_sample_tick;
 u8 _dim;
 u8 dim_bak_to_low_acin=100;//最大100
 typedef enum 
@@ -532,6 +535,7 @@ void error_report_process(void)
                    }
                 }*/
                Po_value = ((u32)Vo_value*Io_value)/1000U;   //单位0.1W
+               vo_io_sample_tick = Timer_GetTickCount();
         
 //             printf(" ADC_Value4=%d\n",ADC_Value4);
 //             printf(" Vo_value=%dV\n",Vo_value/10);
@@ -812,6 +816,44 @@ void error_report_process(void)
        {
          error_flag_byte&=~0x10;
        }
+}
+
+boolean_en sys_vo_io_get_snapshot(sys_vo_io_snapshot_t *snapshot)
+{
+    u32 now;
+    u32 sample_tick;
+    u32 primask;
+    u8 i;
+
+    if (snapshot == NULL)
+    {
+        return BOOL_FALSE;
+    }
+    primask = __get_PRIMASK();
+    __disable_irq();
+    for (i = 0U; i < 4U; ++i)
+    {
+        snapshot->adc_raw[i] = adc_average[i];
+    }
+    snapshot->adc_voltage_mv = ADC_Value2;
+    snapshot->adc_current_mv = ADC_Value4;
+    snapshot->output_voltage_01v = Vo_value;
+    snapshot->output_current_ma = Io_value;
+    snapshot->output_power_01w = Po_value;
+    snapshot->temperature_01c = Ntctemp.Ntctemp;
+    snapshot->protect_code = error_flag_byte;
+    sample_tick = vo_io_sample_tick;
+    if (primask == 0U)
+    {
+        __enable_irq();
+    }
+    now = Timer_GetTickCount();
+    snapshot->sample_age_ms = now - sample_tick;
+    if (sample_tick == 0U || snapshot->sample_age_ms > 2000U)
+    {
+        return BOOL_FALSE;
+    }
+    return BOOL_TRUE;
 }
 
 

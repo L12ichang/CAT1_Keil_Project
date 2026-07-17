@@ -4,6 +4,7 @@
 #include "sys_aip1302.h"
 #include "factory_user_data.h"
 #include "sys_pwm.h"
+#include "current_calibration.h"
 
 #define TYPE_TIMER      0
    extern u8 online;
@@ -16,6 +17,13 @@ u8 current_brightness_level = 0;
 
 static u16 power_on_deylay=6000*10;//开机10分钟后才能开始是否离线运行
 static u8 online_timeout=0;
+static boolean_en offline_calibration_was_active = BOOL_FALSE;
+static boolean_en offline_calibration_skip_minute = BOOL_FALSE;
+static u16 offline_calibration_skip_year = 0U;
+static u8 offline_calibration_skip_mon = 0U;
+static u8 offline_calibration_skip_day = 0U;
+static u8 offline_calibration_skip_hour = 0U;
+static u8 offline_calibration_skip_min = 0U;
 void offline_timer(void)
 {
       if(power_on_deylay>0)
@@ -29,7 +37,35 @@ void offline_timer(void)
 }
 
 void Work_offline_dimming_process(void)  //离线模式与服务器日同步
-{    
+{
+    if (current_calibration_is_active() == BOOL_TRUE)
+    {
+        offline_calibration_was_active = BOOL_TRUE;
+        return;
+    }
+    if (offline_calibration_was_active == BOOL_TRUE)
+    {
+        offline_calibration_was_active = BOOL_FALSE;
+        offline_calibration_skip_minute = BOOL_TRUE;
+        offline_calibration_skip_year = apprtc_RtcTime.year;
+        offline_calibration_skip_mon = apprtc_RtcTime.mon;
+        offline_calibration_skip_day = apprtc_RtcTime.day;
+        offline_calibration_skip_hour = apprtc_RtcTime.hour;
+        offline_calibration_skip_min = apprtc_RtcTime.min;
+        return;
+    }
+    if (offline_calibration_skip_minute == BOOL_TRUE)
+    {
+        if (offline_calibration_skip_year == apprtc_RtcTime.year &&
+            offline_calibration_skip_mon == apprtc_RtcTime.mon &&
+            offline_calibration_skip_day == apprtc_RtcTime.day &&
+            offline_calibration_skip_hour == apprtc_RtcTime.hour &&
+            offline_calibration_skip_min == apprtc_RtcTime.min)
+        {
+            return;
+        }
+        offline_calibration_skip_minute = BOOL_FALSE;
+    }
    //离线日重复调光
     if( DAY_LOOP_EN==1 && online==0&&online_timeout )//日循环使能并且离线，开机n秒后  
    {
@@ -42,7 +78,7 @@ void Work_offline_dimming_process(void)  //离线模式与服务器日同步
                    if (apprtc_RtcTime.hour == SEVER_TIMER_DIM[i].hour && apprtc_RtcTime.min ==SEVER_TIMER_DIM[i].min ) //时间相等执行动作
                    {  
                        // 调整到对应的亮度级别
-                       sys_pwm_output(SEVER_TIMER_DIM[i].dim_lever);//调光输出
+                       sys_pwm_output_offline(SEVER_TIMER_DIM[i].dim_lever);//调光输出
                        current_brightness_level = SEVER_TIMER_DIM[i].dim_lever; // 更新当前亮度级别
                        break;
                     }
