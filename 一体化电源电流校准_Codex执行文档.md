@@ -244,15 +244,13 @@ MCU 的 `Io_value` 不作为“达标”的权威值。若未来增加 MCU 电�
     "sessionId":"CAL-20260713-0001","seq":13,"result":0,
     "state":"DIRECT_TEST","pointIndex":4,"targetPercent":20,
     "logicalPwm":128,"compareValue":128,"outputEnabled":1,
-    "adcVoltageRaw":832,"adcCurrentRaw":417,
-    "voltage01V":440,"currentMa":338,"power01W":149,
-    "temperatureC":42,"protectCode":0,"sampleAgeMs":12,
+    "protectCode":0,
     "curveState":"EMPTY","lastError":0
   }}
 }
 ```
 
-`compareValue`、ADC 原始量、温度和 `sampleAgeMs` 的来源需在工程中定位确认。无法可靠提供的字段第一版应删除或置入能力位，不能填假数据。读取状态会刷新会话通信超时，但不会改变 PWM。
+校准 MQTT 响应不得序列化 `measurementValid`、ADC raw、内部毫伏、电流、功率、温度或样本年龄。原始快照仅允许通过本地 C getter（`sys_vo_io_get_snapshot()`）、串口或 J-Link 读取，不能经 MQTT 对外暴露。协议字段与流程以最新《全参数校准 Codex 执行文档》为准。读取状态会刷新会话通信超时，但不会改变 PWM。
 
 ### 6.4 `writeCurveChunk`
 

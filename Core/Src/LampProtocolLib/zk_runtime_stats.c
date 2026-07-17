@@ -2,6 +2,7 @@
 #include "common.h"
 #include "Portable.h"
 #include "hw_flash.h"
+#include "flash_address_assignment.h"
 #include "crc16_modbus.h"
 #include "sys_data.h"
 #include "sys_pow_drop_check.h"
@@ -35,6 +36,7 @@ typedef struct
 } zk_runtime_flash_record_t;
 
 ZK_STATIC_ASSERT((ZK_RUNTIME_FLASH_OFFSET + sizeof(zk_runtime_flash_record_t)) <= FLASH_PAGE_SIZE);
+ZK_STATIC_ASSERT((ZK_RUNTIME_FLASH_OFFSET + sizeof(zk_runtime_flash_record_t)) <= CURRENT_CAL_FLASH_SLOT_OFFSET);
 
 /* ========== 运行时统计状态 ========== */
 static uint32 zk_boot_run_seconds;              /* 本次上电累计运行秒数 */

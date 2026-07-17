@@ -1620,6 +1620,21 @@
               <FilePath>..\Core\Src\sys_pwm.c</FilePath>
             </File>
             <File>
+              <FileName>current_cal_curve.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\current_cal_curve.c</FilePath>
+            </File>
+            <File>
+              <FileName>current_cal_storage.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\current_cal_storage.c</FilePath>
+            </File>
+            <File>
+              <FileName>current_calibration.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\current_calibration.c</FilePath>
+            </File>
+            <File>
               <FileName>sys_aip1302.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\sys_aip1302.c</FilePath>
@@ -1826,6 +1841,11 @@
               <FileName>mqtt_zk_protocol.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\LampProtocolLib\mqtt_zk_protocol.c</FilePath>
+            </File>
+            <File>
+              <FileName>zk_calibration_property.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\LampProtocolLib\zk_calibration_property.c</FilePath>
             </File>
             <File>
               <FileName>zk_alarm.c</FileName>
@@ -3473,6 +3493,21 @@
               <FilePath>..\Core\Src\sys_pwm.c</FilePath>
             </File>
             <File>
+              <FileName>current_cal_curve.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\current_cal_curve.c</FilePath>
+            </File>
+            <File>
+              <FileName>current_cal_storage.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\current_cal_storage.c</FilePath>
+            </File>
+            <File>
+              <FileName>current_calibration.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\current_calibration.c</FilePath>
+            </File>
+            <File>
               <FileName>sys_aip1302.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\sys_aip1302.c</FilePath>
@@ -3679,6 +3714,11 @@
               <FileName>mqtt_zk_protocol.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\LampProtocolLib\mqtt_zk_protocol.c</FilePath>
+            </File>
+            <File>
+              <FileName>zk_calibration_property.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\LampProtocolLib\zk_calibration_property.c</FilePath>
             </File>
             <File>
               <FileName>zk_alarm.c</FileName>

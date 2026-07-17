@@ -43,6 +43,7 @@
 #include "hw_4g_io.h"
 #include "sys_data.h"
 #include "sys_pwm.h"
+#include "current_calibration.h"
 #include "sys_temp_over_protect.h"
 #include "aip1302.h"
 #include "sys_aip1302.h"
@@ -219,6 +220,7 @@ int main(void)
     hw_tim1_pwm2_set_PWM_OUT(0);//�ȵ����ٽ��п���������,CCO�����Ǹߵ�ƽ
     portableInit();
     sys_data_load();
+    current_calibration_init();
     zk_work_plan_init();
     zk_runtime_stats_init();
     if(sys_data.sn==0xaa5555aa)
@@ -301,6 +303,7 @@ int main(void)
 #endif
 
     APP_PROFILE_CALL(APP_PERF_JSON, json_process());
+    current_calibration_process();
     watchdog_loop_end();
   }
 }

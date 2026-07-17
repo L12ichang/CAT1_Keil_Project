@@ -20,6 +20,9 @@
 #include "ntc.h"
 #include "sys_Vo_Io.h"
 #include "ota.h"
+#include "current_calibration.h"
+#include "current_cal_storage.h"
+#include "current_cal_curve.h"
 
 #if LEGACY_APP_PROCESS_ENABLE
 
@@ -126,23 +129,49 @@ u8 onSettemp_protectc_value( u32 intValue )
 
 u8 onSethwmax_outcur_value( u32 intValue )
 {
+    u32 old_profile_crc;
+
+    if (current_calibration_is_active() == BOOL_TRUE)
+    {
+        return DOWNLOAD_SAVE_FAIL;
+    }
+    old_profile_crc = current_cal_profile_crc();
   //硬件最大输出电流设置
     if(intValue>0)
     {
         HWMAX_OUTCUR=intValue;
         sys_data_store();
+        if (old_profile_crc != current_cal_profile_crc())
+        {
+            (void)current_cal_storage_invalidate();
+        }
     }
     return DOWNLOAD_SUCCESS;
 }
 u8 onSet_setcur_value( u32 intValue )
 {
+    u32 old_profile_crc;
+
+    if (current_calibration_is_active() == BOOL_TRUE)
+    {
+        return DOWNLOAD_SAVE_FAIL;
+    }
+    old_profile_crc = current_cal_profile_crc();
     //额定输出电流设置
     SET_OUTCUR=intValue;
     sys_data_store();
+    if (old_profile_crc != current_cal_profile_crc())
+    {
+        (void)current_cal_storage_invalidate();
+    }
     return DOWNLOAD_SUCCESS;
 }
 u8 onSet_fa_test_value( u8 intValue )
-{     
+{
+    if (current_calibration_is_active() == BOOL_TRUE)
+    {
+        return DOWNLOAD_SAVE_FAIL;
+    }
     fa_test_EN =intValue;
     if( fa_test_EN==1 )
     {
@@ -253,8 +282,15 @@ uint8 onSetTimingDimmingParam(TIMING_DIMMING_PARAM *timingDimmingParam)
 
  //uint8 factoryParam[128] = {0};
 
-uint8 onSetFactoryParam(unsigned char *buf, unsigned char length) 
+uint8 onSetFactoryParam(unsigned char *buf, unsigned char length)
 {
+    u32 old_profile_crc;
+
+    if (current_calibration_is_active() == BOOL_TRUE)
+    {
+        return DOWNLOAD_SAVE_FAIL;
+    }
+    old_profile_crc = current_cal_profile_crc();
     //TODO 检查参数是否合法，如果不合法，则返回DOWNLOAD_PARAM_ERROR
     //TODO 保存工厂参数
 	if(length > 128)
@@ -265,6 +301,10 @@ uint8 onSetFactoryParam(unsigned char *buf, unsigned char length)
 	memcpy(sys_data.fa_Parambuf, buf, length);
     factory_user_load_data();
     sys_data_store();
+    if (old_profile_crc != current_cal_profile_crc())
+    {
+        (void)current_cal_storage_invalidate();
+    }
     printf_buf(sys_data.fa_Parambuf,128);
     return DOWNLOAD_SUCCESS;
 }
@@ -288,7 +328,10 @@ uint8 onSaveRunningParam(void)
 
 uint8 onFirmwareUpdate(uint16 packNumber, uint16 totalPackCount, uint8 *pData, uint16 dataLength) //-------------------------------------------------------下载触发--------------------------------------------
 {
-    
+     if (current_calibration_is_active() == BOOL_TRUE)
+     {
+       return DOWNLOAD_SAVE_FAIL;
+     }
      if(pData[0]==0xA5&&pData[1]==0xA5)//固件下载标志使能
      {
        printf("____OTA__START_");

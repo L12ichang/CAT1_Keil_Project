@@ -188,6 +188,7 @@ boolean_en zk_handle_request_message(cJSON *root, const zk_message_header_t *hea
 boolean_en zk_handle_ota_message(cJSON *root, const zk_message_header_t *header);
 boolean_en zk_handle_plan_message(cJSON *root, const zk_message_header_t *header);
 boolean_en zk_handle_alam_message(cJSON *root, const zk_message_header_t *header);
+boolean_en zk_ota_is_busy(void);
 void zk_notify_state_changed(void);
 void zk_apply_plan_brightness(int brightness);
 int zk_publish_ota_progress(uint32 progress);
