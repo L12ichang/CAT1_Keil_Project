@@ -20,9 +20,39 @@ python tools/current_calibration/calibration_station.py --mode regression --imei
 
 ```powershell
 python tools/current_calibration/calibration_station.py --mode calibrate `
-  --imei 864512081541939 --rated-current-ma 2700 `
-  --enable-output --enable-high-power --serial-port COM23 `
-  --meter-id DMM-001 --meter-cal-date 2026-06-01
+  --imei 864512081541939 --rated-current-ma 890 `
+  --enable-output --enable-high-power `
+  --eload-port COM25 --eload-baud 9600 `
+  --load-voltage-v 56 --power-limit-w 70 `
+  --serial-port COM24 `
+  --meter-id ELOAD-001 --meter-cal-date 2026-06-01
+```
+
+当前设备断电时不得运行上述校准命令；必须先确认电源、电子负载、硬件限流和通信均正常。
+
+`--eload-port` 对接现有电子负载工具使用的协议：9600、8N1，固定发送只读命令
+`MEAS:CURR?\n`，设备返回以 A 为单位的一行浮点数；校准脚本自动换算为 mA。
+工站不提供自定义 SCPI 命令入口，避免误把控制命令发给电子负载。
+默认每个 PWM 至少读取 24 点（100 ms 间隔），通过连续双窗口稳定性检查后才接受。
+每次改变 PWM 后默认等待 2000 ms，再开始采样，与原电子负载工具的扫描等待时间一致。
+`--serial-port` 是电源设备调试日志串口，不能与电子负载串口相同，也不是 J-Link 端口。
+如果暂时不传 `--eload-port`，脚本仍保留原来的手工粘贴 mA 样本模式。
+`--load-voltage-v` 与 `--power-limit-w` 必须成对使用，外部实测电流折算功率超过上限时立即中止。
+
+中途因输入掉电等外部原因安全中止后，可重复传入一个或多个 `--resume-csv` 恢复已经验收的连续点。
+每个 CSV 必须有同名 `.manifest.json`，其中绑定 IMEI、`profileCrc`、额定电流、硬件最大电流和
+逻辑 PWM 上限；缺失或不匹配将拒绝恢复。恢复时只相信 `measured_ma`，会按当前额定电流重算误差，
+不会盲信 CSV 内的 `error_ma`。
+
+自动采样会逐样本检查：非零 PWM 必须得到有限且大于零的电流，且不得超过设备硬件最大电流和给定的
+功率门限；0% 仅允许 `--leakage-max-ma` 范围内的小幅正/负偏置。越限或连续三次读数错误时，工站会
+根据会话状态请求 `setPwm=0` 或 `setTestPercent=0`，随后由 `finally` 发送 `abort`。
+少量复测漂移可用 `--curve-override 65=392` 形式修正指定点；修正后仍必须重新完成全点复测。
+
+正式校准前可先单独验证电子负载串口；该模式不连接 MQTT，也不控制电源设备：
+
+```powershell
+python tools/current_calibration/calibration_station.py --mode eload-test --eload-port COM25
 ```
 
 确认设备输出为零后只读导出 A/B 槽：

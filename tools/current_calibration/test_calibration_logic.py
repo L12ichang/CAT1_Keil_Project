@@ -2,16 +2,36 @@
 from __future__ import annotations
 
 import json
+import io
 import struct
 import sys
 import unittest
 import zlib
+from argparse import Namespace
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from calibration_station import curve_crc, interpolate, stable_samples
+from calibration_station import (
+    CalibrationSafeStopError,
+    Response,
+    apply_curve_overrides,
+    build_report_provenance,
+    calibration_safe_stop,
+    curve_crc,
+    interpolate,
+    load_resume_curve,
+    parse_current_response,
+    read_meter_samples,
+    run_calibrate,
+    stable_samples,
+    validate_calibration_info,
+    validate_cli_numeric_args,
+    validate_eload_query,
+    validate_current_sample,
+)
 
 
 FLASH_MAGIC = 0x43414C31
@@ -71,6 +91,290 @@ def select_flash_slot(slot_a: bytes, slot_b: bytes) -> tuple[str, int, int] | No
 
 
 class CalibrationLogicTests(unittest.TestCase):
+    def test_electronic_load_response_is_converted_to_milliamps(self) -> None:
+        self.assertEqual(parse_current_response("2.700\r\n"), 2700.0)
+        self.assertEqual(parse_current_response("1.25e-1\n"), 125.0)
+        self.assertEqual(parse_current_response("2700", "mA"), 2700.0)
+        with self.assertRaises(ValueError):
+            parse_current_response("2.700 A")
+        with self.assertRaises(ValueError):
+            parse_current_response("nan")
+
+    def test_automatic_meter_collects_two_stable_windows(self) -> None:
+        class FakeMeter:
+            def read_current_ma(self) -> float:
+                return 1350.0
+
+        samples, metrics = read_meter_samples(
+            "test", meter=FakeMeter(), sample_interval_s=0.0, sample_timeout_s=1.0
+        )
+        self.assertEqual(len(samples), 24)
+        self.assertEqual(metrics["average"], 1350.0)
+
+    def test_unsafe_sample_requests_output_off_before_failure(self) -> None:
+        class FakeMeter:
+            def read_current_ma(self) -> float:
+                return 900.0
+
+        args = Namespace(load_voltage_v=56.0, power_limit_w=70.0, leakage_max_ma=10.0)
+        callbacks: list[str] = []
+        with self.assertRaisesRegex(RuntimeError, "hardware limit"):
+            read_meter_samples(
+                "test",
+                meter=FakeMeter(),
+                sample_interval_s=0.0,
+                sample_timeout_s=1.0,
+                sample_validator=lambda value: validate_current_sample(
+                    args, value, "test", nonzero_output=True, maximum_ma=890.0
+                ),
+                on_sample_failure=lambda error: callbacks.append(str(error)),
+            )
+        self.assertEqual(len(callbacks), 1)
+
+    def test_consecutive_meter_errors_fail_fast_and_request_output_off(self) -> None:
+        class BrokenMeter:
+            def read_current_ma(self) -> float:
+                raise OSError("serial disconnected")
+
+        callbacks: list[str] = []
+        with self.assertRaisesRegex(RuntimeError, "3 consecutive"):
+            read_meter_samples(
+                "test",
+                meter=BrokenMeter(),
+                sample_interval_s=0.0,
+                sample_timeout_s=1.0,
+                on_sample_failure=lambda error: callbacks.append(str(error)),
+            )
+        self.assertEqual(len(callbacks), 1)
+
+    def test_zero_output_allows_small_signed_offset_only(self) -> None:
+        args = Namespace(load_voltage_v=None, power_limit_w=None, leakage_max_ma=10.0)
+        validate_current_sample(args, -9.9, "zero", nonzero_output=False, maximum_ma=None)
+        with self.assertRaisesRegex(RuntimeError, "zero-output"):
+            validate_current_sample(args, -10.1, "zero", nonzero_output=False, maximum_ma=None)
+        with self.assertRaisesRegex(RuntimeError, "non-positive"):
+            validate_current_sample(args, 0.0, "nonzero", nonzero_output=True, maximum_ma=890.0)
+
+    def test_eload_query_is_fixed_to_safe_read_only_command(self) -> None:
+        self.assertEqual(validate_eload_query("MEAS:CURR?"), "MEAS:CURR?")
+        for value in ("MEAS:VOLT?", "MEAS:CURR?\r\n", "OUTP ON"):
+            with self.assertRaises(ValueError):
+                validate_eload_query(value)
+
+    def test_read_info_requires_consistent_current_and_power_limits(self) -> None:
+        args = Namespace(imei="864512081541939", rated_current_ma=890,
+                         load_voltage_v=56.0, power_limit_w=70.0)
+        context = validate_calibration_info(
+            {"profileCrc": 1, "ratedCurrentMa": 890,
+             "hardwareMaxCurrentMa": 1680, "pwmLogicalMax": 999}, args
+        )
+        self.assertEqual(context["hardwareMaxCurrentMa"], 1680)
+        with self.assertRaises(ValueError):
+            validate_calibration_info(
+                {"profileCrc": 1, "ratedCurrentMa": 1700,
+                 "hardwareMaxCurrentMa": 1680, "pwmLogicalMax": 999}, args
+            )
+        limited = Namespace(imei="864512081541939", rated_current_ma=890,
+                            load_voltage_v=56.0, power_limit_w=49.0)
+        with self.assertRaisesRegex(ValueError, "rated output power"):
+            validate_calibration_info(
+                {"profileCrc": 1, "ratedCurrentMa": 890,
+                 "hardwareMaxCurrentMa": 1680, "pwmLogicalMax": 999}, limited
+            )
+
+    def test_resume_requires_matching_manifest_and_recomputes_error(self) -> None:
+        context = {
+            "imei": "864512081541939", "profileCrc": 123,
+            "ratedCurrentMa": 1000, "hardwareMaxCurrentMa": 1500, "pwmLogicalMax": 999,
+        }
+        class Manifest:
+            def is_file(self) -> bool:
+                return True
+
+            def read_text(self, encoding: str) -> str:
+                return json.dumps({"format": 1, "csvFile": "resume.csv", **context})
+
+            def __str__(self) -> str:
+                return "resume.manifest.json"
+
+        class ResumeCsv:
+            name = "resume.csv"
+
+            def with_suffix(self, suffix: str) -> Manifest:
+                if suffix != ".manifest.json":
+                    raise AssertionError(suffix)
+                return Manifest()
+
+            def open(self, mode: str, *, encoding: str, newline: str) -> io.StringIO:
+                if mode != "r":
+                    raise AssertionError(mode)
+                return io.StringIO(
+                    "phase,percent,target_ma,logical_pwm,measured_ma,error_ma\n"
+                    "search,5,50,20,150,0\n"
+                )
+
+            def __str__(self) -> str:
+                return "resume.csv"
+
+        path = ResumeCsv()
+        self.assertEqual(load_resume_curve([path], 1000, context), [0])
+        bad_context = {**context, "profileCrc": 124}
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            load_resume_curve([path], 1000, bad_context)
+
+    def test_report_provenance_pairs_zero_one_and_multiple_resume_inputs(self) -> None:
+        context = {
+            "imei": "864512081541939", "profileCrc": 123,
+            "ratedCurrentMa": 890, "hardwareMaxCurrentMa": 1680,
+            "pwmLogicalMax": 1000,
+        }
+        run_csv = Path("logs/current.csv")
+        run_manifest = Path("logs/current.manifest.json")
+
+        empty = build_report_provenance(run_csv, run_manifest, None, context)
+        self.assertEqual(empty["runCsv"], str(run_csv))
+        self.assertEqual(empty["runManifest"], str(run_manifest))
+        self.assertEqual(empty["resumeInputs"], [])
+        self.assertIsNone(empty["calibrationContext"]["contextCrc"])
+        self.assertIsNone(empty["calibrationContext"]["calibrationMaxCurrentMa"])
+
+        first = Path("logs/first.csv")
+        one = build_report_provenance(
+            run_csv, run_manifest, [first], context, manifest_exists=lambda path: True
+        )
+        self.assertEqual(one["resumeInputs"], [{
+            "csv": str(first), "manifest": str(first.with_suffix(".manifest.json")),
+            "manifestStatus": "present",
+        }])
+        self.assertNotEqual(one["resumeInputs"][0]["manifest"], one["runManifest"])
+
+        second = Path("logs/second.csv")
+        multiple = build_report_provenance(
+            run_csv,
+            run_manifest,
+            [first, second],
+            context,
+            manifest_exists=lambda path: path.name.startswith("first"),
+        )
+        self.assertEqual(len(multiple["resumeInputs"]), 2)
+        self.assertEqual(multiple["resumeInputs"][0]["manifestStatus"], "present")
+        self.assertIsNone(multiple["resumeInputs"][1]["manifest"])
+        self.assertEqual(multiple["resumeInputs"][1]["manifestStatus"], "missing")
+
+    def test_curve_override_rejects_pwm_above_device_limit(self) -> None:
+        with self.assertRaisesRegex(ValueError, "outside"):
+            apply_curve_overrides([0, 50], ["5=1001"], 1000)
+        self.assertEqual(apply_curve_overrides([0, 50], ["5=60"], 1000), [0, 60])
+
+    def test_read_info_rejects_fractional_nonfinite_and_out_of_range_numbers(self) -> None:
+        args = Namespace(imei="864512081541939", rated_current_ma=890,
+                         load_voltage_v=56.0, power_limit_w=70.0)
+        base = {"profileCrc": 1, "ratedCurrentMa": 890,
+                "hardwareMaxCurrentMa": 1680, "pwmLogicalMax": 1000}
+        for field, value in (
+            ("ratedCurrentMa", 890.9), ("ratedCurrentMa", float("nan")),
+            ("hardwareMaxCurrentMa", float("inf")), ("hardwareMaxCurrentMa", 10001),
+            ("pwmLogicalMax", 65536), ("profileCrc", 0x1_0000_0000),
+        ):
+            with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                validate_calibration_info({**base, field: value}, args)
+
+    def test_cli_numeric_values_must_be_finite_and_reasonable(self) -> None:
+        def valid_args() -> Namespace:
+            return Namespace(
+                rated_current_ma=890, meter_samples=24, meter_sample_interval_ms=100,
+                settle_ms=2000, max_iterations=16, low_power_limit=25,
+                timeout=30.0, eload_timeout=1.0, meter_sample_timeout=25.0,
+                leakage_max_ma=10.0, environment_c=25.0,
+                load_voltage_v=56.0, power_limit_w=70.0,
+            )
+
+        validate_cli_numeric_args(valid_args())
+        for field, value in (("load_voltage_v", float("nan")),
+                             ("power_limit_w", float("inf")),
+                             ("timeout", float("nan")),
+                             ("environment_c", float("inf"))):
+            args = valid_args()
+            setattr(args, field, value)
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                validate_cli_numeric_args(args)
+
+    def test_safe_stop_handles_temporary_curve_and_verifies_abort(self) -> None:
+        class FakeStation:
+            def __init__(self, state: str, reject_abort: bool = False):
+                self.actions: list[str] = []
+                self.reject_abort = reject_abort
+                self.state = state
+
+            def request(self, action: str, fields: dict[str, object]) -> Response:
+                self.actions.append(action)
+                result = 0
+                if action == "setTestPercent" and self.state != "TEMP_APPLIED":
+                    result = 9
+                elif action == "setPwm" and self.state == "TEMP_APPLIED":
+                    result = 9
+                elif action == "abort" and self.reject_abort:
+                    result = 9
+                if result == 0 and action in {"setTestPercent", "setPwm"}:
+                    self.state = "READY"
+                if result == 0 and action == "abort":
+                    self.state = "IDLE"
+                return Response({}, {"action": action, "result": result,
+                                     "outputEnabled": 0, "logicalPwm": 0})
+
+        station = FakeStation("TEMP_APPLIED")
+        self.assertEqual(
+            calibration_safe_stop(station, "CAL", 10,
+                                  temporary_curve_active=True, abort_session=True),
+            12,
+        )
+        self.assertEqual(station.actions, ["setTestPercent", "abort"])
+        self.assertEqual(station.state, "IDLE")
+
+        direct = FakeStation("READY")
+        calibration_safe_stop(direct, "CAL", 30,
+                              temporary_curve_active=False, abort_session=True)
+        self.assertEqual(direct.actions, ["setPwm", "abort"])
+        self.assertEqual(direct.state, "IDLE")
+
+        rejecting = FakeStation("TEMP_APPLIED", reject_abort=True)
+        with self.assertRaises(CalibrationSafeStopError):
+            calibration_safe_stop(rejecting, "CAL", 20,
+                                  temporary_curve_active=True, abort_session=True)
+        self.assertEqual(rejecting.actions, ["setTestPercent", "abort"])
+
+    def test_enter_ack_timeout_still_attempts_cleanup_without_masking_timeout(self) -> None:
+        class LostAckStation:
+            def __init__(self):
+                self.actions: list[str] = []
+
+            def request(self, action: str, fields: dict[str, object]) -> Response:
+                self.actions.append(action)
+                if action == "readInfo":
+                    return Response({}, {
+                        "action": action, "result": 0, "profileCrc": 1,
+                        "ratedCurrentMa": 890, "hardwareMaxCurrentMa": 1680,
+                        "pwmLogicalMax": 1000,
+                    })
+                if action == "enter":
+                    raise TimeoutError("ACK lost")
+                return Response({}, {"action": action, "result": 4,
+                                     "outputEnabled": 0, "logicalPwm": 0})
+
+        args = Namespace(
+            imei="864512081541939", rated_current_ma=890,
+            load_voltage_v=56.0, power_limit_w=70.0,
+            resume_csv=None, curve_override=[],
+        )
+        station = LostAckStation()
+        with patch("calibration_station.write_resume_manifest", return_value=Path("manifest.json")):
+            with self.assertRaisesRegex(TimeoutError, "ACK lost"):
+                run_calibrate(
+                    station, args, None, "CAL", object(),
+                    Path("report.json"), Path("run.csv"),
+                )
+        self.assertEqual(station.actions, ["readInfo", "enter", "setPwm", "abort"])
+
     def test_crc32_standard_vector(self) -> None:
         import zlib
 
@@ -260,7 +564,12 @@ class CalibrationLogicTests(unittest.TestCase):
 
     def test_storage_source_commits_valid_marker_last(self) -> None:
         text = (ROOT / "Core/Src/current_cal_storage.c").read_text(encoding="utf-8")
-        stage_pos = text.index("staged_record.valid_marker = 0xffffffffUL")
+        if "staged_record.valid_marker = 0xffffffffUL" in text:
+            stage_pos = text.index("staged_record.valid_marker = 0xffffffffUL")
+        else:
+            stage_pos = text.index(
+                "current_cal_put_u32_le(staged + V2_OFF_VALID_MARKER, 0xffffffffUL)"
+            )
         page_write_pos = text.index("hw_flash_update_bytes_checked", stage_pos)
         marker_write_pos = text.index("hw_flash_program_bytes_checked", page_write_pos)
         self.assertLess(stage_pos, page_write_pos)
