@@ -1635,6 +1635,11 @@
               <FilePath>..\Core\Src\current_calibration.c</FilePath>
             </File>
             <File>
+              <FileName>meter_calibration.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\meter_calibration.c</FilePath>
+            </File>
+            <File>
               <FileName>sys_aip1302.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\sys_aip1302.c</FilePath>
@@ -3506,6 +3511,11 @@
               <FileName>current_calibration.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\current_calibration.c</FilePath>
+            </File>
+            <File>
+              <FileName>meter_calibration.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\meter_calibration.c</FilePath>
             </File>
             <File>
               <FileName>sys_aip1302.c</FileName>
