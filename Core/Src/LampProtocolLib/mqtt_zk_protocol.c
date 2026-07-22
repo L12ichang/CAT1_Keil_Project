@@ -14,6 +14,7 @@
 #include "crc16_modbus.h"
 #include "sys_bl0942.h"
 #include "sys_Vo_Io.h"
+#include "meter_runtime.h"
 #include "sys_aip1302.h"
 #include "danger_current_check.h"
 #include "sys_pow_drop_check.h"
@@ -1823,6 +1824,44 @@ void zk_add_run_status_group(cJSON *dt_root)
     cJSON_AddItemToObject(dt_root, "RunSts", run_status);
 }
 
+static u32 zk_meter_round_u32(u32 value, u32 divisor)
+{
+    u32 quotient;
+    u32 remainder;
+
+    if (divisor == 0U)
+    {
+        return 0U;
+    }
+    quotient = value / divisor;
+    remainder = value % divisor;
+    if (remainder >= (divisor / 2U + divisor % 2U) &&
+        quotient != 0xffffffffUL)
+    {
+        ++quotient;
+    }
+    return quotient;
+}
+
+static u32 zk_meter_round_u64_to_u32(u64 value, u32 divisor)
+{
+    u64 quotient;
+    u64 remainder;
+
+    if (divisor == 0U)
+    {
+        return 0U;
+    }
+    quotient = value / (u64)divisor;
+    remainder = value % (u64)divisor;
+    if (remainder >= ((u64)divisor / 2ULL +
+                      (u64)divisor % 2ULL))
+    {
+        ++quotient;
+    }
+    return (quotient > 0xffffffffULL) ? 0xffffffffUL : (u32)quotient;
+}
+
 void zk_add_ele_info_group(cJSON *dt_root)
 {
     cJSON *ele_info;
@@ -1836,6 +1875,63 @@ void zk_add_ele_info_group(cJSON *dt_root)
     cJSON *oc;
     cJSON *ov;
     cJSON *op;
+    meter_runtime_snapshot_t meter;
+    boolean_en meter_available;
+    u32 input_current_ma;
+    u32 input_voltage_01v;
+    u32 input_pf_0001;
+    u32 input_power_w;
+    u32 session_energy_wh;
+    u32 total_energy_wh;
+    u32 output_current_ma;
+    u32 output_voltage_01v;
+    u32 output_power_w;
+
+    memset(&meter, 0, sizeof(meter));
+    /* Exactly one coherent copy supplies every electrical MQTT field. */
+    meter_available = meter_runtime_get_snapshot(&meter);
+    input_current_ma = 0U;
+    input_voltage_01v = 0U;
+    input_pf_0001 = 0U;
+    input_power_w = 0U;
+    output_current_ma = 0U;
+    output_voltage_01v = 0U;
+    output_power_w = 0U;
+    if (meter_available == BOOL_TRUE && meter.input_valid == BOOL_TRUE)
+    {
+        input_current_ma = zk_meter_round_u32(
+            meter.input_current_ua, 1000U);
+        input_voltage_01v = zk_meter_round_u32(
+            meter.input_voltage_mv, 100U);
+        input_pf_0001 = zk_meter_round_u32(meter.input_pf_ppm, 1000U);
+        if (input_pf_0001 > 1000U)
+        {
+            input_pf_0001 = 1000U;
+        }
+        input_power_w = zk_meter_round_u32(
+            meter.input_active_power_mw, 1000U);
+    }
+    if (meter_available == BOOL_TRUE && meter.output_valid == BOOL_TRUE)
+    {
+        output_current_ma = zk_meter_round_u32(
+            meter.output_current_ua, 1000U);
+        output_voltage_01v = zk_meter_round_u32(
+            meter.output_voltage_mv, 100U);
+        output_power_w = zk_meter_round_u32(
+            meter.output_power_mw, 1000U);
+    }
+    if (meter.energy_valid == BOOL_TRUE)
+    {
+        session_energy_wh = zk_meter_round_u64_to_u32(
+            meter.session_energy_uwh, 1000000U);
+        total_energy_wh = zk_meter_round_u64_to_u32(
+            meter.total_energy_uwh, 1000000U);
+    }
+    else
+    {
+        session_energy_wh = 0U;
+        total_energy_wh = 0U;
+    }
 
     ele_info = zk_cjson_create_tx_object("EleInfo");
     e = zk_cjson_create_tx_array("EleInfo.e");
@@ -1856,22 +1952,23 @@ void zk_add_ele_info_group(cJSON *dt_root)
     }
 
     /* EleInfo.e[0]: 0表示无故障；有故障时上报当前电源故障位图 */
-    cJSON_AddItemToArray(e, cJSON_CreateNumber((double)error_flag_byte));
-    cJSON_AddItemToArray(c, cJSON_CreateNumber((double)Z_ac_current));
-    cJSON_AddItemToArray(v, cJSON_CreateNumber((double)ac_voltage_8209));
-    cJSON_AddItemToArray(f, cJSON_CreateNumber((double)((u32)ac_pf * 10U)));
+    cJSON_AddItemToArray(e, cJSON_CreateNumber((double)meter.protect_code));
+    cJSON_AddItemToArray(c, cJSON_CreateNumber((double)input_current_ma));
+    cJSON_AddItemToArray(v, cJSON_CreateNumber((double)input_voltage_01v));
+    /* EleInfo.f is power factor in 0.001, not line frequency. */
+    cJSON_AddItemToArray(f, cJSON_CreateNumber((double)input_pf_0001));
     /* EleInfo.p: BL0942有功功率ac_powerpa原始单位0.01W，平台按原始数字显示W，故/100转为整数W（四舍五入） */
-    cJSON_AddItemToArray(p, cJSON_CreateNumber((double)((ac_powerpa + 50U) / 100U)));
+    cJSON_AddItemToArray(p, cJSON_CreateNumber((double)input_power_w));
     /* EleInfo.rEc/tEc: 原始单位0.01Wh，协议要求W·h，故/100转为整数W·h（四舍五入） */
     /* tEc = flash历史累积 + 本周期RAM累积 = 设备启用至今总能耗 */
-    cJSON_AddItemToArray(r_ec, cJSON_CreateNumber((double)((energy_this_time + 50U) / 100U)));
-    cJSON_AddItemToArray(t_ec, cJSON_CreateNumber((double)((sys_data.ac_EnergyP + total_power_this_time + 50U) / 100U)));
+    cJSON_AddItemToArray(r_ec, cJSON_CreateNumber((double)session_energy_wh));
+    cJSON_AddItemToArray(t_ec, cJSON_CreateNumber((double)total_energy_wh));
     /* EleInfo.oc: 输出电流，Io_value原始单位mA，协议单位mA，直接使用 */
-    cJSON_AddItemToArray(oc, cJSON_CreateNumber((double)Io_value));
+    cJSON_AddItemToArray(oc, cJSON_CreateNumber((double)output_current_ma));
     /* EleInfo.ov: 输出电压，Vo_value原始单位0.1V，协议单位0.1V，直接使用 */
-    cJSON_AddItemToArray(ov, cJSON_CreateNumber((double)Vo_value));
+    cJSON_AddItemToArray(ov, cJSON_CreateNumber((double)output_voltage_01v));
     /* EleInfo.op: 输出功率，Po_value原始单位0.1W，协议单位W，/10四舍五入 */
-    cJSON_AddItemToArray(op, cJSON_CreateNumber((double)((Po_value + 5U) / 10U)));
+    cJSON_AddItemToArray(op, cJSON_CreateNumber((double)output_power_w));
     cJSON_AddItemToObject(ele_info, "e", e);
     cJSON_AddItemToObject(ele_info, "c", c);
     cJSON_AddItemToObject(ele_info, "v", v);
@@ -2988,8 +3085,9 @@ boolean_en zk_handle_control_message(cJSON *root, const zk_message_header_t *hea
             boolean_en runtime_ok;
             boolean_en energy_main_ok;
             boolean_en energy_backup_ok;
+            boolean_en meter_energy_ok;
 
-            sys_bl0942_energy_stats_clear();
+            meter_energy_ok = sys_bl0942_energy_stats_clear();
             sys_data_store();
             energy_main_ok = user_flash_check(DATAROM_STARTADDR,
                                               (u8 *)&sys_data,
@@ -2998,7 +3096,8 @@ boolean_en zk_handle_control_message(cJSON *root, const zk_message_header_t *hea
                                                 (u8 *)&sys_data,
                                                 (u16)sizeof(sys_data));
             runtime_ok = zk_runtime_stats_clear();
-            if ((energy_main_ok != BOOL_TRUE && energy_backup_ok != BOOL_TRUE) ||
+            if (meter_energy_ok != BOOL_TRUE ||
+                (energy_main_ok != BOOL_TRUE && energy_backup_ok != BOOL_TRUE) ||
                 runtime_ok != BOOL_TRUE)
             {
                 zk_publish_simple_response(header, ZK_FLASH_SAVE_ERROR);

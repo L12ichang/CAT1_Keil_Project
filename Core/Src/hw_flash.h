@@ -20,6 +20,9 @@ extern HAL_StatusTypeDef hw_flash_update_bytes_checked(uint32_t flash_addr,
 /* Latched until reset after a checked page update cannot complete exactly as
  * requested.  PWM treats this as a non-clearable runtime inhibit. */
 extern boolean_en hw_flash_update_fault_latched(void);
+/* Latch a non-recoverable persistence/coordinator failure into the same
+ * fail-safe domain used by checked Flash RMW. */
+extern void hw_flash_latch_update_fault(void);
 extern HAL_StatusTypeDef hw_flash_program_bytes_checked(uint32_t flash_addr,
                                                         const u8 *buffer,
                                                         uint32_t length);

@@ -44,6 +44,7 @@
 #include "sys_data.h"
 #include "sys_pwm.h"
 #include "current_calibration.h"
+#include "meter_runtime.h"
 #include "sys_temp_over_protect.h"
 #include "aip1302.h"
 #include "sys_aip1302.h"
@@ -232,6 +233,9 @@ int main(void)
     {
         sys_data.ac_EnergyP=0;
     }
+    /* current_calibration_init() loaded the shared calibration envelope;
+     * initialize metering only after legacy energy has been normalized. */
+    meter_runtime_init();
     system_colock_monitor();
     hw_4g_io_init();
     pwr_off(); //λ�ò�Ҫת��  �ϵ����׹ػ�
@@ -255,6 +259,7 @@ int main(void)
     hw_uart3_process();
 #endif
     sys_tick_process();
+    meter_runtime_process();
     zk_runtime_counter_process();
   
     hw_gateway_process();           

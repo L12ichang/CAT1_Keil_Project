@@ -2,6 +2,7 @@
 #include "flash_address_assignment.h"
 #include "hw_flash.h"
 #include "factory_user_data.h"
+#include "sys_pwm.h"
 
 /* Legacy 80-byte record constants.  Never change: deployed v1 devices use it. */
 #define CURRENT_CAL_V1_MAGIC             0x43414c31UL
@@ -78,11 +79,23 @@ static boolean_en current_cal_active_valid = BOOL_FALSE;
 static boolean_en current_cal_active_legacy = BOOL_FALSE;
 static current_cal_meter_section_t current_cal_active_meter;
 static boolean_en current_cal_meter_valid = BOOL_FALSE;
+static current_cal_meter_status_en current_cal_meter_status_value =
+    CURRENT_CAL_METER_STATUS_ABSENT;
+static current_cal_shared_peer_prepare_fn current_cal_shared_peer_prepare = NULL;
 static u32 current_cal_active_sequence = 0U;
 static current_cal_slot_en current_cal_active_slot_id = CURRENT_CAL_SLOT_NONE;
 static boolean_en current_cal_repair_required = BOOL_FALSE;
 static boolean_en current_cal_repair_barrier_present = BOOL_FALSE;
+static current_cal_slot_en current_cal_repair_safe_target =
+    CURRENT_CAL_SLOT_NONE;
 static u32 current_cal_repair_sequence = 0U;
+
+static boolean_en current_cal_persistence_fail(void)
+{
+    hw_flash_latch_update_fault();
+    sys_pwm_force_off();
+    return BOOL_FALSE;
+}
 
 static u16 current_cal_get_u16_le(const u8 *src)
 {
@@ -214,6 +227,25 @@ static boolean_en current_cal_storage_read(u32 address, current_cal_record_t *re
     return BOOL_FALSE;
 }
 
+static boolean_en current_cal_record_bytes_erased(
+    const current_cal_record_t *record)
+{
+    u32 index;
+
+    if (record == NULL)
+    {
+        return BOOL_FALSE;
+    }
+    for (index = 0U; index < CURRENT_CAL_V2_RECORD_SIZE; ++index)
+    {
+        if (record->bytes[index] != 0xffU)
+        {
+            return BOOL_FALSE;
+        }
+    }
+    return BOOL_TRUE;
+}
+
 static boolean_en current_cal_marker_is_repair_guard(u32 marker)
 {
     return (marker != CURRENT_CAL_VALID_MARKER &&
@@ -281,6 +313,7 @@ static boolean_en current_cal_record_is_repair_pair(
 static boolean_en current_cal_guard_slot_b(void)
 {
     current_cal_record_t record;
+    boolean_en guarded;
     u8 marker[4];
     u32 marker_offset;
 
@@ -296,10 +329,15 @@ static boolean_en current_cal_guard_slot_b(void)
     {
         /* A failed word program may still have cleared a subset of bits. */
         (void)current_cal_storage_read(CURRENT_CAL_FLASH_SLOT_B_ADDR, &record);
-        return current_cal_record_repair_guarded(&record);
+        guarded = current_cal_record_repair_guarded(&record);
+        (void)guarded;
+        (void)current_cal_persistence_fail();
+        return BOOL_FALSE;
     }
     (void)current_cal_storage_read(CURRENT_CAL_FLASH_SLOT_B_ADDR, &record);
-    return current_cal_record_repair_guarded(&record);
+    guarded = current_cal_record_repair_guarded(&record);
+    return (guarded == BOOL_TRUE) ? BOOL_TRUE :
+           current_cal_persistence_fail();
 }
 
 /* RFC-1982 style u32 serial comparison.  A half-range difference has no
@@ -339,6 +377,7 @@ static void current_cal_clear_meter(void)
     memset(&current_cal_active_meter, 0, sizeof(current_cal_active_meter));
     current_cal_active_meter.state = CURRENT_CAL_SECTION_EMPTY;
     current_cal_meter_valid = BOOL_FALSE;
+    current_cal_meter_status_value = CURRENT_CAL_METER_STATUS_ABSENT;
 }
 
 static void current_cal_activate_meter_v2(const u8 *record)
@@ -354,6 +393,7 @@ static void current_cal_activate_meter_v2(const u8 *record)
     }
     if (state != CURRENT_CAL_SECTION_VALID && state != CURRENT_CAL_SECTION_TOMBSTONE)
     {
+        current_cal_meter_status_value = CURRENT_CAL_METER_STATUS_INVALID;
         return;
     }
     memset(&section, 0, sizeof(section));
@@ -364,6 +404,7 @@ static void current_cal_activate_meter_v2(const u8 *record)
     section.data_length = current_cal_get_u16_le(record + V2_OFF_METER_DATA_LENGTH);
     if (section.data_length > CURRENT_CAL_METER_PAYLOAD_SIZE)
     {
+        current_cal_meter_status_value = CURRENT_CAL_METER_STATUS_INVALID;
         return;
     }
     memcpy(section.payload, record + V2_OFF_METER_PAYLOAD, sizeof(section.payload));
@@ -371,16 +412,22 @@ static void current_cal_activate_meter_v2(const u8 *record)
     {
         if (section.data_length != 0U || section.data_crc != 0U)
         {
+            current_cal_meter_status_value = CURRENT_CAL_METER_STATUS_INVALID;
             return;
         }
     }
     else if (section.section_version == 0U ||
              section.data_crc != current_cal_meter_crc(&section))
     {
+        current_cal_meter_status_value = CURRENT_CAL_METER_STATUS_INVALID;
         return;
     }
     current_cal_active_meter = section;
     current_cal_meter_valid = BOOL_TRUE;
+    current_cal_meter_status_value =
+        (section.state == CURRENT_CAL_SECTION_TOMBSTONE) ?
+        CURRENT_CAL_METER_STATUS_TOMBSTONE :
+        CURRENT_CAL_METER_STATUS_VALID;
 }
 
 static void current_cal_activate_pwm_v2(const u8 *record)
@@ -527,24 +574,28 @@ static boolean_en current_cal_write_v2(const u8 *record, current_cal_slot_en slo
     status = hw_flash_update_bytes_checked(address, staged, sizeof(staged));
     if (status != HAL_OK)
     {
-        return BOOL_FALSE;
+        return current_cal_persistence_fail();
     }
     hw_flash_read_bytes(address, readback, sizeof(readback));
     if (memcmp(readback, staged, sizeof(readback)) != 0 ||
         current_cal_get_u32_le(readback + V2_OFF_RECORD_CRC) !=
         current_cal_crc32(readback, V2_OFF_RECORD_CRC))
     {
-        return BOOL_FALSE;
+        return current_cal_persistence_fail();
     }
     status = hw_flash_program_bytes_checked(address + V2_OFF_VALID_MARKER,
                                             record + V2_OFF_VALID_MARKER, 4U);
     if (status != HAL_OK)
     {
-        return BOOL_FALSE;
+        return current_cal_persistence_fail();
     }
     hw_flash_read_bytes(address, readback, sizeof(readback));
-    return (memcmp(readback, record, sizeof(readback)) == 0 &&
-            current_cal_v2_record_valid(readback) == BOOL_TRUE) ? BOOL_TRUE : BOOL_FALSE;
+    if (memcmp(readback, record, sizeof(readback)) != 0 ||
+        current_cal_v2_record_valid(readback) != BOOL_TRUE)
+    {
+        return current_cal_persistence_fail();
+    }
+    return BOOL_TRUE;
 }
 
 static boolean_en current_cal_storage_store(current_cal_section_state_en pwm_state,
@@ -554,6 +605,19 @@ static boolean_en current_cal_storage_store(current_cal_section_state_en pwm_sta
     current_cal_record_t activated;
     current_cal_slot_en target_slot;
     u32 next_sequence;
+
+    if (current_cal_repair_required == BOOL_TRUE)
+    {
+        if (current_cal_shared_peer_prepare != NULL &&
+            current_cal_shared_peer_prepare() != BOOL_TRUE)
+        {
+            return BOOL_FALSE;
+        }
+    }
+    else if (current_cal_storage_prepare_shared_page_update() != BOOL_TRUE)
+    {
+        return BOOL_FALSE;
+    }
 
     memset(&activated, 0, sizeof(activated));
     activated.format = CURRENT_CAL_RECORD_V2;
@@ -598,14 +662,39 @@ static boolean_en current_cal_storage_store(current_cal_section_state_en pwm_sta
                 return BOOL_FALSE;
             }
             current_cal_repair_barrier_present = BOOL_TRUE;
+            current_cal_repair_safe_target = CURRENT_CAL_SLOT_A;
         }
-        if (current_cal_write_v2(activated.bytes, CURRENT_CAL_SLOT_A) != BOOL_TRUE ||
-            current_cal_write_v2(activated.bytes, CURRENT_CAL_SLOT_B) != BOOL_TRUE)
+        if (current_cal_repair_safe_target == CURRENT_CAL_SLOT_B)
         {
-            return BOOL_FALSE;
+            if (current_cal_write_v2(activated.bytes,
+                                     CURRENT_CAL_SLOT_B) != BOOL_TRUE)
+            {
+                return BOOL_FALSE;
+            }
+            current_cal_repair_safe_target = CURRENT_CAL_SLOT_A;
+            if (current_cal_write_v2(activated.bytes,
+                                     CURRENT_CAL_SLOT_A) != BOOL_TRUE)
+            {
+                return BOOL_FALSE;
+            }
+        }
+        else
+        {
+            if (current_cal_write_v2(activated.bytes,
+                                     CURRENT_CAL_SLOT_A) != BOOL_TRUE)
+            {
+                return BOOL_FALSE;
+            }
+            current_cal_repair_safe_target = CURRENT_CAL_SLOT_B;
+            if (current_cal_write_v2(activated.bytes,
+                                     CURRENT_CAL_SLOT_B) != BOOL_TRUE)
+            {
+                return BOOL_FALSE;
+            }
         }
         current_cal_repair_required = BOOL_FALSE;
         current_cal_repair_barrier_present = BOOL_FALSE;
+        current_cal_repair_safe_target = CURRENT_CAL_SLOT_NONE;
         current_cal_storage_activate(&activated, CURRENT_CAL_SLOT_B);
         return BOOL_TRUE;
     }
@@ -727,6 +816,7 @@ void current_cal_storage_init(void)
     current_cal_active_slot_id = CURRENT_CAL_SLOT_NONE;
     current_cal_repair_required = BOOL_FALSE;
     current_cal_repair_barrier_present = BOOL_FALSE;
+    current_cal_repair_safe_target = CURRENT_CAL_SLOT_NONE;
     current_cal_repair_sequence = 0U;
     memset(&current_cal_active_curve, 0, sizeof(current_cal_active_curve));
     current_cal_clear_meter();
@@ -749,11 +839,34 @@ void current_cal_storage_init(void)
              (valid_b == BOOL_TRUE && valid_a != BOOL_TRUE &&
               current_cal_record_is_repair_pair(&record_b) == BOOL_TRUE)) ?
             BOOL_TRUE : BOOL_FALSE;
+        if (guarded_b == BOOL_TRUE)
+        {
+            current_cal_repair_safe_target =
+                (valid_a == BOOL_TRUE &&
+                 current_cal_record_is_repair_pair(&record_a) == BOOL_TRUE) ?
+                CURRENT_CAL_SLOT_B : CURRENT_CAL_SLOT_A;
+        }
+        else if (valid_a == BOOL_TRUE && valid_b != BOOL_TRUE &&
+                 current_cal_record_is_repair_pair(&record_a) == BOOL_TRUE)
+        {
+            current_cal_repair_safe_target = CURRENT_CAL_SLOT_B;
+        }
+        else if (valid_b == BOOL_TRUE && valid_a != BOOL_TRUE &&
+                 current_cal_record_is_repair_pair(&record_b) == BOOL_TRUE)
+        {
+            current_cal_repair_safe_target = CURRENT_CAL_SLOT_A;
+        }
         current_cal_repair_sequence = repair_sequence;
+        current_cal_meter_status_value = CURRENT_CAL_METER_STATUS_CONFLICT;
+    }
+    else if (current_cal_record_bytes_erased(&record_a) != BOOL_TRUE ||
+             current_cal_record_bytes_erased(&record_b) != BOOL_TRUE)
+    {
+        current_cal_meter_status_value = CURRENT_CAL_METER_STATUS_INVALID;
     }
 }
 
-boolean_en current_cal_storage_prepare_shared_page_update(void)
+boolean_en current_cal_storage_prepare_calibration_only(void)
 {
     current_cal_record_t active_record;
     current_cal_record_t mirror_record;
@@ -809,12 +922,31 @@ boolean_en current_cal_storage_prepare_shared_page_update(void)
             CURRENT_CAL_FLASH_SLOT_A_ADDR : CURRENT_CAL_FLASH_SLOT_B_ADDR,
             &mirror_record) != BOOL_TRUE)
     {
-        return BOOL_FALSE;
+        return current_cal_persistence_fail();
     }
-    return (mirror_record.format == active_record.format &&
-            mirror_record.sequence == active_record.sequence &&
-            memcmp(mirror_record.bytes, active_record.bytes, compare_size) == 0) ?
-           BOOL_TRUE : BOOL_FALSE;
+    if (mirror_record.format != active_record.format ||
+        mirror_record.sequence != active_record.sequence ||
+        memcmp(mirror_record.bytes, active_record.bytes,
+               compare_size) != 0)
+    {
+        return current_cal_persistence_fail();
+    }
+    return BOOL_TRUE;
+}
+
+void current_cal_storage_register_shared_peer(
+    current_cal_shared_peer_prepare_fn prepare_fn)
+{
+    current_cal_shared_peer_prepare = prepare_fn;
+}
+
+boolean_en current_cal_storage_prepare_shared_page_update(void)
+{
+    if (current_cal_shared_peer_prepare != NULL)
+    {
+        return current_cal_shared_peer_prepare();
+    }
+    return current_cal_storage_prepare_calibration_only();
 }
 
 boolean_en current_cal_storage_has_active_curve(void)
@@ -841,6 +973,57 @@ u32 current_cal_storage_sequence(void)
 current_cal_slot_en current_cal_storage_active_slot(void)
 {
     return current_cal_active_slot_id;
+}
+
+boolean_en current_cal_storage_calibration_redundant(void)
+{
+    current_cal_record_t active_record;
+    current_cal_record_t mirror_record;
+    current_cal_slot_en mirror_slot;
+    u32 compare_size;
+
+    if (current_cal_repair_required == BOOL_TRUE)
+    {
+        return BOOL_FALSE;
+    }
+    if (current_cal_active_slot_id == CURRENT_CAL_SLOT_NONE)
+    {
+        return BOOL_TRUE;
+    }
+    if (current_cal_storage_read(
+            (current_cal_active_slot_id == CURRENT_CAL_SLOT_A) ?
+            CURRENT_CAL_FLASH_SLOT_A_ADDR : CURRENT_CAL_FLASH_SLOT_B_ADDR,
+            &active_record) != BOOL_TRUE)
+    {
+        return BOOL_FALSE;
+    }
+    mirror_slot = (current_cal_active_slot_id == CURRENT_CAL_SLOT_A) ?
+                  CURRENT_CAL_SLOT_B : CURRENT_CAL_SLOT_A;
+    if (current_cal_storage_read(
+            (mirror_slot == CURRENT_CAL_SLOT_A) ?
+            CURRENT_CAL_FLASH_SLOT_A_ADDR : CURRENT_CAL_FLASH_SLOT_B_ADDR,
+            &mirror_record) != BOOL_TRUE ||
+        mirror_record.format != active_record.format ||
+        mirror_record.sequence != active_record.sequence)
+    {
+        return BOOL_FALSE;
+    }
+    compare_size = (active_record.format == CURRENT_CAL_RECORD_V1) ?
+                   CURRENT_CAL_V1_RECORD_SIZE : CURRENT_CAL_V2_RECORD_SIZE;
+    return (memcmp(mirror_record.bytes, active_record.bytes,
+                   compare_size) == 0) ? BOOL_TRUE : BOOL_FALSE;
+}
+
+boolean_en current_cal_storage_repair_required(void)
+{
+    return current_cal_repair_required;
+}
+
+current_cal_slot_en current_cal_storage_repair_safe_peer_target(void)
+{
+    return (current_cal_repair_required == BOOL_TRUE &&
+            current_cal_repair_barrier_present == BOOL_TRUE) ?
+           current_cal_repair_safe_target : CURRENT_CAL_SLOT_NONE;
 }
 
 boolean_en current_cal_storage_commit(const current_cal_curve_t *curve)
@@ -884,6 +1067,11 @@ boolean_en current_cal_storage_get_meter_section(current_cal_meter_section_t *se
     }
     *section = current_cal_active_meter;
     return BOOL_TRUE;
+}
+
+current_cal_meter_status_en current_cal_storage_meter_status(void)
+{
+    return current_cal_meter_status_value;
 }
 
 boolean_en current_cal_storage_commit_meter_section(const current_cal_meter_section_t *section)

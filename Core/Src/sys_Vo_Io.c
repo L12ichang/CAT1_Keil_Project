@@ -13,6 +13,7 @@
 #include "sys_pwm.h"
 #include "factory_user_data.h"
 #include "ntc.h"
+#include "meter_runtime.h"
 
 
      
@@ -33,6 +34,7 @@ extern u16  ac_voltage_8209;   //交流电的电压，单位 V
  u32 Io_value;
  u32 Po_value;
 static u32 vo_io_sample_tick;
+static u32 vo_io_sample_sequence;
 u8 _dim;
 u8 dim_bak_to_low_acin=100;//最大100
 typedef enum 
@@ -485,7 +487,10 @@ void Out_noload_detect_fsm(void)                      //从直流PLC移植    �
 输出返回：无
 *************************************/
 void error_report_process(void)
-{ 
+{
+    meter_runtime_output_sample_t meter_sample;
+    u32 sample_tick;
+    u32 primask;
 
     if(timer_ad==0)
     {
@@ -534,7 +539,27 @@ void error_report_process(void)
                    }
                 }*/
                Po_value = ((u32)Vo_value*Io_value)/1000U;   //单位0.1W
-               vo_io_sample_tick = Timer_GetTickCount();
+
+               /* Publish one sequence-stamped pair of raw ADC codes.  The
+                * calibrated output power is later derived from this exact
+                * V/I pair; legacy/protection values above remain unchanged. */
+               sample_tick = Timer_GetTickCount();
+               primask = __get_PRIMASK();
+               __disable_irq();
+               meter_sample.voltage_adc_raw = adc_average[ADC_CH09_VO];
+               meter_sample.current_adc_raw = adc_average[ADC_CH06_VO];
+               meter_sample.voltage_01v = Vo_value;
+               meter_sample.current_ma = Io_value;
+               meter_sample.power_01w = Po_value;
+               meter_sample.protect_code = error_flag_byte;
+               meter_sample.sequence = ++vo_io_sample_sequence;
+               meter_sample.sample_tick = sample_tick;
+               vo_io_sample_tick = sample_tick;
+               if (primask == 0U)
+               {
+                   __enable_irq();
+               }
+               meter_runtime_publish_output(&meter_sample);
         
 //             printf(" ADC_Value4=%d\n",ADC_Value4);
 //             printf(" Vo_value=%dV\n",Vo_value/10);
@@ -834,14 +859,16 @@ boolean_en sys_vo_io_get_snapshot(sys_vo_io_snapshot_t *snapshot)
     {
         snapshot->adc_raw[i] = adc_average[i];
     }
-    snapshot->adc_voltage_mv = ADC_Value2;
-    snapshot->adc_current_mv = ADC_Value4;
+    snapshot->adc_voltage_raw = adc_average[ADC_CH09_VO];
+    snapshot->adc_current_raw = adc_average[ADC_CH06_VO];
     snapshot->output_voltage_01v = Vo_value;
     snapshot->output_current_ma = Io_value;
     snapshot->output_power_01w = Po_value;
     snapshot->temperature_01c = Ntctemp.Ntctemp;
     snapshot->protect_code = error_flag_byte;
+    snapshot->sequence = vo_io_sample_sequence;
     sample_tick = vo_io_sample_tick;
+    snapshot->sample_tick = sample_tick;
     if (primask == 0U)
     {
         __enable_irq();

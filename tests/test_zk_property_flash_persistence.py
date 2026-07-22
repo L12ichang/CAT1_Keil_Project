@@ -339,8 +339,14 @@ class ZkPropertyFlashPersistenceTests(unittest.TestCase):
         ]
         self.assertIn("hw_flash_update_bytes_checked", cal_writer)
         self.assertIn("hw_flash_program_bytes_checked", cal_writer)
-        self.assertIn("memcmp(mirror_record.bytes, active_record.bytes", coordinator)
-        self.assertIn("active_record.sequence", coordinator)
+        self.assertIn("current_cal_shared_peer_prepare", coordinator)
+        self.assertIn("current_cal_storage_prepare_calibration_only", coordinator)
+        calibration_only = storage_source[
+            storage_source.index("boolean_en current_cal_storage_prepare_calibration_only"):
+            storage_source.index("boolean_en current_cal_storage_prepare_shared_page_update")
+        ]
+        self.assertIn("memcmp(mirror_record.bytes, active_record.bytes", calibration_only)
+        self.assertIn("active_record.sequence", calibration_only)
         self.assertIn("hw_flash_original_page", flash_source)
         self.assertIn("hw_flash_program_full_page_checked", flash_source)
         self.assertIn("hw_flash_checked_fault = BOOL_TRUE", flash_source)

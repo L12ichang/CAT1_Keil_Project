@@ -241,6 +241,7 @@ static HAL_StatusTypeDef hw_flash_program_full_page_checked(
     status = HAL_FLASH_Unlock();
     if (status != HAL_OK)
     {
+        hw_flash_checked_fault = BOOL_TRUE;
         return status;
     }
     page_error = 0U;
@@ -329,6 +330,11 @@ boolean_en hw_flash_update_fault_latched(void)
     return hw_flash_checked_fault;
 }
 
+void hw_flash_latch_update_fault(void)
+{
+    hw_flash_checked_fault = BOOL_TRUE;
+}
+
 /*
  * Program already-erased aligned words without erasing the containing page.
  * This is intentionally separate from the page read/modify/write helper so a
@@ -362,6 +368,7 @@ HAL_StatusTypeDef hw_flash_program_bytes_checked(uint32_t flash_addr,
     status = HAL_FLASH_Unlock();
     if (status != HAL_OK)
     {
+        hw_flash_checked_fault = BOOL_TRUE;
         return status;
     }
     for (offset = 0U; offset < length; offset += 4U)
@@ -378,10 +385,16 @@ HAL_StatusTypeDef hw_flash_program_bytes_checked(uint32_t flash_addr,
     (void)HAL_FLASH_Lock();
     if (status != HAL_OK)
     {
+        hw_flash_checked_fault = BOOL_TRUE;
         return status;
     }
-    return (user_flash_check(flash_addr, (u8 *)buffer, (u16)length) == BOOL_TRUE) ?
-           HAL_OK : HAL_ERROR;
+    if (user_flash_check(flash_addr, (u8 *)buffer,
+                         (u16)length) != BOOL_TRUE)
+    {
+        hw_flash_checked_fault = BOOL_TRUE;
+        return HAL_ERROR;
+    }
+    return HAL_OK;
 }
 
 

@@ -39,6 +39,7 @@ PREINCLUDE = r"""
 #define HW_FLASH_H
 #define CURRENT_CAL_CURVE_H
 #define CURRENT_CAL_STORAGE_H
+#define SYS_PWM_H
 
 typedef uint8_t u8;
 typedef int8_t s8;
@@ -95,6 +96,12 @@ typedef enum { CURRENT_CAL_SLOT_NONE=0, CURRENT_CAL_SLOT_A=1, CURRENT_CAL_SLOT_B
     current_cal_slot_en;
 typedef enum { CURRENT_CAL_SECTION_EMPTY=0, CURRENT_CAL_SECTION_VALID=1,
                CURRENT_CAL_SECTION_TOMBSTONE=2 } current_cal_section_state_en;
+typedef enum { CURRENT_CAL_METER_STATUS_ABSENT=0,
+               CURRENT_CAL_METER_STATUS_TOMBSTONE,
+               CURRENT_CAL_METER_STATUS_VALID,
+               CURRENT_CAL_METER_STATUS_INVALID,
+               CURRENT_CAL_METER_STATUS_CONFLICT } current_cal_meter_status_en;
+typedef boolean_en (*current_cal_shared_peer_prepare_fn)(void);
 typedef struct {
     current_cal_section_state_en state; u32 context_crc; u32 data_crc;
     u16 section_version; u16 data_length; u8 payload[CURRENT_CAL_METER_PAYLOAD_SIZE];
@@ -122,10 +129,18 @@ boolean_en current_cal_storage_invalidate(void);
 boolean_en current_cal_storage_get_meter_section(current_cal_meter_section_t *);
 boolean_en current_cal_storage_commit_meter_section(const current_cal_meter_section_t *);
 boolean_en current_cal_storage_prepare_shared_page_update(void);
+boolean_en current_cal_storage_prepare_calibration_only(void);
+boolean_en current_cal_storage_calibration_redundant(void);
+boolean_en current_cal_storage_repair_required(void);
+current_cal_slot_en current_cal_storage_repair_safe_peer_target(void);
+current_cal_meter_status_en current_cal_storage_meter_status(void);
+void current_cal_storage_register_shared_peer(current_cal_shared_peer_prepare_fn);
 
 void hw_flash_read_bytes(u32, u8 *, u32);
 HAL_StatusTypeDef hw_flash_update_bytes_checked(uint32_t, const u8 *, uint32_t);
 HAL_StatusTypeDef hw_flash_program_bytes_checked(uint32_t, const u8 *, uint32_t);
+void hw_flash_latch_update_fault(void);
+void sys_pwm_force_off(void);
 #endif
 """
 
@@ -139,7 +154,11 @@ u16 OP_PWM_OFFSET_temp = 412U;
 static u8 page_a[FLASH_PAGE_SIZE], page_b[FLASH_PAGE_SIZE];
 #define slot_a (page_a + 0x400U)
 #define slot_b (page_b + 0x400U)
+#define energy_a (page_a + 0x340U)
+#define energy_b (page_b + 0x340U)
 static int fail_update, fail_update_countdown, fail_update_late, fail_marker;
+static int fail_update_destroy_page, flash_fault_latched, force_off_count;
+static int flash_update_calls;
 
 static u8 *flash_for(u32 address) {
     if (address >= SHARED_PAGE_A_ADDR && address < SHARED_PAGE_A_ADDR + FLASH_PAGE_SIZE)
@@ -153,11 +172,15 @@ void hw_flash_read_bytes(u32 address, u8 *data, u32 length) {
 }
 HAL_StatusTypeDef hw_flash_update_bytes_checked(uint32_t address, const u8 *data, uint32_t length) {
     static u8 expected[FLASH_PAGE_SIZE]; u8 *page; u32 offset;
+    ++flash_update_calls;
     if (fail_update) { fail_update = 0; return HAL_ERROR; }
     if (fail_update_countdown>0 && --fail_update_countdown==0) return HAL_ERROR;
     page = (address < SHARED_PAGE_B_ADDR) ? page_a : page_b;
     offset = address - ((address < SHARED_PAGE_B_ADDR) ? SHARED_PAGE_A_ADDR : SHARED_PAGE_B_ADDR);
     memcpy(expected,page,FLASH_PAGE_SIZE); memcpy(expected+offset,data,length);
+    if (fail_update_destroy_page) {
+        fail_update_destroy_page=0; memset(page,0xff,FLASH_PAGE_SIZE); return HAL_ERROR;
+    }
     if (fail_update_late) {
         fail_update_late=0; memset(page,0xff,FLASH_PAGE_SIZE);
         memcpy(page,expected,0x480U); return HAL_ERROR;
@@ -168,6 +191,8 @@ HAL_StatusTypeDef hw_flash_program_bytes_checked(uint32_t address, const u8 *dat
     if (fail_marker) { fail_marker = 0; return HAL_ERROR; }
     memcpy(flash_for(address), data, length); return HAL_OK;
 }
+void hw_flash_latch_update_fault(void) { flash_fault_latched=1; }
+void sys_pwm_force_off(void) { ++force_off_count; }
 static void put16(u8 *p, u16 value) { p[0]=(u8)value; p[1]=(u8)(value>>8); }
 static void put32(u8 *p, u32 value) {
     p[0]=(u8)value; p[1]=(u8)(value>>8); p[2]=(u8)(value>>16); p[3]=(u8)(value>>24);
@@ -176,6 +201,22 @@ static u32 get32(const u8 *p) {
     return (u32)p[0] | ((u32)p[1]<<8) | ((u32)p[2]<<16) | ((u32)p[3]<<24);
 }
 static void reset_flash(void) { memset(page_a,0xff,sizeof(page_a)); memset(page_b,0xff,sizeof(page_b)); }
+static int bytes_erased(const u8 *p, u32 length) {
+    u32 i; for(i=0U;i<length;++i) if(p[i]!=0xffU) return 0; return 1;
+}
+static boolean_en peer_prepare_energy(void) {
+    current_cal_slot_en target;
+    if (!current_cal_storage_repair_required())
+        return current_cal_storage_prepare_calibration_only();
+    if (!memcmp(energy_a,energy_b,64U) ||
+        (bytes_erased(energy_a,64U) && bytes_erased(energy_b,64U))) return BOOL_TRUE;
+    target=current_cal_storage_repair_safe_peer_target();
+    if(target==CURRENT_CAL_SLOT_A && bytes_erased(energy_a,64U) &&
+       !bytes_erased(energy_b,64U)) { memcpy(energy_a,energy_b,64U); return BOOL_TRUE; }
+    if(target==CURRENT_CAL_SLOT_B && bytes_erased(energy_b,64U) &&
+       !bytes_erased(energy_a,64U)) { memcpy(energy_b,energy_a,64U); return BOOL_TRUE; }
+    return BOOL_FALSE;
+}
 static void make_curve(current_cal_curve_t *curve) {
     static const u16 values[21] = {0,56,80,110,138,164,195,220,248,280,306,335,367,392,420,448,476,504,532,560,588};
     memset(curve,0,sizeof(*curve)); curve->curve_version=2; curve->point_count=21;
@@ -255,7 +296,9 @@ int main(void) {
 
     seq=current_cal_storage_sequence(); fail_update=1; CHECK(!current_cal_storage_commit(&curve));
     CHECK(current_cal_storage_sequence()==seq);
-    fail_marker=1; CHECK(!current_cal_storage_commit(&curve)); CHECK(current_cal_storage_sequence()==seq);
+    flash_fault_latched=0; force_off_count=0; fail_marker=1;
+    CHECK(!current_cal_storage_commit(&curve)); CHECK(current_cal_storage_sequence()==seq);
+    CHECK(flash_fault_latched==1 && force_off_count>0);
 
     current_cal_storage_init(); CHECK(current_cal_storage_has_active_curve());
     CHECK(current_cal_storage_sequence()==seq);
@@ -286,6 +329,35 @@ int main(void) {
     current_cal_storage_init(); CHECK(!current_cal_storage_has_active_curve());
     CHECK(current_cal_storage_commit(&curve)); CHECK(!memcmp(slot_a,slot_b,240));
     CHECK(current_cal_storage_sequence()==0x80000000UL);
+
+    /* An initial ambiguous CAL conflict has no safe erase target.  A unique
+       peer record must therefore cause zero Flash writes. */
+    reset_flash(); current_cal_storage_init(); CHECK(current_cal_storage_commit(&curve));
+    memcpy(slot_b,slot_a,240); put32(slot_b+16,2);
+    put32(slot_b+232,current_cal_crc32(slot_b,232));
+    memset(energy_a,0x5a,64U); memset(energy_b,0xff,64U);
+    current_cal_storage_init(); current_cal_storage_register_shared_peer(peer_prepare_energy);
+    { int before=flash_update_calls; CHECK(!current_cal_storage_invalidate());
+      CHECK(flash_update_calls==before); }
+
+    /* Once B is deliberately guarded, loss of page A leaves B's energy as
+       the sole copy.  Reboot exposes A as the safe repair target; replenish
+       energy there before completing the real CAL A->B repair transaction. */
+    reset_flash(); current_cal_storage_init(); CHECK(current_cal_storage_commit(&curve));
+    memcpy(slot_b,slot_a,240); put32(slot_b+16,2);
+    put32(slot_b+232,current_cal_crc32(slot_b,232));
+    memset(energy_a,0x6c,64U); memcpy(energy_b,energy_a,64U);
+    current_cal_storage_init(); current_cal_storage_register_shared_peer(peer_prepare_energy);
+    flash_fault_latched=0; force_off_count=0; fail_update_destroy_page=1;
+    CHECK(!current_cal_storage_invalidate());
+    CHECK(flash_fault_latched==1 && force_off_count>0);
+    current_cal_storage_init();
+    CHECK(current_cal_storage_repair_required());
+    CHECK(current_cal_storage_repair_safe_peer_target()==CURRENT_CAL_SLOT_A);
+    CHECK(bytes_erased(energy_a,64U) && !bytes_erased(energy_b,64U));
+    CHECK(current_cal_storage_invalidate());
+    CHECK(!memcmp(energy_a,energy_b,64U));
+    CHECK(!memcmp(slot_a,slot_b,240U));
 
     reset_flash(); current_cal_storage_init(); CHECK(current_cal_storage_commit(&curve));
     memcpy(slot_b,slot_a,240);
@@ -407,6 +479,7 @@ u16 HWMAX_OUTCUR_temp = 1680U;
 u8 Error_1_OL;
 u8 dim_bak_to_low_acin;
 static u16 hardware_pwm;
+static boolean_en flash_fault;
 
 boolean_en low_temp_detect_is_low(u16 *out, u16 in) { *out=in; return BOOL_FALSE; }
 boolean_en DC_low_voltage_detect_is_low(u16 *out, u16 in) { *out=in; return BOOL_FALSE; }
@@ -424,7 +497,7 @@ u16 current_cal_curve_interpolate(const current_cal_curve_t *c, u8 p)
 { (void)c; (void)p; return 0U; }
 boolean_en sys_vo_io_get_snapshot(sys_vo_io_snapshot_t *snapshot)
 { snapshot->placeholder=0U; return BOOL_TRUE; }
-boolean_en hw_flash_update_fault_latched(void) { return BOOL_FALSE; }
+boolean_en hw_flash_update_fault_latched(void) { return flash_fault; }
 
 #define CHECK(x) do { if(!(x)){ fprintf(stderr,"CHECK failed line %d: %s\n",__LINE__,#x); return 1; } } while(0)
 int main(void) {
@@ -477,16 +550,21 @@ int main(void) {
     sys_pwm_process();
     for (i=0U; i<300U; ++i) sys_pwm_timer();
     CHECK(hardware_pwm == 0U);
+    flash_fault=BOOL_TRUE;
+    sys_pwm_output(60U); /* a fresh explicit request cannot clear Flash fail-safe */
+    CHECK(hardware_pwm == 0U);
+    sys_pwm_release_and_reload(); sys_pwm_process();
+    CHECK(hardware_pwm == 0U);
     puts("host sys_pwm force-off latch harness: PASS");
     return 0;
 }
 """
 
 
-@unittest.skipUnless(CL.is_file() and (SCOPE_VC / "include/stdint.h").is_file(),
-                     "MSVC host compiler or headers are unavailable")
 class PwmCalibrationCompiledHostTests(unittest.TestCase):
     def test_real_curve_and_storage_sources_with_flash_faults(self) -> None:
+        if not CL.is_file() or not (SCOPE_VC / "include/stdint.h").is_file():
+            self.fail("MSVC host compiler and headers are required")
         cache = ROOT / ".cache"
         cache.mkdir(exist_ok=True)
         original_mkdir = tempfile._os.mkdir
@@ -541,6 +619,8 @@ class PwmCalibrationCompiledHostTests(unittest.TestCase):
             self.assertIn("host PWM/storage harness: PASS", ran.stdout)
 
     def test_real_sys_pwm_force_off_cancels_pending_reload_and_fade(self) -> None:
+        if not CL.is_file() or not (SCOPE_VC / "include/stdint.h").is_file():
+            self.fail("MSVC host compiler and headers are required")
         cache = ROOT / ".cache"
         cache.mkdir(exist_ok=True)
         original_mkdir = tempfile._os.mkdir
