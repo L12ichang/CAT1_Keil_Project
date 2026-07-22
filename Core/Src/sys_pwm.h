@@ -25,7 +25,7 @@ typedef struct
 } sys_pwm_status_t;
 
 extern u8 net_entery_flag;
-extern u8 set_percent;
+extern volatile u8 set_percent;
 
 void pwm_output(u8 percent);
 void sys_pwm_output(u8 percent);
@@ -37,6 +37,7 @@ void sys_pwm_output_for_temp_protect(u8 percent);
 void sys_pwm_output_on_fade(u8 percent);
 void sys_pwm_process(void);
 void sys_pwm_reload(void);
+void sys_pwm_release_and_reload(void);
 
 void sys_pwm_calibration_lock(void);
 void sys_pwm_calibration_unlock(void);

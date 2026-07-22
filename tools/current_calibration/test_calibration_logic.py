@@ -44,7 +44,10 @@ FLASH_RECORD_SIZE = 80
 def pack_flash_record(sequence: int, record_type: int = FLASH_TYPE_CURVE,
                       marker: int = FLASH_VALID, profile_crc: int = 0x10203040) -> bytes:
     curve = [index * 10 for index in range(21)] if record_type == FLASH_TYPE_CURVE else [0] * 21
-    stored_curve_crc = curve_crc(curve) if record_type == FLASH_TYPE_CURVE else 0
+    stored_curve_crc = (
+        zlib.crc32(struct.pack("<HH21H", 1, 21, *curve)) & 0xFFFFFFFF
+        if record_type == FLASH_TYPE_CURVE else 0
+    )
     curve_version = 1 if record_type == FLASH_TYPE_CURVE else 0
     point_count = 21 if record_type == FLASH_TYPE_CURVE else 0
     prefix = struct.pack(
@@ -88,6 +91,22 @@ def select_flash_slot(slot_a: bytes, slot_b: bytes) -> tuple[str, int, int] | No
     if len(candidates) == 1:
         return candidates[0]
     return candidates[1] if sequence_newer(candidates[1][1], candidates[0][1]) else candidates[0]
+
+
+def v2_info(**overrides: object) -> dict[str, object]:
+    result: dict[str, object] = {
+        "profileCrc": 1,
+        "contextCrc": 1,
+        "legacyProfileCrc": 2,
+        "ratedCurrentMa": 890,
+        "calibrationMaxCurrentMa": 0,
+        "hardwareMaxCurrentMa": 1680,
+        "pwmLogicalMax": 999,
+        "requiredCurveVersion": 2,
+        "storageFormatVersion": 2,
+    }
+    result.update(overrides)
+    return result
 
 
 class CalibrationLogicTests(unittest.TestCase):
@@ -163,36 +182,38 @@ class CalibrationLogicTests(unittest.TestCase):
 
     def test_read_info_requires_consistent_current_and_power_limits(self) -> None:
         args = Namespace(imei="864512081541939", rated_current_ma=890,
+                         calibration_max_current_ma=1000,
                          load_voltage_v=56.0, power_limit_w=70.0)
         context = validate_calibration_info(
-            {"profileCrc": 1, "ratedCurrentMa": 890,
-             "hardwareMaxCurrentMa": 1680, "pwmLogicalMax": 999}, args
+            v2_info(), args
         )
         self.assertEqual(context["hardwareMaxCurrentMa"], 1680)
+        self.assertEqual(context["calibrationMaxCurrentMa"], 1000)
         with self.assertRaises(ValueError):
             validate_calibration_info(
-                {"profileCrc": 1, "ratedCurrentMa": 1700,
-                 "hardwareMaxCurrentMa": 1680, "pwmLogicalMax": 999}, args
+                v2_info(ratedCurrentMa=1700), args
             )
         limited = Namespace(imei="864512081541939", rated_current_ma=890,
+                            calibration_max_current_ma=1000,
                             load_voltage_v=56.0, power_limit_w=49.0)
-        with self.assertRaisesRegex(ValueError, "rated output power"):
-            validate_calibration_info(
-                {"profileCrc": 1, "ratedCurrentMa": 890,
-                 "hardwareMaxCurrentMa": 1680, "pwmLogicalMax": 999}, limited
-            )
+        with self.assertRaisesRegex(ValueError, "calibration output power"):
+            validate_calibration_info(v2_info(), limited)
+        with self.assertRaisesRegex(ValueError, "unsupported calibration protocol"):
+            validate_calibration_info(v2_info(requiredCurveVersion=1), args)
 
     def test_resume_requires_matching_manifest_and_recomputes_error(self) -> None:
         context = {
-            "imei": "864512081541939", "profileCrc": 123,
-            "ratedCurrentMa": 1000, "hardwareMaxCurrentMa": 1500, "pwmLogicalMax": 999,
+            "imei": "864512081541939", "contextCrc": 123, "profileCrc": 123,
+            "ratedCurrentMa": 890, "calibrationMaxCurrentMa": 1000,
+            "hardwareMaxCurrentMa": 1500, "pwmLogicalMax": 999,
+            "requiredCurveVersion": 2, "storageFormatVersion": 2,
         }
         class Manifest:
             def is_file(self) -> bool:
                 return True
 
             def read_text(self, encoding: str) -> str:
-                return json.dumps({"format": 1, "csvFile": "resume.csv", **context})
+                return json.dumps({"format": 2, "csvFile": "resume.csv", **context})
 
             def __str__(self) -> str:
                 return "resume.manifest.json"
@@ -224,9 +245,10 @@ class CalibrationLogicTests(unittest.TestCase):
 
     def test_report_provenance_pairs_zero_one_and_multiple_resume_inputs(self) -> None:
         context = {
-            "imei": "864512081541939", "profileCrc": 123,
-            "ratedCurrentMa": 890, "hardwareMaxCurrentMa": 1680,
-            "pwmLogicalMax": 1000,
+            "imei": "864512081541939", "contextCrc": 123, "profileCrc": 123,
+            "ratedCurrentMa": 890, "calibrationMaxCurrentMa": 1000,
+            "hardwareMaxCurrentMa": 1680, "pwmLogicalMax": 1000,
+            "requiredCurveVersion": 2, "storageFormatVersion": 2,
         }
         run_csv = Path("logs/current.csv")
         run_manifest = Path("logs/current.manifest.json")
@@ -235,8 +257,8 @@ class CalibrationLogicTests(unittest.TestCase):
         self.assertEqual(empty["runCsv"], str(run_csv))
         self.assertEqual(empty["runManifest"], str(run_manifest))
         self.assertEqual(empty["resumeInputs"], [])
-        self.assertIsNone(empty["calibrationContext"]["contextCrc"])
-        self.assertIsNone(empty["calibrationContext"]["calibrationMaxCurrentMa"])
+        self.assertEqual(empty["calibrationContext"]["contextCrc"], 123)
+        self.assertEqual(empty["calibrationContext"]["calibrationMaxCurrentMa"], 1000)
 
         first = Path("logs/first.csv")
         one = build_report_provenance(
@@ -268,9 +290,9 @@ class CalibrationLogicTests(unittest.TestCase):
 
     def test_read_info_rejects_fractional_nonfinite_and_out_of_range_numbers(self) -> None:
         args = Namespace(imei="864512081541939", rated_current_ma=890,
+                         calibration_max_current_ma=None,
                          load_voltage_v=56.0, power_limit_w=70.0)
-        base = {"profileCrc": 1, "ratedCurrentMa": 890,
-                "hardwareMaxCurrentMa": 1680, "pwmLogicalMax": 1000}
+        base = v2_info(pwmLogicalMax=1000)
         for field, value in (
             ("ratedCurrentMa", 890.9), ("ratedCurrentMa", float("nan")),
             ("hardwareMaxCurrentMa", float("inf")), ("hardwareMaxCurrentMa", 10001),
@@ -282,7 +304,8 @@ class CalibrationLogicTests(unittest.TestCase):
     def test_cli_numeric_values_must_be_finite_and_reasonable(self) -> None:
         def valid_args() -> Namespace:
             return Namespace(
-                rated_current_ma=890, meter_samples=24, meter_sample_interval_ms=100,
+                rated_current_ma=890, calibration_max_current_ma=1000,
+                meter_samples=24, meter_sample_interval_ms=100,
                 settle_ms=2000, max_iterations=16, low_power_limit=25,
                 timeout=30.0, eload_timeout=1.0, meter_sample_timeout=25.0,
                 leakage_max_ma=10.0, environment_c=25.0,
@@ -351,11 +374,9 @@ class CalibrationLogicTests(unittest.TestCase):
             def request(self, action: str, fields: dict[str, object]) -> Response:
                 self.actions.append(action)
                 if action == "readInfo":
-                    return Response({}, {
-                        "action": action, "result": 0, "profileCrc": 1,
-                        "ratedCurrentMa": 890, "hardwareMaxCurrentMa": 1680,
-                        "pwmLogicalMax": 1000,
-                    })
+                    return Response({}, {"action": action, "result": 0, **v2_info(
+                        pwmLogicalMax=1000
+                    )})
                 if action == "enter":
                     raise TimeoutError("ACK lost")
                 return Response({}, {"action": action, "result": 4,
@@ -363,8 +384,9 @@ class CalibrationLogicTests(unittest.TestCase):
 
         args = Namespace(
             imei="864512081541939", rated_current_ma=890,
+            calibration_max_current_ma=890,
             load_voltage_v=56.0, power_limit_w=70.0,
-            resume_csv=None, curve_override=[],
+            resume_csv=None, curve_override=[], settle_ms=0,
         )
         station = LostAckStation()
         with patch("calibration_station.write_resume_manifest", return_value=Path("manifest.json")):
@@ -381,9 +403,13 @@ class CalibrationLogicTests(unittest.TestCase):
         self.assertEqual(zlib.crc32(b"123456789") & 0xFFFFFFFF, 0xCBF43926)
 
     def test_curve_crc_vectors(self) -> None:
-        self.assertEqual(curve_crc([i * 10 for i in range(21)]), 0x35206DBC)
-        self.assertEqual(curve_crc(list(range(21))), 0x1F87FDE0)
-        self.assertEqual(curve_crc([i * i + 3 * i for i in range(21)]), 0x4525FA2C)
+        self.assertEqual(curve_crc([i * 10 for i in range(21)], 890), 0xA6948939)
+        self.assertEqual(curve_crc(list(range(21)), 890), 0x8C331965)
+        self.assertEqual(
+            curve_crc([i * i + 3 * i for i in range(21)], 890), 0xD6911EA9
+        )
+        self.assertNotEqual(curve_crc(list(range(21)), 890),
+                            curve_crc(list(range(21)), 891))
 
     def test_profile_crc_public_vector(self) -> None:
         fields = (1, 1, 4, 2, 2700, 4700, 30, 0, 71, 999, 2, 1, 1000)
@@ -520,7 +546,8 @@ class CalibrationLogicTests(unittest.TestCase):
             "SN": "864512081541939", "TM": "2026-07-14 12:00:00", "SV": "prop",
             "ID": "123456", "CT": "W", "DT": {"Calibration": {
                 "action": "writeCurveChunk", "sessionId": "CAL-20260714-0001", "seq": 50,
-                "curveVersion": 1, "profileCrc": 0xFFFFFFFF, "curveCrc": 0xFFFFFFFF,
+                "curveVersion": 2, "contextCrc": 0xFFFFFFFF,
+                "calibrationMaxCurrentMa": 10000, "curveCrc": 0xFFFFFFFF,
                 "startIndex": 14, "values": [65535] * 7,
             }},
         }

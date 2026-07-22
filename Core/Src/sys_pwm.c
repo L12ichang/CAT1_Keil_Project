@@ -5,6 +5,7 @@
 #include "sys_Vo_Io.h"
 #include "factory_user_data.h"
 #include "current_cal_storage.h"
+#include "hw_flash.h"
 
 #define TIMEOUT_MAX 200U
 
@@ -14,19 +15,27 @@
 #define SYS_PWM_PROTECT_HIGH_TEMP    0x0008U
 #define SYS_PWM_PROTECT_OVER_CURRENT 0x0010U
 
-u8 reload;
-u8 set_percent;
+volatile u8 reload;
+volatile u8 set_percent;
 u8 net_entery_flag;
 u8 has_entery_at_first;
 
-static u8 pwm_fade_timer = TIMEOUT_MAX;
-static boolean_en pwm_fade_active = BOOL_FALSE;
-static u8 power_old;
-static u8 power_new;
-static u8 power_current;
-static sys_pwm_source_en normal_source = SYS_PWM_SOURCE_INTERNAL;
-static boolean_en calibration_lock_active = BOOL_FALSE;
+static volatile u8 pwm_fade_timer = TIMEOUT_MAX;
+static volatile boolean_en pwm_fade_active = BOOL_FALSE;
+static volatile boolean_en force_off_latched = BOOL_FALSE;
+static volatile u8 power_old;
+static volatile u8 power_new;
+static volatile u8 power_current;
+static volatile u8 force_off_resume_percent;
+static volatile sys_pwm_source_en force_off_resume_source = SYS_PWM_SOURCE_INTERNAL;
+static volatile sys_pwm_source_en normal_source = SYS_PWM_SOURCE_INTERNAL;
+static volatile boolean_en calibration_lock_active = BOOL_FALSE;
 static sys_pwm_status_t pwm_status;
+
+static boolean_en sys_pwm_flash_fail_safe_active(void)
+{
+    return hw_flash_update_fault_latched();
+}
 
 #if LEGACY_APP_PROCESS_ENABLE
 extern u32 fac_en_timer;
@@ -125,6 +134,13 @@ static void sys_pwm_commit_logical(u16 requested,
 {
     u16 logical_max;
 
+    /* A force-off may pre-empt a foreground calculation.  Re-check the latch
+     * at the final hardware boundary so the stale calculation cannot win. */
+    if (sys_pwm_flash_fail_safe_active() == BOOL_TRUE ||
+        (force_off_latched == BOOL_TRUE && calibration_lock_active != BOOL_TRUE))
+    {
+        applied = 0U;
+    }
     logical_max = hw_tim1_pwm2_get_logical_max();
     if (applied > logical_max)
     {
@@ -150,7 +166,8 @@ static void sys_pwm_apply_normal(u8 requested_percent, sys_pwm_source_en source)
     u16 protect_code;
     u16 logical;
 
-    if (calibration_lock_active == BOOL_TRUE)
+    if (calibration_lock_active == BOOL_TRUE || force_off_latched == BOOL_TRUE ||
+        sys_pwm_flash_fail_safe_active() == BOOL_TRUE)
     {
         return;
     }
@@ -173,7 +190,10 @@ static void sys_pwm_apply_normal(u8 requested_percent, sys_pwm_source_en source)
     effective_percent = sys_pwm_apply_percent_protection(mapped_percent, &protect_code);
     if (curve != NULL && fa_test_EN == 0U)
     {
-        logical = current_cal_curve_interpolate(curve, effective_percent);
+        /* SET_OUTCUR is a runtime derating setting; the curve is CAL_MAX based. */
+        logical = current_cal_curve_interpolate_setpoint(curve,
+                                                         effective_percent,
+                                                         SET_OUTCUR);
     }
     else
     {
@@ -184,7 +204,8 @@ static void sys_pwm_apply_normal(u8 requested_percent, sys_pwm_source_en source)
 
 void pwm_output(u8 percent)
 {
-    if (calibration_lock_active == BOOL_TRUE)
+    if (calibration_lock_active == BOOL_TRUE || force_off_latched == BOOL_TRUE ||
+        sys_pwm_flash_fail_safe_active() == BOOL_TRUE)
     {
         return;
     }
@@ -197,7 +218,9 @@ void sys_pwm_timer(void)
 {
     u32 delta;
 
-    if (pwm_fade_active == BOOL_TRUE && calibration_lock_active != BOOL_TRUE)
+    if (pwm_fade_active == BOOL_TRUE && calibration_lock_active != BOOL_TRUE &&
+        force_off_latched != BOOL_TRUE &&
+        sys_pwm_flash_fail_safe_active() != BOOL_TRUE)
     {
         if (pwm_fade_timer < TIMEOUT_MAX)
         {
@@ -229,7 +252,8 @@ void sys_pwm_timer(void)
 
 void sys_pwm_fade_output(u8 oldpower, u8 newpower)
 {
-    if (calibration_lock_active == BOOL_TRUE)
+    if (calibration_lock_active == BOOL_TRUE || force_off_latched == BOOL_TRUE ||
+        sys_pwm_flash_fail_safe_active() == BOOL_TRUE)
     {
         return;
     }
@@ -250,6 +274,15 @@ static void sys_pwm_output_from(u8 percent, sys_pwm_source_en source)
     {
         return;
     }
+    if (sys_pwm_flash_fail_safe_active() == BOOL_TRUE)
+    {
+        sys_pwm_force_off();
+        return;
+    }
+    /* A fresh control request is authoritative; only stale timer/process work
+     * is blocked by the force-off latch. */
+    force_off_latched = BOOL_FALSE;
+    reload = 0U;
     normal_source = source;
     if (percent == 0U)
     {
@@ -302,11 +335,43 @@ void sys_pwm_output_on_fade(u8 percent)
 
 void sys_pwm_reload(void)
 {
+    if (force_off_latched != BOOL_TRUE &&
+        sys_pwm_flash_fail_safe_active() != BOOL_TRUE)
+    {
+        reload = 1U;
+    }
+}
+
+void sys_pwm_release_and_reload(void)
+{
+    if (sys_pwm_flash_fail_safe_active() == BOOL_TRUE)
+    {
+        sys_pwm_force_off();
+        return;
+    }
+    if (force_off_latched == BOOL_TRUE)
+    {
+        set_percent = force_off_resume_percent;
+        normal_source = force_off_resume_source;
+    }
+    pwm_fade_active = BOOL_FALSE;
+    pwm_fade_timer = TIMEOUT_MAX;
+    power_old = set_percent;
+    power_new = set_percent;
+    power_current = set_percent;
+    reload = 0U;
+    force_off_latched = BOOL_FALSE;
     reload = 1U;
 }
 
 void sys_pwm_process(void)
 {
+    if (force_off_latched == BOOL_TRUE ||
+        sys_pwm_flash_fail_safe_active() == BOOL_TRUE)
+    {
+        reload = 0U;
+        return;
+    }
     if (reload != 0U)
     {
         reload = 0U;
@@ -345,8 +410,10 @@ boolean_en sys_pwm_calibration_set_direct(u16 logical_pwm)
     u16 logical_max;
     u8 safety_percent;
 
-    if (calibration_lock_active != BOOL_TRUE)
+    if (calibration_lock_active != BOOL_TRUE ||
+        sys_pwm_flash_fail_safe_active() == BOOL_TRUE)
     {
+        sys_pwm_force_off();
         return BOOL_FALSE;
     }
     logical_max = hw_tim1_pwm2_get_logical_max();
@@ -397,7 +464,8 @@ boolean_en sys_pwm_calibration_safety_ready(void)
     u16 protect_code;
     u8 safety_percent;
 
-    if (calibration_lock_active != BOOL_TRUE)
+    if (calibration_lock_active != BOOL_TRUE ||
+        sys_pwm_flash_fail_safe_active() == BOOL_TRUE)
     {
         return BOOL_FALSE;
     }
@@ -421,6 +489,25 @@ boolean_en sys_pwm_calibration_safety_ready(void)
 
 void sys_pwm_force_off(void)
 {
+    boolean_en was_latched;
+
+    /* Publish the latch before touching any other state.  sys_pwm_timer() may
+     * run from the tick interrupt, and sys_pwm_commit_logical() checks this
+     * flag again immediately before writing the PWM peripheral. */
+    was_latched = force_off_latched;
+    force_off_latched = BOOL_TRUE;
+    if (was_latched != BOOL_TRUE)
+    {
+        force_off_resume_percent = set_percent;
+        force_off_resume_source = normal_source;
+    }
+    reload = 0U;
+    pwm_fade_active = BOOL_FALSE;
+    pwm_fade_timer = TIMEOUT_MAX;
+    power_old = 0U;
+    power_new = 0U;
+    power_current = 0U;
+    set_percent = 0U;
     hw_tim1_pwm2_set_PWM_OUT(0U);
     memset(&pwm_status, 0, sizeof(pwm_status));
     pwm_status.applied_logical_pwm = hw_tim1_pwm2_get_logical_pwm();

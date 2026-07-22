@@ -21,12 +21,23 @@ python tools/current_calibration/calibration_station.py --mode regression --imei
 ```powershell
 python tools/current_calibration/calibration_station.py --mode calibrate `
   --imei 864512081541939 --rated-current-ma 890 `
+  --calibration-max-current-ma 890 `
   --enable-output --enable-high-power `
   --eload-port COM25 --eload-baud 9600 `
   --load-voltage-v 56 --power-limit-w 70 `
   --serial-port COM24 `
   --meter-id ELOAD-001 --meter-cal-date 2026-06-01
 ```
+
+## PWM calibration v2 contract
+
+- The station requires `requiredCurveVersion=2` and `storageFormatVersion=2` in `readInfo`. A v1 device is rejected before entering calibration.
+- `--rated-current-ma` must equal device `ratedCurrentMa`. `--calibration-max-current-ma` defaults to rated current and must satisfy `rated <= CAL_MAX <= hardwareMax`.
+- Search targets, all 21 preview targets, resume matching, reports, and curve CRC use CAL_MAX. Changing SET later does not redefine the stored curve.
+- Curve CRC bytes are little-endian: `uint16 curveVersion(2) + uint16 pointCount(21) + uint32 calibrationMaxCurrentMa + 21*uint16 logicalPwm`.
+- At CAL_MAX 890 mA: `[0,10,...,200] -> 0xA6948939`, `[0,1,...,20] -> 0x8C331965`, and `[i*i+3*i] -> 0xD6911EA9`.
+- Resume manifest format 2 binds IMEI, context CRC, rated current, CAL_MAX, hardware maximum, PWM maximum, curve version, and storage format.
+- `profileCrc` is a compatibility alias for v2 `contextCrc`; `legacyProfileCrc` is only used to recognize deployed v1 Flash records.
 
 当前设备断电时不得运行上述校准命令；必须先确认电源、电子负载、硬件限流和通信均正常。
 
@@ -40,9 +51,10 @@ python tools/current_calibration/calibration_station.py --mode calibrate `
 `--load-voltage-v` 与 `--power-limit-w` 必须成对使用，外部实测电流折算功率超过上限时立即中止。
 
 中途因输入掉电等外部原因安全中止后，可重复传入一个或多个 `--resume-csv` 恢复已经验收的连续点。
-每个 CSV 必须有同名 `.manifest.json`，其中绑定 IMEI、`profileCrc`、额定电流、硬件最大电流和
-逻辑 PWM 上限；缺失或不匹配将拒绝恢复。恢复时只相信 `measured_ma`，会按当前额定电流重算误差，
-不会盲信 CSV 内的 `error_ma`。
+每个 CSV 必须有同名 `.manifest.json`（格式 2），其中绑定 IMEI、`contextCrc`、额定电流、
+CAL_MAX、硬件最大电流、逻辑 PWM 上限、曲线版本和存储格式；缺失或不匹配将拒绝恢复。
+恢复时只相信 `measured_ma`，会按 manifest 中的 CAL_MAX 重算目标和误差，不会盲信 CSV 内的
+`target_ma` 或 `error_ma`。
 
 自动采样会逐样本检查：非零 PWM 必须得到有限且大于零的电流，且不得超过设备硬件最大电流和给定的
 功率门限；0% 仅允许 `--leakage-max-ma` 范围内的小幅正/负偏置。越限或连续三次读数错误时，工站会
@@ -72,17 +84,16 @@ python tools/current_calibration/calibration_station.py --mode jlink-flash `
 
 CRC 均采用 CRC-32/ISO-HDLC：多项式 `0x04C11DB7`（反射实现 `0xEDB88320`）、
 初值和结果异或均为 `0xFFFFFFFF`，输入按小端序列化。曲线输入为
-`uint16 version + uint16 pointCount + 21*uint16 logicalPwm`。公共向量：
+`uint16 version(2) + uint16 pointCount(21) + uint32 CAL_MAX + 21*uint16 logicalPwm`。
+公共向量：
 
 - `123456789` → `0xCBF43926`
-- 曲线 `[0,10,...,200]` → `0x35206DBC`
-- 曲线 `[0,1,...,20]` → `0x1F87FDE0`
-- 曲线 `[i*i+3*i for i=0..20]` → `0x4525FA2C`
+- CAL_MAX=890、曲线 `[0,10,...,200]` → `0xA6948939`
+- CAL_MAX=890、曲线 `[0,1,...,20]` → `0x8C331965`
+- CAL_MAX=890、曲线 `[i*i+3*i for i=0..20]` → `0xD6911EA9`
 
-profile 输入为 13 个小端 `uint32`：格式版本、SID、MID、DRV_VERSION、SET_OUTCUR、
-HWMAX_OUTCUR、OUTPUT_CUR_SENSOR、OP_PWM_OFFSET、TIM1 PSC、TIM1 ARR、PWM2 模式、
-极性、逻辑最大值。示例 `[1,1,4,2,2700,4700,30,0,71,999,2,1,1000]`
-的 CRC 为 `0x62FE9B2D`。
+旧 v1 曲线的 `HH+21H` CRC 和包含 SET 的 13 字段 profile CRC 仅供固件识别、迁移历史
+Flash 记录；当前工站不得用它们上传或恢复曲线。
 
 所有操作在 `tools/current_calibration/logs` 生成 JSONL、CSV、标准仪表原始样本和曲线报告。
 

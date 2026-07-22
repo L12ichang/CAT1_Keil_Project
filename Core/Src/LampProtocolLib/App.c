@@ -57,7 +57,53 @@ u8 danger_current_warn_bak=0;//
 
 
 
-extern void soft_reset(void); 
+extern void soft_reset(void);
+
+static void app_factory_buf_set_u16be(u8 *factory_buf, u16 offset, u16 value)
+{
+    factory_buf[offset] = (u8)(value >> 8);
+    factory_buf[offset + 1U] = (u8)(value & 0xffU);
+}
+
+static u16 app_factory_buf_get_u16be(const u8 *factory_buf, u16 offset)
+{
+    return (u16)(((u16)factory_buf[offset] << 8) |
+                 (u16)factory_buf[offset + 1U]);
+}
+
+static boolean_en app_factory_context_changed(const u8 *lhs, const u8 *rhs)
+{
+    return (lhs[0x04] != rhs[0x04] || lhs[0x05] != rhs[0x05] ||
+            lhs[0x06] != rhs[0x06] ||
+            memcmp(lhs + 0x12, rhs + 0x12, 6U) != 0) ? BOOL_TRUE : BOOL_FALSE;
+}
+
+static boolean_en app_factory_commit_buffer(const u8 *factory_buf,
+                                            const u8 *old_factory_buf,
+                                            boolean_en *rollback_ok)
+{
+    memcpy(sys_data.fa_Parambuf, factory_buf, 128U);
+    factory_user_load_data();
+    if (sys_data_store_checked() == BOOL_TRUE)
+    {
+        if (rollback_ok != NULL)
+        {
+            *rollback_ok = BOOL_TRUE;
+        }
+        return BOOL_TRUE;
+    }
+    memcpy(sys_data.fa_Parambuf, old_factory_buf, 128U);
+    factory_user_load_data();
+    if (rollback_ok != NULL)
+    {
+        *rollback_ok = sys_data_store_checked();
+    }
+    else
+    {
+        (void)sys_data_store_checked();
+    }
+    return BOOL_FALSE;
+}
 //开始接收运行参数
 void onStartSetRunningParam(void) 
 {
@@ -129,41 +175,93 @@ u8 onSettemp_protectc_value( u32 intValue )
 
 u8 onSethwmax_outcur_value( u32 intValue )
 {
-    u32 old_profile_crc;
+    u8 candidate[128];
+    u8 old_factory_buf[128];
+    current_cal_curve_t previous_curve;
+    boolean_en previous_curve_valid;
+    boolean_en rollback_ok;
+    const current_cal_curve_t *active_curve;
 
     if (current_calibration_is_active() == BOOL_TRUE)
     {
         return DOWNLOAD_SAVE_FAIL;
     }
-    old_profile_crc = current_cal_profile_crc();
-  //硬件最大输出电流设置
-    if(intValue>0)
+    if (intValue == 0U || intValue > FACTORY_OUTCUR_MAX_MA ||
+        (u32)SET_OUTCUR > intValue)
     {
-        HWMAX_OUTCUR=intValue;
-        sys_data_store();
-        if (old_profile_crc != current_cal_profile_crc())
-        {
-            (void)current_cal_storage_invalidate();
-        }
+        return DOWNLOAD_PARAM_ERROR;
     }
+    if ((u16)intValue == HWMAX_OUTCUR)
+    {
+        return DOWNLOAD_SUCCESS;
+    }
+    memcpy(old_factory_buf, sys_data.fa_Parambuf, sizeof(old_factory_buf));
+    memcpy(candidate, old_factory_buf, sizeof(candidate));
+    app_factory_buf_set_u16be(candidate, 0x12U, (u16)intValue);
+    active_curve = current_cal_storage_active_curve();
+    previous_curve_valid = (active_curve != NULL) ? BOOL_TRUE : BOOL_FALSE;
+    if (active_curve != NULL)
+    {
+        previous_curve = *active_curve;
+    }
+    sys_pwm_force_off();
+    if (current_cal_storage_invalidate() != BOOL_TRUE)
+    {
+        return DOWNLOAD_SAVE_FAIL;
+    }
+    rollback_ok = BOOL_FALSE;
+    if (app_factory_commit_buffer(candidate, old_factory_buf, &rollback_ok) != BOOL_TRUE)
+    {
+        if (rollback_ok == BOOL_TRUE && previous_curve_valid == BOOL_TRUE)
+        {
+            if (current_cal_storage_commit(&previous_curve) != BOOL_TRUE)
+            {
+                printf("factory rollback kept PWM fail-safe tombstone\n");
+            }
+        }
+        return DOWNLOAD_SAVE_FAIL;
+    }
+    sys_pwm_release_and_reload();
     return DOWNLOAD_SUCCESS;
 }
 u8 onSet_setcur_value( u32 intValue )
 {
-    u32 old_profile_crc;
+    const current_cal_curve_t *active_curve;
+    u32 limit_ma;
+    u8 candidate[128];
+    u8 old_factory_buf[128];
+    boolean_en rollback_ok;
 
     if (current_calibration_is_active() == BOOL_TRUE)
     {
         return DOWNLOAD_SAVE_FAIL;
     }
-    old_profile_crc = current_cal_profile_crc();
-    //额定输出电流设置
-    SET_OUTCUR=intValue;
-    sys_data_store();
-    if (old_profile_crc != current_cal_profile_crc())
+    active_curve = current_cal_storage_active_curve();
+    limit_ma = (active_curve != NULL) ?
+               active_curve->calibration_max_current_ma : (u32)HWMAX_OUTCUR;
+    if (intValue == 0U || intValue > limit_ma ||
+        intValue > FACTORY_OUTCUR_MAX_MA)
     {
-        (void)current_cal_storage_invalidate();
+        return DOWNLOAD_PARAM_ERROR;
     }
+    if ((u16)intValue == SET_OUTCUR)
+    {
+        return DOWNLOAD_SUCCESS;
+    }
+    memcpy(old_factory_buf, sys_data.fa_Parambuf, sizeof(old_factory_buf));
+    memcpy(candidate, old_factory_buf, sizeof(candidate));
+    app_factory_buf_set_u16be(candidate, 0x10U, (u16)intValue);
+    sys_pwm_force_off();
+    if (current_cal_storage_ensure_v2() != BOOL_TRUE)
+    {
+        return DOWNLOAD_SAVE_FAIL;
+    }
+    rollback_ok = BOOL_FALSE;
+    if (app_factory_commit_buffer(candidate, old_factory_buf, &rollback_ok) != BOOL_TRUE)
+    {
+        return DOWNLOAD_SAVE_FAIL;
+    }
+    sys_pwm_release_and_reload();
     return DOWNLOAD_SUCCESS;
 }
 u8 onSet_fa_test_value( u8 intValue )
@@ -284,27 +382,86 @@ uint8 onSetTimingDimmingParam(TIMING_DIMMING_PARAM *timingDimmingParam)
 
 uint8 onSetFactoryParam(unsigned char *buf, unsigned char length)
 {
-    u32 old_profile_crc;
+    u8 candidate[128];
+    u8 old_factory_buf[128];
+    const current_cal_curve_t *active_curve;
+    current_cal_curve_t previous_curve;
+    boolean_en context_changed;
+    boolean_en set_changed;
+    boolean_en previous_curve_valid;
+    boolean_en rollback_ok;
+    u16 candidate_set;
+    u16 candidate_hwmax;
+    u16 candidate_sensor;
+    u16 candidate_pwm_offset;
 
     if (current_calibration_is_active() == BOOL_TRUE)
     {
         return DOWNLOAD_SAVE_FAIL;
     }
-    old_profile_crc = current_cal_profile_crc();
+    if (buf == NULL)
+    {
+        return DOWNLOAD_PARAM_ERROR;
+    }
     //TODO 检查参数是否合法，如果不合法，则返回DOWNLOAD_PARAM_ERROR
     //TODO 保存工厂参数
 	if(length > 128)
     {
 		length = 128;
 	}
-   
-	memcpy(sys_data.fa_Parambuf, buf, length);
-    factory_user_load_data();
-    sys_data_store();
-    if (old_profile_crc != current_cal_profile_crc())
+    memcpy(old_factory_buf, sys_data.fa_Parambuf, sizeof(old_factory_buf));
+    memcpy(candidate, old_factory_buf, sizeof(candidate));
+	memcpy(candidate, buf, length);
+    candidate_set = app_factory_buf_get_u16be(candidate, 0x10U);
+    candidate_hwmax = app_factory_buf_get_u16be(candidate, 0x12U);
+    candidate_sensor = app_factory_buf_get_u16be(candidate, 0x14U);
+    candidate_pwm_offset = app_factory_buf_get_u16be(candidate, 0x16U);
+    context_changed = app_factory_context_changed(candidate, old_factory_buf);
+    set_changed = (candidate_set != SET_OUTCUR) ? BOOL_TRUE : BOOL_FALSE;
+    active_curve = current_cal_storage_active_curve();
+    if (candidate_set == 0U || candidate_hwmax == 0U ||
+        candidate_set > FACTORY_OUTCUR_MAX_MA ||
+        candidate_hwmax > FACTORY_OUTCUR_MAX_MA ||
+        candidate_sensor == 0U ||
+        candidate_sensor > FACTORY_OUTPUT_CUR_SENSOR_MAX_MOHM ||
+        candidate_pwm_offset >= FACTORY_PWM_OFFSET_MAX_EXCLUSIVE ||
+        candidate_set > candidate_hwmax ||
+        (context_changed != BOOL_TRUE && active_curve != NULL &&
+         (u32)candidate_set > active_curve->calibration_max_current_ma))
     {
-        (void)current_cal_storage_invalidate();
+        return DOWNLOAD_PARAM_ERROR;
     }
+    if (memcmp(candidate, old_factory_buf, sizeof(candidate)) == 0)
+    {
+        return DOWNLOAD_SUCCESS;
+    }
+    previous_curve_valid = (active_curve != NULL) ? BOOL_TRUE : BOOL_FALSE;
+    if (active_curve != NULL)
+    {
+        previous_curve = *active_curve;
+    }
+    sys_pwm_force_off();
+    if ((context_changed == BOOL_TRUE &&
+         current_cal_storage_invalidate() != BOOL_TRUE) ||
+        (context_changed != BOOL_TRUE && set_changed == BOOL_TRUE &&
+         current_cal_storage_ensure_v2() != BOOL_TRUE))
+    {
+        return DOWNLOAD_SAVE_FAIL;
+    }
+    rollback_ok = BOOL_FALSE;
+    if (app_factory_commit_buffer(candidate, old_factory_buf, &rollback_ok) != BOOL_TRUE)
+    {
+        if (context_changed == BOOL_TRUE && rollback_ok == BOOL_TRUE &&
+            previous_curve_valid == BOOL_TRUE)
+        {
+            if (current_cal_storage_commit(&previous_curve) != BOOL_TRUE)
+            {
+                printf("factory rollback kept PWM fail-safe tombstone\n");
+            }
+        }
+        return DOWNLOAD_SAVE_FAIL;
+    }
+    sys_pwm_release_and_reload();
     printf_buf(sys_data.fa_Parambuf,128);
     return DOWNLOAD_SUCCESS;
 }

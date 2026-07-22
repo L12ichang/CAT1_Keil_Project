@@ -7,6 +7,8 @@
 #include "sys_data.h"
 #include "sys_pow_drop_check.h"
 #include "net_dim.h"
+#include "current_cal_storage.h"
+#include "sys_pwm.h"
 
 /* ========== Flash 存储布局 ========== */
 #define ZK_RUNTIME_FLASH_MAGIC        0x5A4B5254UL
@@ -96,8 +98,13 @@ static void zk_runtime_record_from_current(zk_runtime_flash_record_t *record,
 static boolean_en zk_runtime_flash_write_record(u32 addr,
                                                 zk_runtime_flash_record_t *record)
 {
-    hw_flash_write_bytes(addr, (u8 *)record, sizeof(*record));
-    return user_flash_check(addr, (u8 *)record, sizeof(*record));
+    if (hw_flash_update_bytes_checked(addr, (const u8 *)record,
+                                      sizeof(*record)) != HAL_OK)
+    {
+        sys_pwm_force_off();
+        return BOOL_FALSE;
+    }
+    return BOOL_TRUE;
 }
 
 /* 将当前统计值持久化到Flash（主/备双备份） */
@@ -115,9 +122,18 @@ static boolean_en zk_runtime_flash_store_current(void)
     }
 
     zk_runtime_record_from_current(&record, next_seq);
+    if (current_cal_storage_prepare_shared_page_update() != BOOL_TRUE)
+    {
+        sys_pwm_force_off();
+        return BOOL_FALSE;
+    }
     main_ok = zk_runtime_flash_write_record(ZK_RUNTIME_FLASH_MAIN_ADDR, &record);
+    if (main_ok != BOOL_TRUE)
+    {
+        return BOOL_FALSE;
+    }
     backup_ok = zk_runtime_flash_write_record(ZK_RUNTIME_FLASH_BACKUP_ADDR, &record);
-    if (main_ok == BOOL_TRUE || backup_ok == BOOL_TRUE)
+    if (backup_ok == BOOL_TRUE)
     {
         zk_runtime_flash_seq = next_seq;
         return BOOL_TRUE;

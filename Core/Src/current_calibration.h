@@ -64,8 +64,11 @@ typedef struct
 {
     current_cal_state_en state;
     char session_id[CURRENT_CAL_SESSION_ID_MAX + 1U];
+    u32 context_crc;
+    u32 legacy_profile_crc;
     u32 profile_crc;
     u32 curve_crc;
+    u32 calibration_max_current_ma;
     u32 storage_sequence;
     u32 received_bitmap;
     u32 missing_bitmap;
@@ -109,8 +112,9 @@ current_cal_result_en current_calibration_set_pwm(u8 point_index,
                                                   u8 target_percent,
                                                   u16 logical_pwm);
 current_cal_result_en current_calibration_write_curve_chunk(u16 curve_version,
-                                                            u32 profile_crc,
+                                                            u32 context_crc,
                                                             u32 curve_crc,
+                                                            u32 calibration_max_current_ma,
                                                             u8 start_index,
                                                             const u16 *values,
                                                             u8 value_count);

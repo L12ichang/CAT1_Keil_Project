@@ -2,6 +2,7 @@
 #include "current_cal_storage.h"
 #include "Portable.h"
 #include "sys_temp_over_protect.h"
+#include "factory_user_data.h"
 
 #define CURRENT_CAL_DEFAULT_TIMEOUT_SEC 30U
 #define CURRENT_CAL_MIN_TIMEOUT_SEC     10U
@@ -295,8 +296,9 @@ current_cal_result_en current_calibration_set_pwm(u8 point_index,
 }
 
 current_cal_result_en current_calibration_write_curve_chunk(u16 curve_version,
-                                                            u32 profile_crc,
+                                                            u32 context_crc,
                                                             u32 curve_crc,
+                                                            u32 calibration_max_current_ma,
                                                             u8 start_index,
                                                             const u16 *values,
                                                             u8 value_count)
@@ -318,11 +320,17 @@ current_cal_result_en current_calibration_write_curve_chunk(u16 curve_version,
     {
         return CAL_INVALID_PARAM;
     }
-    if (profile_crc != current_cal_profile_crc())
+    if (context_crc != current_cal_context_crc())
     {
         return CAL_PROFILE_MISMATCH;
     }
     if (curve_version != CURRENT_CAL_CURVE_VERSION)
+    {
+        return CAL_INVALID_PARAM;
+    }
+    if (calibration_max_current_ma == 0U ||
+        calibration_max_current_ma > (u32)HWMAX_OUTCUR ||
+        (u32)SET_OUTCUR > calibration_max_current_ma)
     {
         return CAL_INVALID_PARAM;
     }
@@ -332,12 +340,15 @@ current_cal_result_en current_calibration_write_curve_chunk(u16 curve_version,
         memset(&current_cal_ctx.pending, 0, sizeof(current_cal_ctx.pending));
         current_cal_ctx.pending.curve_version = curve_version;
         current_cal_ctx.pending.point_count = CURRENT_CAL_POINT_COUNT;
-        current_cal_ctx.pending.profile_crc = profile_crc;
+        current_cal_ctx.pending.calibration_max_current_ma = calibration_max_current_ma;
+        current_cal_ctx.pending.context_crc = context_crc;
         current_cal_ctx.pending.curve_crc = curve_crc;
         current_cal_ctx.pending_metadata_set = BOOL_TRUE;
     }
     else if (current_cal_ctx.pending.curve_version != curve_version ||
-             current_cal_ctx.pending.profile_crc != profile_crc ||
+             current_cal_ctx.pending.context_crc != context_crc ||
+             current_cal_ctx.pending.calibration_max_current_ma !=
+             calibration_max_current_ma ||
              current_cal_ctx.pending.curve_crc != curve_crc)
     {
         return CAL_CHUNK_CONFLICT;
@@ -372,7 +383,8 @@ static current_cal_result_en current_cal_validate_pending(void)
     {
         return CAL_CURVE_INCOMPLETE;
     }
-    result = current_cal_curve_validate(&current_cal_ctx.pending, current_cal_profile_crc());
+    result = current_cal_curve_validate(&current_cal_ctx.pending,
+                                        current_cal_context_crc());
     if (result == CURRENT_CAL_CURVE_OUT_OF_RANGE)
     {
         return CAL_PWM_OUT_OF_RANGE;
@@ -389,6 +401,10 @@ static current_cal_result_en current_cal_validate_pending(void)
     if (result == CURRENT_CAL_CURVE_PROFILE_MISMATCH)
     {
         return CAL_PROFILE_MISMATCH;
+    }
+    if (result == CURRENT_CAL_CURVE_BAD_CURRENT_RANGE)
+    {
+        return CAL_INVALID_PARAM;
     }
     return (result == CURRENT_CAL_CURVE_OK) ? CAL_OK : CAL_INVALID_PARAM;
 }
@@ -452,7 +468,7 @@ current_cal_result_en current_calibration_commit(u32 profile_crc, u32 curve_crc)
     {
         return CAL_INVALID_STATE;
     }
-    if (profile_crc != current_cal_profile_crc())
+    if (profile_crc != current_cal_context_crc())
     {
         return CAL_PROFILE_MISMATCH;
     }
@@ -508,17 +524,23 @@ void current_calibration_get_status(current_cal_status_t *status)
     memset(status, 0, sizeof(*status));
     status->state = current_cal_ctx.state;
     strncpy(status->session_id, current_cal_ctx.session_id, CURRENT_CAL_SESSION_ID_MAX);
-    status->profile_crc = current_cal_profile_crc();
+    status->context_crc = current_cal_context_crc();
+    status->legacy_profile_crc = current_cal_legacy_profile_crc();
+    status->profile_crc = status->context_crc;
     active_curve = current_cal_storage_active_curve();
     if (current_cal_ctx.pending_metadata_set == BOOL_TRUE)
     {
         status->curve_version = current_cal_ctx.pending.curve_version;
         status->curve_crc = current_cal_ctx.pending.curve_crc;
+        status->calibration_max_current_ma =
+            current_cal_ctx.pending.calibration_max_current_ma;
     }
     else if (active_curve != NULL)
     {
         status->curve_version = active_curve->curve_version;
         status->curve_crc = active_curve->curve_crc;
+        status->calibration_max_current_ma =
+            active_curve->calibration_max_current_ma;
     }
     status->storage_sequence = current_cal_storage_sequence();
     status->received_bitmap = current_cal_ctx.received_bitmap;

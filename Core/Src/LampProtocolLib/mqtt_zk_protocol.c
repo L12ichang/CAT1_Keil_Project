@@ -2,6 +2,7 @@
 #include "zk_runtime_stats.h"
 #include "zk_calibration_property.h"
 #include "current_calibration.h"
+#include "current_cal_storage.h"
 #include "zk_alarm.h"
 #include "zk_property.h"
 #include "zk_protocol_internal.h"
@@ -21,6 +22,7 @@
 #include "sys_data.h"
 #include "hw_flash.h"
 #include "flash_address_assignment.h"
+#include "sys_pwm.h"
 #include "ntc.h"
 #include "main.h"
 #include <stdio.h>
@@ -253,8 +255,13 @@ static boolean_en zk_ota_report_read_latest(zk_ota_report_flash_record_t *record
 static boolean_en zk_ota_report_write_record(u32 addr,
                                              zk_ota_report_flash_record_t *record)
 {
-    hw_flash_write_bytes(addr, (u8 *)record, sizeof(*record));
-    return user_flash_check(addr, (u8 *)record, sizeof(*record));
+    if (hw_flash_update_bytes_checked(addr, (const u8 *)record,
+                                      sizeof(*record)) != HAL_OK)
+    {
+        sys_pwm_force_off();
+        return BOOL_FALSE;
+    }
+    return BOOL_TRUE;
 }
 
 static boolean_en zk_ota_report_store(zk_ota_report_flash_record_t *record)
@@ -282,9 +289,18 @@ static boolean_en zk_ota_report_store(zk_ota_report_flash_record_t *record)
     record->size = (u16)sizeof(*record);
     record->seq = next_seq;
     record->checksum = zk_ota_report_checksum(record);
+    if (current_cal_storage_prepare_shared_page_update() != BOOL_TRUE)
+    {
+        sys_pwm_force_off();
+        return BOOL_FALSE;
+    }
     main_ok = zk_ota_report_write_record(ZK_OTA_REPORT_FLASH_MAIN_ADDR, record);
+    if (main_ok != BOOL_TRUE)
+    {
+        return BOOL_FALSE;
+    }
     backup_ok = zk_ota_report_write_record(ZK_OTA_REPORT_FLASH_BACKUP_ADDR, record);
-    return (main_ok == BOOL_TRUE || backup_ok == BOOL_TRUE) ? BOOL_TRUE : BOOL_FALSE;
+    return (backup_ok == BOOL_TRUE) ? BOOL_TRUE : BOOL_FALSE;
 }
 
 void zk_ota_report_mark_pending(const char *ota_id, const char *url)

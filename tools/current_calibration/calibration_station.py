@@ -29,6 +29,8 @@ MAX_CONSECUTIVE_METER_ERRORS = 3
 UINT32_MAX = 0xFFFFFFFF
 FACTORY_OUTCUR_MAX_MA = 10_000
 PWM_LOGICAL_MAX_LIMIT = 65_535
+CURVE_VERSION = 2
+STORAGE_FORMAT_VERSION = 2
 
 
 def now_text() -> str:
@@ -39,10 +41,25 @@ def stamp() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
-def curve_crc(values: list[int], version: int = 1) -> int:
+def curve_crc(
+    values: list[int], calibration_max_current_ma: int, version: int = CURVE_VERSION
+) -> int:
     if len(values) != 21:
         raise ValueError("curve must contain exactly 21 values")
-    return zlib.crc32(struct.pack("<HH21H", version, 21, *values)) & 0xFFFFFFFF
+    version = exact_json_integer(version, "curveVersion", CURVE_VERSION, CURVE_VERSION)
+    calibration_max_current_ma = exact_json_integer(
+        calibration_max_current_ma,
+        "calibrationMaxCurrentMa",
+        1,
+        FACTORY_OUTCUR_MAX_MA,
+    )
+    if any(isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 0xFFFF
+           for value in values):
+        raise ValueError("curve PWM values must be uint16 integers")
+    payload = struct.pack(
+        "<HHI21H", version, len(values), calibration_max_current_ma, *values
+    )
+    return zlib.crc32(payload) & UINT32_MAX
 
 
 def interpolate(values: list[int], percent: int) -> int:
@@ -467,7 +484,8 @@ def build_report_provenance(
     context_fields = (
         "imei", "contextCrc", "profileCrc", "legacyProfileCrc",
         "ratedCurrentMa", "calibrationMaxCurrentMa",
-        "hardwareMaxCurrentMa", "pwmLogicalMax",
+        "hardwareMaxCurrentMa", "pwmLogicalMax", "requiredCurveVersion",
+        "storageFormatVersion",
     )
     return {
         "runCsv": str(run_csv),
@@ -480,11 +498,15 @@ def build_report_provenance(
 
 
 def write_resume_manifest(csv_path: Path, context: dict[str, int | str]) -> Path:
-    required = ("imei", "profileCrc", "ratedCurrentMa", "hardwareMaxCurrentMa", "pwmLogicalMax")
+    required = (
+        "imei", "contextCrc", "profileCrc", "ratedCurrentMa",
+        "calibrationMaxCurrentMa", "hardwareMaxCurrentMa", "pwmLogicalMax",
+        "requiredCurveVersion", "storageFormatVersion",
+    )
     if any(key not in context for key in required):
         raise ValueError("resume context is incomplete")
     manifest = {
-        "format": 1,
+        "format": 2,
         "csvFile": csv_path.name,
         "createdAt": now_text(),
         **context,
@@ -502,7 +524,7 @@ def load_resume_manifest(csv_path: Path, expected: dict[str, int | str]) -> None
         manifest = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"invalid resume manifest {path}: {exc}") from exc
-    if not isinstance(manifest, dict) or manifest.get("format") != 1:
+    if not isinstance(manifest, dict) or manifest.get("format") != 2:
         raise ValueError(f"unsupported resume manifest {path}")
     if manifest.get("csvFile") != csv_path.name:
         raise ValueError(f"resume manifest {path} is not bound to {csv_path.name}")
@@ -516,7 +538,7 @@ def load_resume_manifest(csv_path: Path, expected: dict[str, int | str]) -> None
 
 def load_resume_curve(
     path: Path | list[Path],
-    rated_current_ma: int,
+    calibration_max_current_ma: int,
     context: dict[str, int | str],
 ) -> list[int]:
     best: dict[int, tuple[float, int]] = {}
@@ -542,14 +564,14 @@ def load_resume_curve(
                 if pwm <= 0 or pwm > int(context["pwmLogicalMax"]):
                     raise ValueError(f"invalid resume PWM in {item}: {pwm}")
                 index = percent // 5
-                target = (rated_current_ma * percent + 50) // 100
+                target = (calibration_max_current_ma * percent + 50) // 100
                 error = abs(measured - target)
                 if index not in best or error < best[index][0]:
                     best[index] = (error, pwm)
 
     curve = [0]
     for index in range(1, 21):
-        target = (rated_current_ma * index * 5 + 50) // 100
+        target = (calibration_max_current_ma * index * 5 + 50) // 100
         tolerance = max(target * 0.01, 10.0)
         selected = best.get(index)
         if selected is None or selected[0] > tolerance:
@@ -608,8 +630,33 @@ def output_gate(args: argparse.Namespace, percent: int) -> None:
         )
 
 
+def require_pwm_v2_capability(info: dict[str, Any]) -> None:
+    try:
+        required_curve_version = exact_json_integer(
+            info["requiredCurveVersion"], "requiredCurveVersion", 0, 0xFFFF
+        )
+        storage_format_version = exact_json_integer(
+            info["storageFormatVersion"], "storageFormatVersion", 0, 0xFFFF
+        )
+        context_crc = exact_json_integer(info["contextCrc"], "contextCrc", 0, UINT32_MAX)
+        profile_crc = exact_json_integer(info["profileCrc"], "profileCrc", 0, UINT32_MAX)
+    except (KeyError, ValueError) as exc:
+        raise RuntimeError(
+            "device does not advertise the required PWM calibration v2 capability"
+        ) from exc
+    if (required_curve_version != CURVE_VERSION or
+            storage_format_version != STORAGE_FORMAT_VERSION or
+            context_crc != profile_crc):
+        raise RuntimeError(
+            f"unsupported device calibration protocol: curve={required_curve_version}, "
+            f"storage={storage_format_version}, context/profile={context_crc}/{profile_crc}; "
+            f"required={CURVE_VERSION}/{STORAGE_FORMAT_VERSION}"
+        )
+
+
 def run_info(station: MqttStation) -> dict[str, Any]:
     info = require_result(station.request("readInfo", {"seq": 1}))
+    require_pwm_v2_capability(info)
     print(json.dumps(info, ensure_ascii=False, indent=2))
     return info
 
@@ -619,6 +666,13 @@ def validate_cli_numeric_args(args: argparse.Namespace) -> None:
     if args.rated_current_ma is not None:
         exact_json_integer(
             args.rated_current_ma, "--rated-current-ma", 1, FACTORY_OUTCUR_MAX_MA
+        )
+    if getattr(args, "calibration_max_current_ma", None) is not None:
+        exact_json_integer(
+            args.calibration_max_current_ma,
+            "--calibration-max-current-ma",
+            1,
+            FACTORY_OUTCUR_MAX_MA,
         )
     integer_ranges = (
         ("meter_samples", "--meter-samples", 24, 10_000),
@@ -687,8 +741,26 @@ def validate_calibration_info(
         requested_rated = exact_json_integer(
             args.rated_current_ma, "--rated-current-ma", 1, FACTORY_OUTCUR_MAX_MA
         )
+        required_curve_version = exact_json_integer(
+            info["requiredCurveVersion"], "requiredCurveVersion", 0, 0xFFFF
+        )
+        storage_format_version = exact_json_integer(
+            info["storageFormatVersion"], "storageFormatVersion", 0, 0xFFFF
+        )
     except (KeyError, ValueError) as exc:
-        raise ValueError("readInfo must include profileCrc, ratedCurrentMa, hardwareMaxCurrentMa, pwmLogicalMax") from exc
+        raise ValueError(
+            "readInfo must expose PWM v2 context, limits, requiredCurveVersion, and storageFormatVersion"
+        ) from exc
+    if required_curve_version != CURVE_VERSION or storage_format_version != STORAGE_FORMAT_VERSION:
+        raise ValueError(
+            f"unsupported calibration protocol: curveVersion={required_curve_version}, "
+            f"storageFormatVersion={storage_format_version}; this station requires "
+            f"v{CURVE_VERSION}/v{STORAGE_FORMAT_VERSION}"
+        )
+    if profile != context_crc:
+        raise ValueError(
+            f"readInfo profileCrc compatibility alias {profile} does not match contextCrc {context_crc}"
+        )
     if rated > hardware_max:
         raise ValueError(
             f"invalid readInfo calibration limits: rated={rated}, hardwareMax={hardware_max}, "
@@ -698,11 +770,24 @@ def validate_calibration_info(
         raise ValueError(
             f"--rated-current-ma={requested_rated} does not match device ratedCurrentMa={rated}"
         )
+    calibration_max_arg = getattr(args, "calibration_max_current_ma", None)
+    requested_calibration_max = exact_json_integer(
+        requested_rated if calibration_max_arg is None else calibration_max_arg,
+        "--calibration-max-current-ma",
+        1,
+        FACTORY_OUTCUR_MAX_MA,
+    )
+    if not requested_rated <= requested_calibration_max <= hardware_max:
+        raise ValueError(
+            "current limits must satisfy ratedCurrentMa <= calibrationMaxCurrentMa "
+            f"<= hardwareMaxCurrentMa, got {requested_rated} <= "
+            f"{requested_calibration_max} <= {hardware_max}"
+        )
     if args.load_voltage_v is not None and args.power_limit_w is not None:
-        rated_power_w = args.load_voltage_v * rated / 1000.0
-        if rated_power_w > args.power_limit_w:
+        calibration_power_w = args.load_voltage_v * requested_calibration_max / 1000.0
+        if calibration_power_w > args.power_limit_w:
             raise ValueError(
-                f"rated output power {rated_power_w:.3f}W exceeds requested power limit "
+                f"calibration output power {calibration_power_w:.3f}W exceeds requested power limit "
                 f"{args.power_limit_w:.3f}W"
             )
     calibration_max_value = info.get(
@@ -710,7 +795,7 @@ def validate_calibration_info(
     )
     calibration_max = (
         exact_json_integer(
-            calibration_max_value, "calibrationMaxCurrentMa", 1, FACTORY_OUTCUR_MAX_MA
+            calibration_max_value, "calibrationMaxCurrentMa", 0, FACTORY_OUTCUR_MAX_MA
         )
         if calibration_max_value is not None else None
     )
@@ -725,18 +810,21 @@ def validate_calibration_info(
         "profileCrc": profile,
         "legacyProfileCrc": legacy_profile,
         "ratedCurrentMa": rated,
-        "calibrationMaxCurrentMa": calibration_max,
+        "calibrationMaxCurrentMa": requested_calibration_max,
+        "deviceCalibrationMaxCurrentMa": calibration_max,
         "hardwareMaxCurrentMa": hardware_max,
         "pwmLogicalMax": logical_max,
+        "requiredCurveVersion": required_curve_version,
+        "storageFormatVersion": storage_format_version,
     }
 
 
 def run_smoke(station: MqttStation, session: str) -> None:
     info = run_info(station)
-    profile = int(info["profileCrc"])
+    context_crc = int(info["contextCrc"])
     require_result(
         station.request(
-            "enter", {"sessionId": session, "seq": 1, "profileCrc": profile, "timeoutSec": 30}
+            "enter", {"sessionId": session, "seq": 1, "contextCrc": context_crc, "timeoutSec": 30}
         )
     )
     require_result(
@@ -753,13 +841,13 @@ def run_smoke(station: MqttStation, session: str) -> None:
 
 def run_protocol(station: MqttStation, session: str) -> None:
     info = run_info(station)
-    profile = int(info["profileCrc"])
+    context_crc = int(info["contextCrc"])
     response = station.request(
         "setPwm",
         {"sessionId": session, "seq": 1, "pointIndex": 0, "targetPercent": 0, "logicalPwm": 0},
     )
     require_result(response, 4)
-    enter_fields = {"sessionId": session, "seq": 1, "profileCrc": profile, "timeoutSec": 30}
+    enter_fields = {"sessionId": session, "seq": 1, "contextCrc": context_crc, "timeoutSec": 30}
     require_result(station.request("enter", enter_fields))
     command = {"sessionId": session, "seq": 2, "pointIndex": 0, "targetPercent": 0, "logicalPwm": 0}
     require_result(station.request("setPwm", command))
@@ -771,7 +859,8 @@ def run_protocol(station: MqttStation, session: str) -> None:
 
 def run_fuzz(station: MqttStation, session: str) -> None:
     info = run_info(station)
-    profile = int(info["profileCrc"])
+    context_crc = int(info["contextCrc"])
+    calibration_max_current_ma = int(info["ratedCurrentMa"])
     require_result(
         station.request(
             "setPwm",
@@ -782,7 +871,7 @@ def run_fuzz(station: MqttStation, session: str) -> None:
     )
     require_result(
         station.request(
-            "enter", {"sessionId": session, "seq": 1, "profileCrc": profile, "timeoutSec": 30}
+            "enter", {"sessionId": session, "seq": 1, "contextCrc": context_crc, "timeoutSec": 30}
         )
     )
     invalid = {
@@ -793,8 +882,9 @@ def run_fuzz(station: MqttStation, session: str) -> None:
     require_result(station.request("setPwm", invalid), 2)
     require_result(station.request("setPwm", {**invalid, "logicalPwm": 1}), 18)
     curve_fields = {
-        "sessionId": session, "curveVersion": 1,
-        "profileCrc": profile, "curveCrc": 0,
+        "sessionId": session, "curveVersion": CURVE_VERSION,
+        "contextCrc": context_crc, "curveCrc": 0,
+        "calibrationMaxCurrentMa": calibration_max_current_ma,
     }
     for seq, length in ((3, 0), (4, 8), (5, 256), (6, 257)):
         require_result(
@@ -1005,10 +1095,13 @@ def run_calibrate(
         raise ValueError("--rated-current-ma is required for calibrate mode")
     info = run_info(station)
     calibration_context = validate_calibration_info(info, args)
-    profile = int(calibration_context["profileCrc"])
+    context_crc = int(calibration_context["contextCrc"])
+    calibration_max_current_ma = int(calibration_context["calibrationMaxCurrentMa"])
     logical_max = int(calibration_context["pwmLogicalMax"])
     hw_max_current = int(calibration_context["hardwareMaxCurrentMa"])
-    estimated_full_pwm = max(20, round(logical_max * args.rated_current_ma / hw_max_current))
+    estimated_full_pwm = max(
+        20, round(logical_max * calibration_max_current_ma / hw_max_current)
+    )
     seq = 1
     committed = False
     entered = False
@@ -1016,7 +1109,7 @@ def run_calibrate(
     temporary_curve_active = False
     primary_error: BaseException | None = None
     curve = (
-        load_resume_curve(args.resume_csv, args.rated_current_ma, calibration_context)
+        load_resume_curve(args.resume_csv, calibration_max_current_ma, calibration_context)
         if args.resume_csv is not None else [0]
     )
     curve = apply_curve_overrides(curve, args.curve_override, logical_max)
@@ -1046,7 +1139,7 @@ def run_calibrate(
         session_maybe_active = True
         require_result(
             station.request(
-                "enter", {"sessionId": session, "seq": seq, "profileCrc": profile, "timeoutSec": 300}
+                "enter", {"sessionId": session, "seq": seq, "contextCrc": context_crc, "timeoutSec": 300}
             )
         )
         entered = True
@@ -1076,7 +1169,7 @@ def run_calibrate(
         )
 
         for index in range(len(curve), 21):
-            target = (args.rated_current_ma * index * 5 + 50) // 100
+            target = (calibration_max_current_ma * index * 5 + 50) // 100
             if len(curve) >= 3:
                 initial = curve[-1] + max(1, curve[-1] - curve[-2])
             else:
@@ -1100,15 +1193,18 @@ def run_calibrate(
         if int(zero_response.get("outputEnabled", 1)) != 0:
             raise RuntimeError(f"failed to disable output before curve upload: {zero_response}")
 
-        crc = curve_crc(curve)
+        crc = curve_crc(curve, calibration_max_current_ma)
         for start in (0, 7, 14):
             seq += 1
             require_result(
                 station.request(
                     "writeCurveChunk",
                     {
-                        "sessionId": session, "seq": seq, "curveVersion": 1,
-                        "profileCrc": profile, "curveCrc": crc, "startIndex": start,
+                        "sessionId": session, "seq": seq,
+                        "curveVersion": CURVE_VERSION,
+                        "contextCrc": context_crc, "curveCrc": crc,
+                        "calibrationMaxCurrentMa": calibration_max_current_ma,
+                        "startIndex": start,
                         "values": curve[start : start + 7],
                     },
                 )
@@ -1160,7 +1256,7 @@ def run_calibrate(
                     int(status.get("logicalPwm", -1)) != expected_pwm or
                     int(status.get("protectCode", 0)) != 0):
                 raise RuntimeError(f"device changed state during preview at {percent}%: {status}")
-            target = (args.rated_current_ma * percent + 50) // 100
+            target = (calibration_max_current_ma * percent + 50) // 100
             check_measured_power(args, metrics["average"], f"preview {percent}%")
             tolerance = args.leakage_max_ma if percent == 0 else max(target * 0.01, 10.0)
             error = abs(metrics["average"] - target)
@@ -1185,8 +1281,11 @@ def run_calibrate(
         report_path.write_text(
             json.dumps(
                 {
-                    "sessionId": session, "profileCrc": profile, "curveCrc": crc,
-                    "curveVersion": 1, "ratedCurrentMa": args.rated_current_ma,
+                    "sessionId": session, "contextCrc": context_crc,
+                    "profileCrc": context_crc, "curveCrc": crc,
+                    "curveVersion": CURVE_VERSION,
+                    "ratedCurrentMa": args.rated_current_ma,
+                    "calibrationMaxCurrentMa": calibration_max_current_ma,
                     "logicalPwm": curve, "createdAt": now_text(),
                     **build_report_provenance(
                         csv_path, manifest_path, args.resume_csv, calibration_context
@@ -1211,7 +1310,8 @@ def run_calibrate(
             seq += 1
             require_result(
                 station.request(
-                    "commit", {"sessionId": session, "seq": seq, "profileCrc": profile, "curveCrc": crc}
+                    "commit", {"sessionId": session, "seq": seq,
+                               "contextCrc": context_crc, "curveCrc": crc}
                 )
             )
             committed = True
@@ -1382,6 +1482,11 @@ def main() -> int:
     parser.add_argument("--sub-topic")
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--rated-current-ma", type=int)
+    parser.add_argument(
+        "--calibration-max-current-ma",
+        type=int,
+        help="curve full-scale current; defaults to --rated-current-ma",
+    )
     parser.add_argument("--settle-ms", type=int, default=2000)
     parser.add_argument("--max-iterations", type=int, default=16)
     parser.add_argument("--leakage-max-ma", type=float, default=10.0)

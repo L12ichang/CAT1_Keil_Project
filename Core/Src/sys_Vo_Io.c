@@ -72,7 +72,6 @@ static u8 output_state=OUTPUT_STATE_IDLE;
 static  u8 out_ov_protect;
 static  u8 out_short_protect;
 static u16 counter_delay;
-extern u8 set_percent;
 extern u8 pwm_on;
 #define OUTPUT_SHORT_THRESHOLD  200 //短路判定电压20V 单位0.1V
 #define OUTPUT_OV_THRESHOLD     560*1.2        //56V 1.2倍

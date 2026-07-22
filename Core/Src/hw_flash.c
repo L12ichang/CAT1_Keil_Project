@@ -10,6 +10,11 @@
 #include "flash_allocation.h"
 #include "stm32f1xx_hal.h"
 u8 temp_buf_byte[FLASH_PAGE_SIZE] __attribute__ ((aligned(4)));
+/* The checked RMW path must never build recovery data by reading a page after
+ * erase/program has already failed.  Keep the exact pre-erase image apart
+ * from temp_buf_byte, which holds the requested new page. */
+static u8 hw_flash_original_page[FLASH_PAGE_SIZE] __attribute__ ((aligned(4)));
+static volatile boolean_en hw_flash_checked_fault = BOOL_FALSE;
 void memcpy_u32(u32 *target, u32 *source, u32 length)
 {
     int i;
@@ -224,30 +229,14 @@ void hw_flash_write_bytes(uint32_t flash_addr, u8 *buffer, uint32_t length)
 
 }
 
-HAL_StatusTypeDef hw_flash_update_bytes_checked(uint32_t flash_addr,
-                                                const u8 *buffer,
-                                                uint32_t length)
+static HAL_StatusTypeDef hw_flash_program_full_page_checked(
+    u32 sector_addr,
+    const u8 *page_image)
 {
     FLASH_EraseInitTypeDef erase_init;
     HAL_StatusTypeDef status;
     u32 page_error;
-    u32 sector_addr;
-    u32 sector_offset;
     u32 i;
-
-    if (buffer == NULL || length == 0U)
-    {
-        return HAL_ERROR;
-    }
-    sector_addr = flash_addr - (flash_addr % FLASH_PAGE_SIZE);
-    sector_offset = flash_addr - sector_addr;
-    if ((sector_offset + length) > FLASH_PAGE_SIZE)
-    {
-        return HAL_ERROR;
-    }
-
-    hw_flash_read_bytes(sector_addr, temp_buf_byte, FLASH_PAGE_SIZE);
-    memcpy_u8(temp_buf_byte + sector_offset, (u8 *)buffer, length);
 
     status = HAL_FLASH_Unlock();
     if (status != HAL_OK)
@@ -265,7 +254,7 @@ HAL_StatusTypeDef hw_flash_update_bytes_checked(uint32_t flash_addr,
         {
             status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD,
                                        sector_addr + i,
-                                       *((u32 *)(temp_buf_byte + i)));
+                                       *((u32 *)(page_image + i)));
             if (status != HAL_OK)
             {
                 break;
@@ -277,8 +266,67 @@ HAL_StatusTypeDef hw_flash_update_bytes_checked(uint32_t flash_addr,
     {
         return status;
     }
-    return (user_flash_check(sector_addr, temp_buf_byte, FLASH_PAGE_SIZE) == BOOL_TRUE) ?
+    return (user_flash_check(sector_addr, (u8 *)page_image,
+                             FLASH_PAGE_SIZE) == BOOL_TRUE) ?
            HAL_OK : HAL_ERROR;
+}
+
+HAL_StatusTypeDef hw_flash_update_bytes_checked(uint32_t flash_addr,
+                                                const u8 *buffer,
+                                                uint32_t length)
+{
+    HAL_StatusTypeDef status;
+    HAL_StatusTypeDef restore_status;
+    u32 sector_addr;
+    u32 sector_offset;
+    u8 restore_attempt;
+
+    if (buffer == NULL || length == 0U)
+    {
+        return HAL_ERROR;
+    }
+    sector_addr = flash_addr - (flash_addr % FLASH_PAGE_SIZE);
+    sector_offset = flash_addr - sector_addr;
+    if ((sector_offset + length) > FLASH_PAGE_SIZE)
+    {
+        return HAL_ERROR;
+    }
+
+    hw_flash_read_bytes(sector_addr, hw_flash_original_page, FLASH_PAGE_SIZE);
+    memcpy_u8(temp_buf_byte, hw_flash_original_page, FLASH_PAGE_SIZE);
+    memcpy_u8(temp_buf_byte + sector_offset, (u8 *)buffer, length);
+    if (memcmp(temp_buf_byte, hw_flash_original_page, FLASH_PAGE_SIZE) == 0)
+    {
+        return HAL_OK;
+    }
+
+    status = hw_flash_program_full_page_checked(sector_addr, temp_buf_byte);
+    if (status == HAL_OK)
+    {
+        return HAL_OK;
+    }
+
+    /* Never report a command successful after any erase/program/readback
+     * fault.  Best-effort restoration uses only the independent pre-erase
+     * image; it deliberately does not read or merge the damaged page. */
+    hw_flash_checked_fault = BOOL_TRUE;
+    restore_status = HAL_ERROR;
+    for (restore_attempt = 0U; restore_attempt < 2U; ++restore_attempt)
+    {
+        restore_status = hw_flash_program_full_page_checked(
+            sector_addr, hw_flash_original_page);
+        if (restore_status == HAL_OK)
+        {
+            break;
+        }
+    }
+    (void)restore_status;
+    return status;
+}
+
+boolean_en hw_flash_update_fault_latched(void)
+{
+    return hw_flash_checked_fault;
 }
 
 /*

@@ -212,6 +212,7 @@ extern void sys_data_load(void);
 输出返回：无
 *************************************/
 extern void sys_data_store(void);
+extern boolean_en sys_data_store_checked(void);
 extern void sys_data_default(void);
 extern boolean_en flash_store(u8* buf, u16 size, u32 addr_main);
 extern boolean_en data_store_data(u8* buf, u16 size, u32 addr_main);

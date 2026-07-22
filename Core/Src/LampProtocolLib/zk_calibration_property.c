@@ -62,6 +62,37 @@ static boolean_en zk_cal_json_u8(cJSON *object, const char *name, u8 *value)
     return BOOL_TRUE;
 }
 
+static boolean_en zk_cal_json_context_crc(cJSON *object, u32 *value)
+{
+    cJSON *context_item;
+    cJSON *profile_item;
+    u32 context_crc;
+    u32 profile_crc;
+
+    context_item = cJSON_GetObjectItem(object, "contextCrc");
+    profile_item = cJSON_GetObjectItem(object, "profileCrc");
+    if (context_item == NULL && profile_item == NULL)
+    {
+        return BOOL_FALSE;
+    }
+    if (context_item != NULL &&
+        zk_cal_json_u32(object, "contextCrc", &context_crc) != BOOL_TRUE)
+    {
+        return BOOL_FALSE;
+    }
+    if (profile_item != NULL &&
+        zk_cal_json_u32(object, "profileCrc", &profile_crc) != BOOL_TRUE)
+    {
+        return BOOL_FALSE;
+    }
+    if (context_item != NULL && profile_item != NULL && context_crc != profile_crc)
+    {
+        return BOOL_FALSE;
+    }
+    *value = (context_item != NULL) ? context_crc : profile_crc;
+    return BOOL_TRUE;
+}
+
 static u32 zk_cal_hash_bytes(u32 hash, const u8 *data, u32 length)
 {
     u32 i;
@@ -77,9 +108,9 @@ static u32 zk_cal_hash_bytes(u32 hash, const u8 *data, u32 length)
 static u32 zk_cal_command_digest(cJSON *calibration)
 {
     static const char *numeric_names[] = {
-        "profileCrc", "timeoutSec", "pointIndex", "targetPercent",
+        "contextCrc", "profileCrc", "timeoutSec", "pointIndex", "targetPercent",
         "logicalPwm", "curveVersion", "curveCrc", "startIndex", "percent",
-        "reason"
+        "calibrationMaxCurrentMa", "reason"
     };
     cJSON *item;
     cJSON *values;
@@ -106,6 +137,10 @@ static u32 zk_cal_command_digest(cJSON *calibration)
             item->valuedouble <= 4294967295.0)
         {
             value = (u32)item->valuedouble;
+            if ((double)value != item->valuedouble)
+            {
+                value = 0xffffffffUL;
+            }
         }
         hash = zk_cal_hash_bytes(hash, (const u8 *)&value, sizeof(value));
     }
@@ -116,8 +151,17 @@ static u32 zk_cal_command_digest(cJSON *calibration)
         for (i = 0; i < count; ++i)
         {
             item = cJSON_GetArrayItem(values, i);
-            value = (item != NULL && cJSON_IsNumber(item) && item->valuedouble >= 0.0) ?
-                    (u32)item->valuedouble : 0xffffffffUL;
+            value = 0xffffffffUL;
+            if (item != NULL && cJSON_IsNumber(item) &&
+                item->valuedouble >= 0.0 &&
+                item->valuedouble <= 4294967295.0)
+            {
+                value = (u32)item->valuedouble;
+                if ((double)value != item->valuedouble)
+                {
+                    value = 0xffffffffUL;
+                }
+            }
             hash = zk_cal_hash_bytes(hash, (const u8 *)&value, sizeof(value));
         }
     }
@@ -175,14 +219,22 @@ static int zk_cal_build_response(cJSON *dt, void *context)
     cJSON_AddNumberToObject(node, "seq", (double)response->seq);
     cJSON_AddNumberToObject(node, "result", (double)response->result);
     cJSON_AddStringToObject(node, "state", current_calibration_state_name(status.state));
-    cJSON_AddNumberToObject(node, "profileCrc", (double)status.profile_crc);
+    cJSON_AddNumberToObject(node, "contextCrc", (double)status.context_crc);
+    cJSON_AddNumberToObject(node, "profileCrc", (double)status.context_crc);
+    cJSON_AddNumberToObject(node, "legacyProfileCrc", (double)status.legacy_profile_crc);
     cJSON_AddNumberToObject(node, "curveCrc", (double)status.curve_crc);
     cJSON_AddNumberToObject(node, "curveVersion", status.curve_version);
+    cJSON_AddNumberToObject(node, "requiredCurveVersion", CURRENT_CAL_CURVE_VERSION);
+    cJSON_AddNumberToObject(node, "storageFormatVersion", 2);
     cJSON_AddNumberToObject(node, "pwmLogicalMax", (double)current_cal_pwm_logical_max());
     cJSON_AddNumberToObject(node, "sid", SID);
     cJSON_AddNumberToObject(node, "mid", MID);
     cJSON_AddNumberToObject(node, "driverVersion", DRV_VERSION);
     cJSON_AddNumberToObject(node, "ratedCurrentMa", SET_OUTCUR);
+    cJSON_AddNumberToObject(node, "calibrationMaxCurrentMa",
+                            (double)status.calibration_max_current_ma);
+    cJSON_AddNumberToObject(node, "calMaxCurrentMa",
+                            (double)status.calibration_max_current_ma);
     cJSON_AddNumberToObject(node, "hardwareMaxCurrentMa", HWMAX_OUTCUR);
     cJSON_AddNumberToObject(node, "outputCurrentSensorMohm", OUTPUT_CUR_SENSOR);
     cJSON_AddNumberToObject(node, "pwmOffset", OP_PWM_OFFSET);
@@ -197,7 +249,9 @@ static int zk_cal_build_response(cJSON *dt, void *context)
     cJSON_AddNumberToObject(node, "receivedCount", status.received_count);
     cJSON_AddNumberToObject(node, "curveValid", status.pending_valid);
     cJSON_AddNumberToObject(node, "activeCurveValid", status.active_curve_valid);
-    cJSON_AddNumberToObject(node, "stored", status.state == CAL_STATE_COMMITTED);
+    cJSON_AddNumberToObject(node, "stored", status.active_curve_valid);
+    cJSON_AddNumberToObject(node, "committedThisSession",
+                            status.state == CAL_STATE_COMMITTED);
     cJSON_AddNumberToObject(node, "pointIndex", status.point_index);
     cJSON_AddNumberToObject(node, "targetPercent", status.target_percent);
     cJSON_AddNumberToObject(node, "lastError", status.last_error);
@@ -266,6 +320,7 @@ boolean_en zk_handle_calibration_property(cJSON *root, const zk_message_header_t
     u32 digest;
     u32 profile_crc;
     u32 curve_crc;
+    u32 calibration_max_current_ma;
     u16 timeout_sec;
     u16 logical_pwm;
     u16 curve_version;
@@ -357,7 +412,7 @@ boolean_en zk_handle_calibration_property(cJSON *root, const zk_message_header_t
             }
         }
         timeout_sec = 0U;
-        if (zk_cal_json_u32(calibration, "profileCrc", &profile_crc) != BOOL_TRUE)
+        if (zk_cal_json_context_crc(calibration, &profile_crc) != BOOL_TRUE)
         {
             result = CAL_INVALID_PARAM;
         }
@@ -412,8 +467,10 @@ boolean_en zk_handle_calibration_property(cJSON *root, const zk_message_header_t
             value_count = (values_node != NULL && cJSON_IsArray(values_node)) ?
                           cJSON_GetArraySize(values_node) : 0;
             if (zk_cal_json_u16(calibration, "curveVersion", &curve_version) != BOOL_TRUE ||
-                zk_cal_json_u32(calibration, "profileCrc", &profile_crc) != BOOL_TRUE ||
+                zk_cal_json_context_crc(calibration, &profile_crc) != BOOL_TRUE ||
                 zk_cal_json_u32(calibration, "curveCrc", &curve_crc) != BOOL_TRUE ||
+                zk_cal_json_u32(calibration, "calibrationMaxCurrentMa",
+                                &calibration_max_current_ma) != BOOL_TRUE ||
                 zk_cal_json_u8(calibration, "startIndex", &start_index) != BOOL_TRUE ||
                 value_count < 1 || value_count > 7)
             {
@@ -437,7 +494,9 @@ boolean_en zk_handle_calibration_property(cJSON *root, const zk_message_header_t
             else
             {
                 result = current_calibration_write_curve_chunk(curve_version, profile_crc,
-                                                               curve_crc, start_index,
+                                                               curve_crc,
+                                                               calibration_max_current_ma,
+                                                               start_index,
                                                                values, (u8)value_count);
             }
             break;
@@ -450,7 +509,7 @@ boolean_en zk_handle_calibration_property(cJSON *root, const zk_message_header_t
                      current_calibration_set_test_percent(percent) : CAL_INVALID_PARAM;
             break;
         case CAL_ACTION_COMMIT:
-            if (zk_cal_json_u32(calibration, "profileCrc", &profile_crc) != BOOL_TRUE ||
+            if (zk_cal_json_context_crc(calibration, &profile_crc) != BOOL_TRUE ||
                 zk_cal_json_u32(calibration, "curveCrc", &curve_crc) != BOOL_TRUE)
             {
                 result = CAL_INVALID_PARAM;
