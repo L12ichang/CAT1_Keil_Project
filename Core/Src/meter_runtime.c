@@ -69,6 +69,8 @@ typedef struct
     meter_cal_result_en coefficient_result;
     meter_cal_coefficients_t coefficients;
     meter_runtime_snapshot_t snapshot;
+    meter_runtime_bl0942_frame_t raw_input;
+    meter_runtime_output_sample_t raw_output;
     meter_cal_energy_accumulator_t accumulator;
     meter_runtime_energy_slot_en energy_slot;
     meter_runtime_energy_state_en energy_storage_state;
@@ -83,6 +85,8 @@ typedef struct
     boolean_en checkpoint_dirty;
     boolean_en checkpoint_attempted;
     boolean_en persistence_fault_latched;
+    boolean_en raw_input_present;
+    boolean_en raw_output_present;
 } meter_runtime_context_t;
 
 static meter_runtime_context_t meter_runtime_ctx;
@@ -832,6 +836,8 @@ void meter_runtime_publish_bl0942(
     primask = __get_PRIMASK();
     __disable_irq();
     meter_runtime_ctx.snapshot = candidate;
+    meter_runtime_ctx.raw_input = *frame;
+    meter_runtime_ctx.raw_input_present = BOOL_TRUE;
     if (primask == 0U)
     {
         __enable_irq();
@@ -886,6 +892,8 @@ void meter_runtime_publish_output(
     primask = __get_PRIMASK();
     __disable_irq();
     meter_runtime_ctx.snapshot = candidate;
+    meter_runtime_ctx.raw_output = *sample;
+    meter_runtime_ctx.raw_output_present = BOOL_TRUE;
     if (primask == 0U)
     {
         __enable_irq();
@@ -924,6 +932,71 @@ boolean_en meter_runtime_get_snapshot(meter_runtime_snapshot_t *snapshot)
     return (snapshot->mode != METER_RUNTIME_MODE_INVALID &&
             (snapshot->input_valid == BOOL_TRUE ||
              snapshot->output_valid == BOOL_TRUE)) ? BOOL_TRUE : BOOL_FALSE;
+}
+
+boolean_en meter_runtime_get_calibration_snapshot(
+    meter_runtime_calibration_snapshot_t *snapshot)
+{
+    meter_runtime_bl0942_frame_t input;
+    meter_runtime_output_sample_t output;
+    boolean_en input_present;
+    boolean_en output_present;
+    u32 now;
+    u32 primask;
+
+    if (snapshot == NULL)
+    {
+        return BOOL_FALSE;
+    }
+    memset(snapshot, 0, sizeof(*snapshot));
+    primask = __get_PRIMASK();
+    __disable_irq();
+    input = meter_runtime_ctx.raw_input;
+    output = meter_runtime_ctx.raw_output;
+    input_present = meter_runtime_ctx.raw_input_present;
+    output_present = meter_runtime_ctx.raw_output_present;
+    snapshot->mode = meter_runtime_ctx.mode;
+    snapshot->coefficient_result = meter_runtime_ctx.coefficient_result;
+    if (primask == 0U)
+    {
+        __enable_irq();
+    }
+    snapshot->context_crc = current_cal_context_crc();
+    snapshot->storage_status = (u8)current_cal_storage_meter_status();
+    now = Timer_GetTickCount();
+    if (input_present == BOOL_TRUE)
+    {
+        snapshot->input_voltage_raw = input.voltage_rms_raw;
+        snapshot->input_current_raw = input.current_rms_raw;
+        snapshot->input_fast_current_raw = input.current_fast_raw;
+        snapshot->input_watt_raw24 = input.raw_watt24;
+        snapshot->input_watt_signed = input.signed_watt_raw;
+        snapshot->input_period_raw = input.frequency_period_raw;
+        snapshot->input_cf_raw24 = input.cf_counter24;
+        snapshot->input_status = input.status;
+        snapshot->input_sequence = input.sequence;
+        snapshot->input_tick = input.sample_tick;
+        snapshot->input_age_ms = now - input.sample_tick;
+        snapshot->input_valid =
+            (input.sample_tick != 0U &&
+             snapshot->input_age_ms <= METER_RUNTIME_SNAPSHOT_MAX_AGE_MS) ?
+            BOOL_TRUE : BOOL_FALSE;
+    }
+    if (output_present == BOOL_TRUE)
+    {
+        snapshot->output_voltage_raw = output.voltage_adc_raw;
+        snapshot->output_current_raw = output.current_adc_raw;
+        snapshot->output_protect_code = output.protect_code;
+        snapshot->output_sequence = output.sequence;
+        snapshot->output_tick = output.sample_tick;
+        snapshot->output_age_ms = now - output.sample_tick;
+        snapshot->output_valid =
+            (output.sample_tick != 0U &&
+             snapshot->output_age_ms <= METER_RUNTIME_SNAPSHOT_MAX_AGE_MS) ?
+            BOOL_TRUE : BOOL_FALSE;
+    }
+    return (snapshot->input_valid == BOOL_TRUE ||
+            snapshot->output_valid == BOOL_TRUE) ? BOOL_TRUE : BOOL_FALSE;
 }
 
 static boolean_en meter_runtime_checkpoint_store(void)
@@ -1098,4 +1171,166 @@ boolean_en meter_runtime_energy_clear(void)
         __enable_irq();
     }
     return meter_runtime_checkpoint_store();
+}
+
+static boolean_en meter_runtime_reload_fail(meter_cal_result_en result)
+{
+    u32 primask;
+
+    primask = __get_PRIMASK();
+    __disable_irq();
+    meter_runtime_ctx.mode = METER_RUNTIME_MODE_INVALID;
+    meter_runtime_ctx.coefficient_result = result;
+    meter_runtime_ctx.snapshot.mode = METER_RUNTIME_MODE_INVALID;
+    meter_runtime_ctx.snapshot.coefficient_result = result;
+    meter_runtime_ctx.snapshot.input_valid = BOOL_FALSE;
+    meter_runtime_ctx.snapshot.output_valid = BOOL_FALSE;
+    meter_runtime_ctx.snapshot.energy_valid = BOOL_FALSE;
+    if (primask == 0U)
+    {
+        __enable_irq();
+    }
+    return meter_runtime_persistence_fail();
+}
+
+boolean_en meter_runtime_prepare_calibration_reload(void)
+{
+    sys_pwm_status_t pwm;
+
+    if (sys_pwm_calibration_is_locked() != BOOL_TRUE)
+    {
+        sys_pwm_force_off();
+        return BOOL_FALSE;
+    }
+    sys_pwm_force_off();
+    sys_pwm_get_status(&pwm);
+    if (pwm.output_enabled == BOOL_TRUE)
+    {
+        return meter_runtime_reload_fail(METER_CAL_CONTINUITY_INVALID);
+    }
+    if (meter_runtime_ctx.mode == METER_RUNTIME_MODE_CALIBRATED &&
+        meter_runtime_ctx.coefficients.flags == METER_CAL_FLAGS_ENERGY_CF24)
+    {
+        return meter_runtime_power_down_save();
+    }
+    return BOOL_TRUE;
+}
+
+boolean_en meter_runtime_reload_calibration(void)
+{
+    current_cal_meter_section_t section;
+    meter_cal_coefficients_t coefficients;
+    meter_runtime_energy_record_t record_a;
+    meter_runtime_energy_record_t record_b;
+    const meter_runtime_energy_record_t *selected;
+    meter_runtime_energy_slot_en selected_slot;
+    meter_runtime_energy_state_en energy_state;
+    boolean_en redundant;
+    sys_pwm_status_t pwm;
+    meter_cal_result_en result;
+    u64 total_energy_uwh;
+    u64 session_base_uwh;
+    u64 session_energy_uwh;
+    u32 next_epoch;
+    u32 primask;
+
+    if (sys_pwm_calibration_is_locked() != BOOL_TRUE)
+    {
+        return meter_runtime_reload_fail(METER_CAL_CONTINUITY_INVALID);
+    }
+    sys_pwm_force_off();
+    sys_pwm_get_status(&pwm);
+    if (pwm.output_enabled == BOOL_TRUE)
+    {
+        return meter_runtime_reload_fail(METER_CAL_CONTINUITY_INVALID);
+    }
+    if (current_cal_storage_meter_status() !=
+            CURRENT_CAL_METER_STATUS_VALID ||
+        current_cal_storage_get_meter_section(&section) != BOOL_TRUE ||
+        section.state != CURRENT_CAL_SECTION_VALID ||
+        section.context_crc != current_cal_context_crc() ||
+        section.section_version != METER_CAL_COEFFICIENT_VERSION ||
+        section.data_length != METER_CAL_COEFFICIENT_SERIALIZED_SIZE)
+    {
+        return meter_runtime_reload_fail(METER_CAL_SERIALIZED_SIZE_INVALID);
+    }
+    result = meter_calibration_coefficients_decode(
+        section.payload, section.data_length, current_cal_context_crc(),
+        &coefficients);
+    if (result != METER_CAL_OK)
+    {
+        return meter_runtime_reload_fail(result);
+    }
+
+    total_energy_uwh = meter_runtime_ctx.snapshot.total_energy_uwh;
+    session_energy_uwh = meter_runtime_ctx.snapshot.session_energy_uwh;
+    if (meter_runtime_ctx.mode == METER_RUNTIME_MODE_CALIBRATED &&
+        meter_runtime_ctx.coefficients.flags == METER_CAL_FLAGS_ENERGY_CF24)
+    {
+        total_energy_uwh = meter_runtime_ctx.accumulator.total_energy_uwh;
+        session_energy_uwh =
+            (total_energy_uwh >= meter_runtime_ctx.session_energy_base_uwh) ?
+            total_energy_uwh - meter_runtime_ctx.session_energy_base_uwh :
+            0ULL;
+    }
+    session_base_uwh = (total_energy_uwh >= session_energy_uwh) ?
+                       total_energy_uwh - session_energy_uwh :
+                       total_energy_uwh;
+    next_epoch = meter_runtime_ctx.continuity_epoch + 1U;
+    if (next_epoch == 0U)
+    {
+        next_epoch = 1U;
+    }
+
+    energy_state = meter_runtime_energy_select(
+        &record_a, &record_b, &selected, &selected_slot, &redundant);
+    (void)redundant;
+    if (energy_state == METER_RUNTIME_ENERGY_STATE_CONFLICT ||
+        energy_state == METER_RUNTIME_ENERGY_STATE_INVALID)
+    {
+        return meter_runtime_reload_fail(METER_CAL_CHECKPOINT_INVALID);
+    }
+
+    primask = __get_PRIMASK();
+    __disable_irq();
+    meter_runtime_ctx.coefficients = coefficients;
+    meter_runtime_ctx.coefficient_result = METER_CAL_OK;
+    meter_runtime_ctx.mode = METER_RUNTIME_MODE_CALIBRATED;
+    meter_runtime_ctx.snapshot.mode = METER_RUNTIME_MODE_CALIBRATED;
+    meter_runtime_ctx.snapshot.coefficient_result = METER_CAL_OK;
+    meter_runtime_ctx.snapshot.input_valid = BOOL_FALSE;
+    meter_runtime_ctx.snapshot.output_valid = BOOL_FALSE;
+    meter_runtime_ctx.snapshot.total_energy_uwh = total_energy_uwh;
+    meter_runtime_ctx.snapshot.session_energy_uwh = session_energy_uwh;
+    meter_runtime_ctx.snapshot.continuity_epoch = next_epoch;
+    meter_runtime_ctx.snapshot.energy_valid =
+        (coefficients.flags == METER_CAL_FLAGS_ENERGY_CF24) ?
+        BOOL_TRUE : BOOL_FALSE;
+    meter_calibration_energy_accumulator_init(
+        &meter_runtime_ctx.accumulator, total_energy_uwh, next_epoch);
+    meter_runtime_ctx.session_energy_base_uwh = session_base_uwh;
+    meter_runtime_ctx.continuity_epoch = next_epoch;
+    meter_runtime_ctx.bl_continuous = BOOL_FALSE;
+    meter_runtime_ctx.last_input_tick = 0U;
+    meter_runtime_ctx.energy_storage_state = energy_state;
+    meter_runtime_ctx.energy_slot = selected_slot;
+    meter_runtime_ctx.energy_sequence =
+        (selected != NULL) ? selected->sequence : 0U;
+    meter_runtime_ctx.checkpoint_present = BOOL_FALSE;
+    meter_runtime_ctx.checkpoint_dirty =
+        (coefficients.flags == METER_CAL_FLAGS_ENERGY_CF24) ?
+        BOOL_TRUE : BOOL_FALSE;
+    meter_runtime_ctx.checkpoint_attempted = BOOL_FALSE;
+    meter_runtime_ctx.persistence_fault_latched = BOOL_FALSE;
+    if (primask == 0U)
+    {
+        __enable_irq();
+    }
+
+    if (coefficients.flags == METER_CAL_FLAGS_ENERGY_CF24 &&
+        meter_runtime_checkpoint_store() != BOOL_TRUE)
+    {
+        return meter_runtime_reload_fail(METER_CAL_CHECKPOINT_INVALID);
+    }
+    return BOOL_TRUE;
 }

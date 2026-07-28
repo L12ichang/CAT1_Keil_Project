@@ -104,3 +104,57 @@ Flash 记录；当前工站不得用它们上传或恢复曲线。
 - 实机重启/正常控制互斥，以及 exit、abort、超时关断：`NOT_RUN_HARDWARE`
 
 这些项目必须在限流安全台架上另行执行；本次只运行不产生在线输出的软件测试与 Keil 构建。
+## Meter calibration workstation (Phase 4)
+
+`meter_calibration_station.py` is an offline-safe calculation and protocol
+planner. It produces the exact 96-byte firmware coefficient image: an explicit
+92-byte little-endian prefix plus CRC32. All Q24 factors are unsigned 64-bit;
+Python object memory is never serialized.
+
+It accepts only device-provided context: `contextCrc`, rated/calibration/hardware
+current limits, and firmware field `outputCurrentSensorMohm` (legacy captured
+`samplingResistorMohm` remains accepted); there is no workstation-side power
+profile. Its CSV is `channel,raw,reference,good`. Linear channels require three
+good points and use a Theil-Sen/MAD outlier screen followed by least-squares,
+raw-span, slope and residual checks. Frequency is median(`reference_mHz *
+period_raw`); energy gain derives from known reference active power, elapsed
+time, and CF delta.
+
+```powershell
+python tools/current_calibration/meter_calibration_station.py `
+  --imei 123456789012345 `
+  --context-json tools/current_calibration/meter_calibration_context.example.json `
+  --csv tools/current_calibration/meter_calibration_example.csv `
+  --energy-power-mw 50000 --energy-seconds 60 --energy-cf-delta 100 `
+  --output meter_coefficients.bin
+```
+
+The MQTT client reuses `calibration_station.MqttStation` with the existing
+`DT.Calibration` envelope. It performs `readMeterInfo`, `readMeterSample`,
+`readMeterStatus`, `beginMeter`, `writeMeterChunk`, and `commitMeter`. `full`
+always sends `beginMeter` before the first upload chunk. Chunks default to at
+most 24 bytes (32-byte maximum) and generated JSON is checked below 2048 bytes.
+The status readback verifies `meterDataCrc` and `meterValidated`.
+
+For a manual broker workflow, first capture `readMeterInfo` context into the
+JSON above, run `build`, then use `full` with the active current-calibration
+`sessionId` and next `seq` (or use `begin`, `upload`, `status`, `commit`, and `readback`
+individually):
+
+```powershell
+python tools/current_calibration/meter_calibration_station.py full `
+  --imei 123456789012345 --context-json meter_context.json `
+  --payload meter_coefficients.bin --session-id active-session --seq 1 `
+  --host broker.example
+```
+
+`full` is the recommended idle-to-idle path: it sends `enter` then `beginMeter`,
+upload/status/commit/readback, and `exit`. Single `begin`/`upload` commands
+require the caller to supply an already-active `sessionId` and correct next `seq`.
+If a full transaction fails, it preserves the original error while making a
+best-effort `setTestPercent:0` (when entered) and `abort` cleanup attempt.
+
+`ScpiReferenceMeter` accepts a dependency-injected serial-like object and sends
+one cleared-buffer request/response for `MEAS:VOLT?`, `MEAS:CURR?`, or
+`MEAS:POW?`, rejecting empty, non-finite, timed-out, out-of-range, and unstable
+readings. Its tests need no physical COM port.

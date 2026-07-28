@@ -4,9 +4,12 @@
 #include "current_cal_curve.h"
 #include "sys_pwm.h"
 #include "sys_Vo_Io.h"
+#include "meter_calibration.h"
 
 #define CURRENT_CAL_SESSION_ID_MAX 32U
 #define CURRENT_CAL_RECEIVED_ALL    0x001fffffUL
+#define CURRENT_CAL_METER_BITMAP_WORDS 3U
+#define CURRENT_CAL_METER_RECEIVED_ALL 0xffffffffUL
 
 typedef enum
 {
@@ -31,7 +34,12 @@ typedef enum
     CAL_SEQ_CONFLICT = 18,
     CAL_CHUNK_CONFLICT = 19,
     CAL_OTA_ACTIVE = 20,
-    CAL_OUTPUT_NOT_STABLE = 21
+    CAL_OUTPUT_NOT_STABLE = 21,
+    CAL_METER_INCOMPLETE = 22,
+    CAL_METER_CRC_ERROR = 23,
+    CAL_METER_VALIDATION_ERROR = 24,
+    CAL_METER_VERIFY_ERROR = 25,
+    CAL_METER_RELOAD_ERROR = 26
 } current_cal_result_en;
 
 typedef enum
@@ -43,7 +51,8 @@ typedef enum
     CAL_STATE_CURVE_PENDING,
     CAL_STATE_TEMP_APPLIED,
     CAL_STATE_COMMITTING,
-    CAL_STATE_COMMITTED
+    CAL_STATE_COMMITTED,
+    CAL_STATE_METER_READY
 } current_cal_state_en;
 
 typedef enum
@@ -57,7 +66,13 @@ typedef enum
     CAL_ACTION_SET_TEST_PERCENT,
     CAL_ACTION_COMMIT,
     CAL_ACTION_ABORT,
-    CAL_ACTION_EXIT
+    CAL_ACTION_EXIT,
+    CAL_ACTION_READ_METER_INFO,
+    CAL_ACTION_READ_METER_SAMPLE,
+    CAL_ACTION_READ_METER_STATUS,
+    CAL_ACTION_WRITE_METER_CHUNK,
+    CAL_ACTION_COMMIT_METER,
+    CAL_ACTION_BEGIN_METER
 } current_cal_action_en;
 
 typedef struct
@@ -82,6 +97,16 @@ typedef struct
     boolean_en pending_valid;
     boolean_en active_curve_valid;
     boolean_en measurement_valid;
+    u16 meter_version;
+    u8 meter_received_count;
+    u8 meter_missing_count;
+    u32 meter_data_crc;
+    meter_cal_result_en meter_validation_result;
+    boolean_en meter_complete;
+    boolean_en meter_validated;
+    u8 meter_storage_status;
+    u8 meter_runtime_mode;
+    meter_cal_result_en meter_runtime_coefficient_result;
     sys_pwm_status_t pwm;
     sys_vo_io_snapshot_t measurement;
 } current_cal_status_t;
@@ -121,6 +146,16 @@ current_cal_result_en current_calibration_write_curve_chunk(u16 curve_version,
 current_cal_result_en current_calibration_apply_temporary(u32 curve_crc);
 current_cal_result_en current_calibration_set_test_percent(u8 percent);
 current_cal_result_en current_calibration_commit(u32 profile_crc, u32 curve_crc);
+current_cal_result_en current_calibration_begin_meter(void);
+current_cal_result_en current_calibration_write_meter_chunk(
+    u16 meter_version,
+    u32 context_crc,
+    u32 meter_data_crc,
+    u8 start_offset,
+    const u8 *values,
+    u8 value_count);
+current_cal_result_en current_calibration_commit_meter(u32 context_crc,
+                                                       u32 meter_data_crc);
 current_cal_result_en current_calibration_abort(void);
 current_cal_result_en current_calibration_exit(void);
 void current_calibration_get_status(current_cal_status_t *status);

@@ -93,6 +93,36 @@ typedef struct
     u32 continuity_epoch;
 } meter_runtime_snapshot_t;
 
+/* Raw factory-calibration view.  Input fields are copied from one validated
+ * BL0942 frame and output fields from one ADC publication; neither group may
+ * be assembled from independent globals. */
+typedef struct
+{
+    meter_runtime_mode_en mode;
+    meter_cal_result_en coefficient_result;
+    u32 context_crc;
+    u8 storage_status;
+    boolean_en input_valid;
+    boolean_en output_valid;
+    u32 input_voltage_raw;
+    u32 input_current_raw;
+    u32 input_fast_current_raw;
+    u32 input_watt_raw24;
+    s32 input_watt_signed;
+    u32 input_period_raw;
+    u32 input_cf_raw24;
+    u8 input_status;
+    u32 input_sequence;
+    u32 input_tick;
+    u32 input_age_ms;
+    u32 output_voltage_raw;
+    u32 output_current_raw;
+    u16 output_protect_code;
+    u32 output_sequence;
+    u32 output_tick;
+    u32 output_age_ms;
+} meter_runtime_calibration_snapshot_t;
+
 meter_runtime_frame_result_en meter_runtime_parse_bl0942_frame(
     const u8 *bytes,
     u32 length,
@@ -109,7 +139,12 @@ void meter_runtime_publish_output(
     const meter_runtime_output_sample_t *sample);
 void meter_runtime_mark_bl_discontinuous(void);
 boolean_en meter_runtime_get_snapshot(meter_runtime_snapshot_t *snapshot);
+boolean_en meter_runtime_get_calibration_snapshot(
+    meter_runtime_calibration_snapshot_t *snapshot);
 boolean_en meter_runtime_power_down_save(void);
 boolean_en meter_runtime_energy_clear(void);
+/* Called while the existing calibration lock owns a forced-off output. */
+boolean_en meter_runtime_prepare_calibration_reload(void);
+boolean_en meter_runtime_reload_calibration(void);
 
 #endif

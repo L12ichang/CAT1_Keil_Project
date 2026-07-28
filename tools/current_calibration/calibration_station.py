@@ -21,8 +21,16 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 
-READ_ACTIONS = {"readInfo", "readStatus", "readCurveStatus"}
-CAL_NODES = ("CalibrationAck", "CalibrationStatus", "CalibrationCurveStatus", "CalibrationInfo")
+READ_ACTIONS = {
+    "readInfo", "readStatus", "readCurveStatus",
+    "readMeterInfo", "readMeterSample", "readMeterStatus",
+}
+CAL_NODES = (
+    "CalibrationAck", "CalibrationStatus", "CalibrationCurveStatus", "CalibrationInfo",
+    # Meter-calibration uses the same transport/envelope, but has dedicated
+    # response nodes so it can be parsed strictly by meter_calibration_station.
+    "CalibrationMeterInfo", "CalibrationMeterSample", "CalibrationMeterStatus",
+)
 POINTS = tuple(range(0, 101, 5))
 SCPI_CURRENT_QUERY = "MEAS:CURR?"
 MAX_CONSECUTIVE_METER_ERRORS = 3

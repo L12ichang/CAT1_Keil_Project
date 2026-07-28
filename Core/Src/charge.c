@@ -15,6 +15,7 @@ typedef struct
     u8 full:1;
 }charge_status_st;
 
+
 typedef union
 {
     charge_status_st status;

@@ -70,6 +70,7 @@ typedef enum { CURRENT_CAL_METER_STATUS_ABSENT=0,
                CURRENT_CAL_METER_STATUS_CONFLICT } current_cal_meter_status_en;
 typedef boolean_en (*current_cal_shared_peer_prepare_fn)(void);
 typedef struct { u32 ac_EnergyP; u16 today_Energy; } sys_data_st;
+typedef struct { boolean_en output_enabled; } sys_pwm_status_t;
 extern sys_data_st sys_data;
 u32 current_cal_crc32(const u8 *, u32);
 u32 current_cal_context_crc(void);
@@ -87,6 +88,8 @@ HAL_StatusTypeDef hw_flash_update_bytes_checked(u32, const u8 *, u32);
 HAL_StatusTypeDef hw_flash_program_bytes_checked(u32, const u8 *, u32);
 void hw_flash_latch_update_fault(void);
 void sys_pwm_force_off(void);
+boolean_en sys_pwm_calibration_is_locked(void);
+void sys_pwm_get_status(sys_pwm_status_t *);
 u32 Timer_GetTickCount(void);
 u32 host_get_primask(void);
 void host_disable_irq(void);
@@ -119,6 +122,7 @@ static int irq_depth;
 static int force_off_count;
 static int fault_latch_count;
 static current_cal_shared_peer_prepare_fn shared_prepare;
+static boolean_en calibration_locked = BOOL_TRUE;
 static current_cal_slot_en cal_slot = CURRENT_CAL_SLOT_NONE;
 static current_cal_slot_en repair_target = CURRENT_CAL_SLOT_NONE;
 static boolean_en cal_redundant = BOOL_TRUE;
@@ -151,6 +155,8 @@ boolean_en current_cal_storage_repair_required(void) { return cal_repair_require
 current_cal_slot_en current_cal_storage_repair_safe_peer_target(void) { return repair_target; }
 void hw_flash_latch_update_fault(void) { ++fault_latch_count; }
 void sys_pwm_force_off(void) { ++force_off_count; }
+boolean_en sys_pwm_calibration_is_locked(void) { return calibration_locked; }
+void sys_pwm_get_status(sys_pwm_status_t *status) { status->output_enabled=BOOL_FALSE; }
 void hw_flash_read_bytes(u32 address, u8 *data, u32 length) {
     memcpy(data, address == METER_RUNTIME_ENERGY_SLOT_A_ADDR ? flash_a : flash_b, length);
 }
@@ -212,6 +218,16 @@ static int make_coefficients(void) {
           section.payload,sizeof(section.payload)) == METER_CAL_OK);
     section_present=BOOL_TRUE;
     section_status=CURRENT_CAL_METER_STATUS_VALID;
+    return 0;
+}
+static int make_changed_coefficients(void) {
+    meter_cal_coefficients_t c;
+    CHECK(meter_calibration_coefficients_decode(section.payload,96,
+          current_cal_context_crc(),&c)==METER_CAL_OK);
+    c.factor_q24[0]+=1ULL;
+    c.data_crc=meter_calibration_coefficients_crc(&c);
+    CHECK(meter_calibration_coefficients_encode(&c,current_cal_context_crc(),
+          section.payload,sizeof(section.payload))==METER_CAL_OK);
     return 0;
 }
 static int parser_tests(void) {
@@ -314,6 +330,7 @@ int main(void) {
     u8 raw[23]; meter_runtime_bl0942_frame_t frame;
     meter_runtime_legacy_input_t legacy; meter_runtime_output_sample_t output;
     meter_runtime_snapshot_t snap; u64 saved_total;
+    meter_runtime_calibration_snapshot_t rawsnap; u32 saved_epoch;
     memset(flash_a,0xff,sizeof(flash_a)); memset(flash_b,0xff,sizeof(flash_b));
     CHECK(parser_tests()==0); CHECK(coordinator_tests()==0);
     update_count=0; marker_count=0;
@@ -341,6 +358,14 @@ int main(void) {
     CHECK(snap.output_sequence==9 && snap.output_voltage_mv==56010);
     CHECK(snap.output_current_ua==890000 && snap.output_power_mw==49849);
     CHECK(snap.total_energy_uwh==1230100 && snap.session_energy_uwh==100);
+    CHECK(meter_runtime_get_calibration_snapshot(&rawsnap)==BOOL_TRUE);
+    CHECK(rawsnap.input_voltage_raw==6001000 &&
+          rawsnap.input_current_raw==1250200 &&
+          rawsnap.input_watt_raw24==499980 &&
+          rawsnap.input_watt_signed==499980 &&
+          rawsnap.input_cf_raw24==110 && rawsnap.input_sequence==2);
+    CHECK(rawsnap.output_voltage_raw==3744 && rawsnap.output_current_raw==183 &&
+          rawsnap.output_sequence==9 && rawsnap.output_protect_code==0);
     saved_total=snap.total_energy_uwh;
     CHECK(meter_runtime_power_down_save()==BOOL_TRUE);
     CHECK(update_count==4 && marker_count==4);
@@ -354,9 +379,29 @@ int main(void) {
     meter_runtime_publish_bl0942(&frame,&legacy);
     CHECK(meter_runtime_get_snapshot(&snap)==BOOL_TRUE);
     CHECK(snap.total_energy_uwh==saved_total);
+    now_tick+=1; make_frame(raw,1250200,6001000,0,499980,1009,20000,7);
+    CHECK(meter_runtime_parse_bl0942_frame(raw,23,&frame)==0);
+    frame.sequence=4; frame.sample_tick=now_tick;
+    meter_runtime_publish_bl0942(&frame,&legacy);
+    CHECK(meter_runtime_get_snapshot(&snap)==BOOL_TRUE);
+    CHECK(snap.total_energy_uwh==saved_total+100 && snap.session_energy_uwh==100);
+    saved_total=snap.total_energy_uwh;
+    saved_epoch=snap.continuity_epoch;
+    CHECK(make_changed_coefficients()==0);
+    CHECK(meter_runtime_prepare_calibration_reload()==BOOL_TRUE);
+    CHECK(meter_runtime_reload_calibration()==BOOL_TRUE);
+    CHECK(meter_runtime_get_snapshot(&snap)==BOOL_FALSE);
+    CHECK(snap.total_energy_uwh==saved_total && snap.session_energy_uwh==100);
+    CHECK(snap.continuity_epoch==saved_epoch+1U);
+    now_tick+=1; make_frame(raw,1250200,6001000,0,499980,5000,20000,7);
+    CHECK(meter_runtime_parse_bl0942_frame(raw,23,&frame)==0);
+    frame.sequence=31; frame.sample_tick=now_tick;
+    meter_runtime_publish_bl0942(&frame,&legacy);
+    CHECK(meter_runtime_get_snapshot(&snap)==BOOL_TRUE);
+    CHECK(snap.total_energy_uwh==saved_total);
     /* Stale samples are flagged without mutating their sequence/value. */
     now_tick+=2001; CHECK(meter_runtime_get_snapshot(&snap)==BOOL_FALSE);
-    CHECK(snap.input_sequence==3);
+    CHECK(snap.input_sequence==31);
     /* Marker failure leaves the previously committed A/B winner readable. */
     now_tick+=1; make_frame(raw,1250200,6001000,0,499980,1000,20000,7);
     CHECK(meter_runtime_parse_bl0942_frame(raw,23,&frame)==0);
@@ -407,6 +452,15 @@ int main(void) {
     CHECK(snap.input_voltage_mv==230000 && snap.input_current_ua==321000);
     CHECK(snap.input_active_power_mw==45670 && snap.input_pf_ppm==880000);
     CHECK(snap.session_energy_uwh==120000 && snap.total_energy_uwh==340000);
+    CHECK(make_coefficients()==0);
+    CHECK(meter_runtime_prepare_calibration_reload()==BOOL_TRUE);
+    CHECK(meter_runtime_reload_calibration()==BOOL_TRUE);
+    CHECK(meter_runtime_get_snapshot(&snap)==BOOL_FALSE);
+    CHECK(snap.total_energy_uwh==340000 && snap.session_energy_uwh==120000);
+    CHECK(make_changed_coefficients()==0); fail_update=1;
+    CHECK(meter_runtime_reload_calibration()==BOOL_FALSE); fail_update=0;
+    CHECK(meter_runtime_mode()==METER_RUNTIME_MODE_INVALID);
+    CHECK(force_off_count>0 && fault_latch_count>0);
     puts("meter runtime production-C harness PASS"); return 0;
 }
 """

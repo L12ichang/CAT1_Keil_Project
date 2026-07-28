@@ -3,6 +3,8 @@
 #include "Portable.h"
 #include "sys_temp_over_protect.h"
 #include "factory_user_data.h"
+#include "meter_runtime.h"
+#include "hw_flash.h"
 
 #define CURRENT_CAL_DEFAULT_TIMEOUT_SEC 30U
 #define CURRENT_CAL_MIN_TIMEOUT_SEC     10U
@@ -20,7 +22,15 @@ typedef struct
     u8 point_index;
     u8 target_percent;
     current_cal_curve_t pending;
+    u8 pending_meter[METER_CAL_COEFFICIENT_SERIALIZED_SIZE];
+    u32 meter_received_bitmap[CURRENT_CAL_METER_BITMAP_WORDS];
+    u16 meter_version;
+    u32 meter_context_crc;
+    u32 meter_data_crc;
+    meter_cal_result_en meter_validation_result;
     boolean_en pending_metadata_set;
+    boolean_en meter_metadata_set;
+    boolean_en meter_validated;
     boolean_en temporary_active;
     boolean_en last_command_valid;
     u32 last_seq;
@@ -31,6 +41,20 @@ typedef struct
 } current_cal_context_t;
 
 static current_cal_context_t current_cal_ctx;
+
+static void current_cal_clear_meter_pending(void)
+{
+    memset(current_cal_ctx.pending_meter, 0,
+           sizeof(current_cal_ctx.pending_meter));
+    memset(current_cal_ctx.meter_received_bitmap, 0,
+           sizeof(current_cal_ctx.meter_received_bitmap));
+    current_cal_ctx.meter_version = 0U;
+    current_cal_ctx.meter_context_crc = 0U;
+    current_cal_ctx.meter_data_crc = 0U;
+    current_cal_ctx.meter_validation_result = METER_CAL_NULL;
+    current_cal_ctx.meter_metadata_set = BOOL_FALSE;
+    current_cal_ctx.meter_validated = BOOL_FALSE;
+}
 
 static u8 current_cal_popcount21(u32 value)
 {
@@ -52,6 +76,7 @@ static void current_cal_clear_pending(void)
     current_cal_ctx.received_bitmap = 0U;
     current_cal_ctx.pending_metadata_set = BOOL_FALSE;
     current_cal_ctx.temporary_active = BOOL_FALSE;
+    current_cal_clear_meter_pending();
 }
 
 static void current_cal_finish_session(void)
@@ -409,6 +434,225 @@ static current_cal_result_en current_cal_validate_pending(void)
     return (result == CURRENT_CAL_CURVE_OK) ? CAL_OK : CAL_INVALID_PARAM;
 }
 
+static u8 current_cal_meter_received_count(void)
+{
+    u32 value;
+    u8 word;
+    u8 count;
+
+    count = 0U;
+    for (word = 0U; word < CURRENT_CAL_METER_BITMAP_WORDS; ++word)
+    {
+        value = current_cal_ctx.meter_received_bitmap[word];
+        while (value != 0U)
+        {
+            count = (u8)(count + (u8)(value & 1U));
+            value >>= 1;
+        }
+    }
+    return count;
+}
+
+static boolean_en current_cal_meter_complete(void)
+{
+    u8 word;
+
+    for (word = 0U; word < CURRENT_CAL_METER_BITMAP_WORDS; ++word)
+    {
+        if (current_cal_ctx.meter_received_bitmap[word] !=
+            CURRENT_CAL_METER_RECEIVED_ALL)
+        {
+            return BOOL_FALSE;
+        }
+    }
+    return BOOL_TRUE;
+}
+
+static current_cal_result_en current_cal_validate_pending_meter(void)
+{
+    meter_cal_coefficients_t coefficients;
+    meter_cal_result_en result;
+
+    current_cal_ctx.meter_validated = BOOL_FALSE;
+    if (current_cal_meter_complete() != BOOL_TRUE)
+    {
+        current_cal_ctx.meter_validation_result = METER_CAL_BUFFER_TOO_SMALL;
+        return CAL_METER_INCOMPLETE;
+    }
+    result = meter_calibration_coefficients_decode(
+        current_cal_ctx.pending_meter,
+        METER_CAL_COEFFICIENT_SERIALIZED_SIZE,
+        current_cal_context_crc(), &coefficients);
+    current_cal_ctx.meter_validation_result = result;
+    if (result == METER_CAL_CONTEXT_MISMATCH)
+    {
+        return CAL_PROFILE_MISMATCH;
+    }
+    if (result == METER_CAL_DATA_CRC_MISMATCH)
+    {
+        return CAL_METER_CRC_ERROR;
+    }
+    if (result != METER_CAL_OK)
+    {
+        return CAL_METER_VALIDATION_ERROR;
+    }
+    if (coefficients.version != current_cal_ctx.meter_version ||
+        coefficients.context_crc != current_cal_ctx.meter_context_crc ||
+        coefficients.data_crc != current_cal_ctx.meter_data_crc)
+    {
+        current_cal_ctx.meter_validation_result =
+            METER_CAL_DATA_CRC_MISMATCH;
+        return CAL_CHUNK_CONFLICT;
+    }
+    current_cal_ctx.meter_validated = BOOL_TRUE;
+    return CAL_OK;
+}
+
+current_cal_result_en current_calibration_write_meter_chunk(
+    u16 meter_version,
+    u32 context_crc,
+    u32 meter_data_crc,
+    u8 start_offset,
+    const u8 *values,
+    u8 value_count)
+{
+    current_cal_result_en result;
+    u32 mask;
+    u8 index;
+    u8 offset;
+
+    if (current_cal_ctx.state != CAL_STATE_METER_READY)
+    {
+        return CAL_INVALID_STATE;
+    }
+    if (values == NULL || value_count == 0U || value_count > 32U ||
+        start_offset >= METER_CAL_COEFFICIENT_SERIALIZED_SIZE ||
+        (u16)start_offset + value_count >
+            METER_CAL_COEFFICIENT_SERIALIZED_SIZE ||
+        meter_version != METER_CAL_COEFFICIENT_VERSION ||
+        context_crc != current_cal_context_crc())
+    {
+        return (context_crc != current_cal_context_crc()) ?
+               CAL_PROFILE_MISMATCH : CAL_INVALID_PARAM;
+    }
+    if (current_cal_ctx.meter_metadata_set != BOOL_TRUE)
+    {
+        current_cal_ctx.meter_version = meter_version;
+        current_cal_ctx.meter_context_crc = context_crc;
+        current_cal_ctx.meter_data_crc = meter_data_crc;
+        current_cal_ctx.meter_metadata_set = BOOL_TRUE;
+    }
+    else if (current_cal_ctx.meter_version != meter_version ||
+             current_cal_ctx.meter_context_crc != context_crc ||
+             current_cal_ctx.meter_data_crc != meter_data_crc)
+    {
+        return CAL_CHUNK_CONFLICT;
+    }
+    for (index = 0U; index < value_count; ++index)
+    {
+        offset = (u8)(start_offset + index);
+        mask = 1UL << (offset & 31U);
+        if ((current_cal_ctx.meter_received_bitmap[offset >> 5] & mask) != 0U &&
+            current_cal_ctx.pending_meter[offset] != values[index])
+        {
+            return CAL_CHUNK_CONFLICT;
+        }
+    }
+    for (index = 0U; index < value_count; ++index)
+    {
+        offset = (u8)(start_offset + index);
+        current_cal_ctx.pending_meter[offset] = values[index];
+        current_cal_ctx.meter_received_bitmap[offset >> 5] |=
+            1UL << (offset & 31U);
+    }
+    current_cal_ctx.meter_validated = BOOL_FALSE;
+    if (current_cal_meter_complete() != BOOL_TRUE)
+    {
+        return CAL_OK;
+    }
+    result = current_cal_validate_pending_meter();
+    return result;
+}
+
+current_cal_result_en current_calibration_commit_meter(u32 context_crc,
+                                                       u32 meter_data_crc)
+{
+    current_cal_meter_section_t section;
+    current_cal_meter_section_t verify;
+    meter_cal_coefficients_t coefficients;
+    current_cal_state_en previous_state;
+    current_cal_result_en result;
+
+    if (current_cal_ctx.state != CAL_STATE_METER_READY)
+    {
+        return CAL_INVALID_STATE;
+    }
+    if (context_crc != current_cal_context_crc())
+    {
+        return CAL_PROFILE_MISMATCH;
+    }
+    if (meter_data_crc != current_cal_ctx.meter_data_crc)
+    {
+        return CAL_METER_CRC_ERROR;
+    }
+    result = current_cal_validate_pending_meter();
+    if (result != CAL_OK)
+    {
+        return result;
+    }
+    sys_pwm_force_off();
+    if (meter_runtime_prepare_calibration_reload() != BOOL_TRUE)
+    {
+        return CAL_METER_RELOAD_ERROR;
+    }
+    memset(&section, 0, sizeof(section));
+    section.state = CURRENT_CAL_SECTION_VALID;
+    section.context_crc = context_crc;
+    section.section_version = METER_CAL_COEFFICIENT_VERSION;
+    section.data_length = METER_CAL_COEFFICIENT_SERIALIZED_SIZE;
+    memcpy(section.payload, current_cal_ctx.pending_meter,
+           METER_CAL_COEFFICIENT_SERIALIZED_SIZE);
+    previous_state = current_cal_ctx.state;
+    current_cal_ctx.state = CAL_STATE_COMMITTING;
+    if (current_cal_storage_commit_meter_section(&section) != BOOL_TRUE)
+    {
+        hw_flash_latch_update_fault();
+        sys_pwm_force_off();
+        current_cal_ctx.state = previous_state;
+        return CAL_FLASH_WRITE_ERROR;
+    }
+    memset(&verify, 0, sizeof(verify));
+    if (current_cal_storage_get_meter_section(&verify) != BOOL_TRUE ||
+        verify.state != CURRENT_CAL_SECTION_VALID ||
+        verify.context_crc != context_crc ||
+        verify.section_version != METER_CAL_COEFFICIENT_VERSION ||
+        verify.data_length != METER_CAL_COEFFICIENT_SERIALIZED_SIZE ||
+        memcmp(verify.payload, current_cal_ctx.pending_meter,
+               METER_CAL_COEFFICIENT_SERIALIZED_SIZE) != 0)
+    {
+        hw_flash_latch_update_fault();
+        sys_pwm_force_off();
+        return CAL_METER_VERIFY_ERROR;
+    }
+    if (meter_calibration_coefficients_decode(
+            verify.payload, verify.data_length, current_cal_context_crc(),
+            &coefficients) != METER_CAL_OK ||
+        coefficients.data_crc != meter_data_crc)
+    {
+        hw_flash_latch_update_fault();
+        sys_pwm_force_off();
+        return CAL_METER_VERIFY_ERROR;
+    }
+    if (meter_runtime_reload_calibration() != BOOL_TRUE)
+    {
+        hw_flash_latch_update_fault();
+        sys_pwm_force_off();
+        return CAL_METER_RELOAD_ERROR;
+    }
+    current_cal_ctx.state = CAL_STATE_COMMITTED;
+    return CAL_OK;
+}
+
 current_cal_result_en current_calibration_apply_temporary(u32 curve_crc)
 {
     current_cal_result_en result;
@@ -432,13 +676,55 @@ current_cal_result_en current_calibration_apply_temporary(u32 curve_crc)
     return CAL_OK;
 }
 
+current_cal_result_en current_calibration_begin_meter(void)
+{
+    const current_cal_curve_t *active_curve;
+
+    if (current_cal_ctx.state != CAL_STATE_READY)
+    {
+        return CAL_INVALID_STATE;
+    }
+    sys_pwm_force_off();
+    active_curve = current_cal_storage_active_curve();
+    if (current_cal_storage_has_active_curve() != BOOL_TRUE ||
+        active_curve == NULL ||
+        current_cal_curve_validate(active_curve, current_cal_context_crc()) !=
+            CURRENT_CAL_CURVE_OK)
+    {
+        return CAL_CURVE_INCOMPLETE;
+    }
+    current_cal_clear_meter_pending();
+    current_cal_ctx.point_index = 0U;
+    current_cal_ctx.target_percent = 0U;
+    current_cal_ctx.output_start_tick = 0U;
+    current_cal_ctx.state = CAL_STATE_METER_READY;
+    return CAL_OK;
+}
+
 current_cal_result_en current_calibration_set_test_percent(u8 percent)
 {
     boolean_en applied;
+    const current_cal_curve_t *test_curve;
     sys_vo_io_snapshot_t snapshot;
 
-    if (current_cal_ctx.state != CAL_STATE_TEMP_APPLIED ||
-        current_cal_ctx.temporary_active != BOOL_TRUE)
+    if (current_cal_ctx.state == CAL_STATE_TEMP_APPLIED &&
+        current_cal_ctx.temporary_active == BOOL_TRUE)
+    {
+        test_curve = &current_cal_ctx.pending;
+    }
+    else if (current_cal_ctx.state == CAL_STATE_METER_READY)
+    {
+        test_curve = current_cal_storage_active_curve();
+        if (current_cal_storage_has_active_curve() != BOOL_TRUE ||
+            test_curve == NULL ||
+            current_cal_curve_validate(test_curve, current_cal_context_crc()) !=
+                CURRENT_CAL_CURVE_OK)
+        {
+            sys_pwm_force_off();
+            return CAL_CURVE_INCOMPLETE;
+        }
+    }
+    else
     {
         return CAL_INVALID_STATE;
     }
@@ -454,7 +740,7 @@ current_cal_result_en current_calibration_set_test_percent(u8 percent)
         current_cal_ctx.output_start_tick = 0U;
         return CAL_OUTPUT_NOT_STABLE;
     }
-    applied = sys_pwm_calibration_set_percent(&current_cal_ctx.pending, percent);
+    applied = sys_pwm_calibration_set_percent(test_curve, percent);
     current_cal_ctx.output_start_tick = (applied == BOOL_TRUE && percent != 0U) ?
                                         Timer_GetTickCount() : 0U;
     return (applied == BOOL_TRUE) ? CAL_OK : CAL_PROTECT_ACTIVE;
@@ -515,6 +801,9 @@ current_cal_result_en current_calibration_exit(void)
 void current_calibration_get_status(current_cal_status_t *status)
 {
     const current_cal_curve_t *active_curve;
+    current_cal_meter_section_t stored_meter;
+    meter_cal_coefficients_t stored_coefficients;
+    meter_runtime_calibration_snapshot_t meter;
     u32 now;
 
     if (status == NULL)
@@ -554,6 +843,32 @@ void current_calibration_get_status(current_cal_status_t *status)
     status->active_curve_valid = current_cal_storage_has_active_curve();
     sys_pwm_get_status(&status->pwm);
     status->measurement_valid = sys_vo_io_get_snapshot(&status->measurement);
+    status->meter_version = current_cal_ctx.meter_version;
+    status->meter_data_crc = current_cal_ctx.meter_data_crc;
+    if (current_cal_ctx.meter_metadata_set != BOOL_TRUE &&
+        current_cal_storage_get_meter_section(&stored_meter) == BOOL_TRUE &&
+        stored_meter.state == CURRENT_CAL_SECTION_VALID &&
+        stored_meter.data_length == METER_CAL_COEFFICIENT_SERIALIZED_SIZE &&
+        meter_calibration_coefficients_decode(
+            stored_meter.payload, stored_meter.data_length,
+            current_cal_context_crc(), &stored_coefficients) == METER_CAL_OK)
+    {
+        status->meter_version = stored_coefficients.version;
+        status->meter_data_crc = stored_coefficients.data_crc;
+    }
+    status->meter_received_count = current_cal_meter_received_count();
+    status->meter_missing_count =
+        (u8)(METER_CAL_COEFFICIENT_SERIALIZED_SIZE -
+             status->meter_received_count);
+    status->meter_complete = current_cal_meter_complete();
+    status->meter_validated = current_cal_ctx.meter_validated;
+    status->meter_validation_result =
+        current_cal_ctx.meter_validation_result;
+    status->meter_storage_status =
+        (u8)current_cal_storage_meter_status();
+    (void)meter_runtime_get_calibration_snapshot(&meter);
+    status->meter_runtime_mode = (u8)meter.mode;
+    status->meter_runtime_coefficient_result = meter.coefficient_result;
     if (current_cal_ctx.state != CAL_STATE_IDLE)
     {
         now = Timer_GetTickCount();
@@ -582,6 +897,7 @@ const char *current_calibration_state_name(current_cal_state_en state)
         case CAL_STATE_TEMP_APPLIED: return "TEMP_APPLIED";
         case CAL_STATE_COMMITTING: return "COMMITTING";
         case CAL_STATE_COMMITTED: return "COMMITTED";
+        case CAL_STATE_METER_READY: return "METER_READY";
         default: return "UNKNOWN";
     }
 }

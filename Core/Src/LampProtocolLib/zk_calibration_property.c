@@ -3,6 +3,7 @@
 #include "current_calibration.h"
 #include "current_cal_storage.h"
 #include "factory_user_data.h"
+#include "meter_runtime.h"
 
 typedef struct
 {
@@ -110,7 +111,8 @@ static u32 zk_cal_command_digest(cJSON *calibration)
     static const char *numeric_names[] = {
         "contextCrc", "profileCrc", "timeoutSec", "pointIndex", "targetPercent",
         "logicalPwm", "curveVersion", "curveCrc", "startIndex", "percent",
-        "calibrationMaxCurrentMa", "reason"
+        "calibrationMaxCurrentMa", "reason", "meterVersion",
+        "meterDataCrc", "startOffset"
     };
     cJSON *item;
     cJSON *values;
@@ -197,6 +199,7 @@ static int zk_cal_build_response(cJSON *dt, void *context)
 {
     zk_cal_response_ctx_t *response;
     current_cal_status_t status;
+    meter_runtime_calibration_snapshot_t meter;
     cJSON *node;
 
     response = (zk_cal_response_ctx_t *)context;
@@ -220,6 +223,50 @@ static int zk_cal_build_response(cJSON *dt, void *context)
     cJSON_AddNumberToObject(node, "result", (double)response->result);
     cJSON_AddStringToObject(node, "state", current_calibration_state_name(status.state));
     cJSON_AddNumberToObject(node, "contextCrc", (double)status.context_crc);
+    if (strcmp(response->node_name, "CalibrationMeterSample") == 0)
+    {
+        (void)meter_runtime_get_calibration_snapshot(&meter);
+        cJSON_AddNumberToObject(node, "runtimeMode", meter.mode);
+        cJSON_AddNumberToObject(node, "coefficientResult",
+                                meter.coefficient_result);
+        cJSON_AddNumberToObject(node, "storageMeterStatus",
+                                meter.storage_status);
+        cJSON_AddNumberToObject(node, "inputVoltageRaw",
+                                (double)meter.input_voltage_raw);
+        cJSON_AddNumberToObject(node, "inputCurrentRaw",
+                                (double)meter.input_current_raw);
+        cJSON_AddNumberToObject(node, "inputFastCurrentRaw",
+                                (double)meter.input_fast_current_raw);
+        cJSON_AddNumberToObject(node, "inputWattRaw24",
+                                (double)meter.input_watt_raw24);
+        cJSON_AddNumberToObject(node, "inputWattSigned",
+                                (double)meter.input_watt_signed);
+        cJSON_AddNumberToObject(node, "inputPeriodRaw",
+                                (double)meter.input_period_raw);
+        cJSON_AddNumberToObject(node, "inputCfRaw24",
+                                (double)meter.input_cf_raw24);
+        cJSON_AddNumberToObject(node, "inputStatus", meter.input_status);
+        cJSON_AddNumberToObject(node, "inputSequence",
+                                (double)meter.input_sequence);
+        cJSON_AddNumberToObject(node, "inputTick", (double)meter.input_tick);
+        cJSON_AddNumberToObject(node, "inputAgeMs",
+                                (double)meter.input_age_ms);
+        cJSON_AddNumberToObject(node, "inputValid", meter.input_valid);
+        cJSON_AddNumberToObject(node, "outputVoltageRaw",
+                                (double)meter.output_voltage_raw);
+        cJSON_AddNumberToObject(node, "outputCurrentRaw",
+                                (double)meter.output_current_raw);
+        cJSON_AddNumberToObject(node, "outputProtectCode",
+                                meter.output_protect_code);
+        cJSON_AddNumberToObject(node, "outputSequence",
+                                (double)meter.output_sequence);
+        cJSON_AddNumberToObject(node, "outputTick",
+                                (double)meter.output_tick);
+        cJSON_AddNumberToObject(node, "outputAgeMs",
+                                (double)meter.output_age_ms);
+        cJSON_AddNumberToObject(node, "outputValid", meter.output_valid);
+        return 0;
+    }
     cJSON_AddNumberToObject(node, "profileCrc", (double)status.context_crc);
     cJSON_AddNumberToObject(node, "legacyProfileCrc", (double)status.legacy_profile_crc);
     cJSON_AddNumberToObject(node, "curveCrc", (double)status.curve_crc);
@@ -262,6 +309,27 @@ static int zk_cal_build_response(cJSON *dt, void *context)
     cJSON_AddNumberToObject(node, "outputLimited", status.pwm.limited);
     cJSON_AddNumberToObject(node, "protectCode", status.pwm.protect_code);
     cJSON_AddNumberToObject(node, "timeoutRemainingMs", (double)status.timeout_remaining_ms);
+    cJSON_AddNumberToObject(node, "requiredMeterVersion",
+                            METER_CAL_COEFFICIENT_VERSION);
+    cJSON_AddNumberToObject(node, "meterPayloadSize",
+                            METER_CAL_COEFFICIENT_SERIALIZED_SIZE);
+    cJSON_AddNumberToObject(node, "meterChunkMax", 32);
+    cJSON_AddNumberToObject(node, "meterVersion", status.meter_version);
+    cJSON_AddNumberToObject(node, "meterDataCrc",
+                            (double)status.meter_data_crc);
+    cJSON_AddNumberToObject(node, "meterReceivedCount",
+                            status.meter_received_count);
+    cJSON_AddNumberToObject(node, "meterMissingCount",
+                            status.meter_missing_count);
+    cJSON_AddNumberToObject(node, "meterComplete", status.meter_complete);
+    cJSON_AddNumberToObject(node, "meterValidated", status.meter_validated);
+    cJSON_AddNumberToObject(node, "meterValidationResult",
+                            status.meter_validation_result);
+    cJSON_AddNumberToObject(node, "storageMeterStatus",
+                            status.meter_storage_status);
+    cJSON_AddNumberToObject(node, "runtimeMode", status.meter_runtime_mode);
+    cJSON_AddNumberToObject(node, "coefficientResult",
+                            status.meter_runtime_coefficient_result);
     return 0;
 }
 
@@ -294,6 +362,12 @@ static current_cal_action_en zk_cal_action_id(const char *action)
     if (strcmp(action, "commit") == 0) return CAL_ACTION_COMMIT;
     if (strcmp(action, "abort") == 0) return CAL_ACTION_ABORT;
     if (strcmp(action, "exit") == 0) return CAL_ACTION_EXIT;
+    if (strcmp(action, "readMeterInfo") == 0) return CAL_ACTION_READ_METER_INFO;
+    if (strcmp(action, "readMeterSample") == 0) return CAL_ACTION_READ_METER_SAMPLE;
+    if (strcmp(action, "readMeterStatus") == 0) return CAL_ACTION_READ_METER_STATUS;
+    if (strcmp(action, "writeMeterChunk") == 0) return CAL_ACTION_WRITE_METER_CHUNK;
+    if (strcmp(action, "commitMeter") == 0) return CAL_ACTION_COMMIT_METER;
+    if (strcmp(action, "beginMeter") == 0) return CAL_ACTION_BEGIN_METER;
     return (current_cal_action_en)0;
 }
 
@@ -301,7 +375,10 @@ static boolean_en zk_cal_action_is_read(const char *action)
 {
     return (strcmp(action, "readInfo") == 0 ||
             strcmp(action, "readStatus") == 0 ||
-            strcmp(action, "readCurveStatus") == 0) ? BOOL_TRUE : BOOL_FALSE;
+            strcmp(action, "readCurveStatus") == 0 ||
+            strcmp(action, "readMeterInfo") == 0 ||
+            strcmp(action, "readMeterSample") == 0 ||
+            strcmp(action, "readMeterStatus") == 0) ? BOOL_TRUE : BOOL_FALSE;
 }
 
 boolean_en zk_handle_calibration_property(cJSON *root, const zk_message_header_t *header)
@@ -320,14 +397,18 @@ boolean_en zk_handle_calibration_property(cJSON *root, const zk_message_header_t
     u32 digest;
     u32 profile_crc;
     u32 curve_crc;
+    u32 meter_data_crc;
     u32 calibration_max_current_ma;
     u16 timeout_sec;
     u16 logical_pwm;
     u16 curve_version;
+    u16 meter_version;
     u16 values[7];
+    u8 meter_values[32];
     u8 point_index;
     u8 target_percent;
     u8 start_index;
+    u8 start_offset;
     u8 percent;
     int value_count;
     int i;
@@ -360,15 +441,21 @@ boolean_en zk_handle_calibration_property(cJSON *root, const zk_message_header_t
         zk_cal_publish(header, "CalibrationAck", action, "", 0U, CAL_INVALID_ACTION);
         return BOOL_TRUE;
     }
-    if (strcmp(action, "readInfo") == 0)
+    if (strcmp(action, "readInfo") == 0 ||
+        strcmp(action, "readMeterInfo") == 0)
     {
+        const char *info_node;
+
+        info_node = (strcmp(action, "readMeterInfo") == 0) ?
+                    "CalibrationMeterInfo" : "CalibrationInfo";
         if (zk_cal_json_u32(calibration, "seq", &seq) != BOOL_TRUE || seq == 0U)
         {
-            zk_cal_publish(header, "CalibrationInfo", action, "", 0U, CAL_INVALID_PARAM);
+            zk_cal_publish(header, info_node, action, "", 0U,
+                           CAL_INVALID_PARAM);
         }
         else
         {
-            zk_cal_publish(header, "CalibrationInfo", action, "", seq, CAL_OK);
+            zk_cal_publish(header, info_node, action, "", seq, CAL_OK);
         }
         return BOOL_TRUE;
     }
@@ -393,6 +480,8 @@ boolean_en zk_handle_calibration_property(cJSON *root, const zk_message_header_t
     response_node = "CalibrationAck";
     if (action_id == CAL_ACTION_READ_STATUS) response_node = "CalibrationStatus";
     if (action_id == CAL_ACTION_READ_CURVE_STATUS) response_node = "CalibrationCurveStatus";
+    if (action_id == CAL_ACTION_READ_METER_SAMPLE) response_node = "CalibrationMeterSample";
+    if (action_id == CAL_ACTION_READ_METER_STATUS) response_node = "CalibrationMeterStatus";
 
     duplicate = BOOL_FALSE;
     if (action_id == CAL_ACTION_ENTER)
@@ -460,6 +549,8 @@ boolean_en zk_handle_calibration_property(cJSON *root, const zk_message_header_t
             break;
         case CAL_ACTION_READ_STATUS:
         case CAL_ACTION_READ_CURVE_STATUS:
+        case CAL_ACTION_READ_METER_SAMPLE:
+        case CAL_ACTION_READ_METER_STATUS:
             result = CAL_OK;
             break;
         case CAL_ACTION_WRITE_CURVE_CHUNK:
@@ -500,6 +591,47 @@ boolean_en zk_handle_calibration_property(cJSON *root, const zk_message_header_t
                                                                values, (u8)value_count);
             }
             break;
+        case CAL_ACTION_WRITE_METER_CHUNK:
+            values_node = cJSON_GetObjectItem(calibration, "values");
+            value_count = (values_node != NULL && cJSON_IsArray(values_node)) ?
+                          cJSON_GetArraySize(values_node) : 0;
+            if (zk_cal_json_u16(calibration, "meterVersion",
+                                &meter_version) != BOOL_TRUE ||
+                zk_cal_json_context_crc(calibration, &profile_crc) != BOOL_TRUE ||
+                zk_cal_json_u32(calibration, "meterDataCrc",
+                                &meter_data_crc) != BOOL_TRUE ||
+                zk_cal_json_u8(calibration, "startOffset",
+                               &start_offset) != BOOL_TRUE ||
+                value_count < 1 || value_count > 32)
+            {
+                result = CAL_INVALID_PARAM;
+                break;
+            }
+            for (i = 0; i < value_count; ++i)
+            {
+                item = cJSON_GetArrayItem(values_node, i);
+                if (item == NULL || !cJSON_IsNumber(item) ||
+                    item->valuedouble < 0.0 || item->valuedouble > 255.0 ||
+                    (double)(u8)item->valuedouble != item->valuedouble)
+                {
+                    break;
+                }
+                meter_values[i] = (u8)item->valuedouble;
+            }
+            if (i != value_count)
+            {
+                result = CAL_INVALID_PARAM;
+            }
+            else
+            {
+                result = current_calibration_write_meter_chunk(
+                    meter_version, profile_crc, meter_data_crc,
+                    start_offset, meter_values, (u8)value_count);
+            }
+            break;
+        case CAL_ACTION_BEGIN_METER:
+            result = current_calibration_begin_meter();
+            break;
         case CAL_ACTION_APPLY_TEMPORARY:
             result = (zk_cal_json_u32(calibration, "curveCrc", &curve_crc) == BOOL_TRUE) ?
                      current_calibration_apply_temporary(curve_crc) : CAL_INVALID_PARAM;
@@ -517,6 +649,19 @@ boolean_en zk_handle_calibration_property(cJSON *root, const zk_message_header_t
             else
             {
                 result = current_calibration_commit(profile_crc, curve_crc);
+            }
+            break;
+        case CAL_ACTION_COMMIT_METER:
+            if (zk_cal_json_context_crc(calibration, &profile_crc) != BOOL_TRUE ||
+                zk_cal_json_u32(calibration, "meterDataCrc",
+                                &meter_data_crc) != BOOL_TRUE)
+            {
+                result = CAL_INVALID_PARAM;
+            }
+            else
+            {
+                result = current_calibration_commit_meter(profile_crc,
+                                                          meter_data_crc);
             }
             break;
         case CAL_ACTION_ABORT:
