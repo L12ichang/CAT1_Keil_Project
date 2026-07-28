@@ -134,6 +134,8 @@ void onLogInResponse(uint8 result)
         online = 1;
         timer = Timer_GetTickCount();
         longin_sucess();//hw_gateway�ο�Ӧ��ɹ���־
+        nb_mark_business_online();
+        nb_trace_milestone("BUSINESS_LOGIN_OK");
         printf("[MQTT] business login ok tcpConnectState=%s online=%u\n",
                tcp_connect_state_name(tcpConnectState),
                online);

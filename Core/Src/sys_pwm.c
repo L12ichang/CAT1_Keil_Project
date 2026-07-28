@@ -89,10 +89,6 @@ static u8 sys_pwm_apply_percent_protection(u8 percent, u16 *protect_code)
 
 static u8 sys_pwm_legacy_network_percent(u8 percent)
 {
-    if (MID == 4U && percent > 9U && percent < 27U)
-    {
-        percent = (u8)(percent - 3U);
-    }
     if (percent < 5U)
     {
         percent = 0U;

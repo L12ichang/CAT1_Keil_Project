@@ -22,16 +22,23 @@ extern QUEUE  usartRecvQueue;//�������ݽ��ն���
 #define MAX_RECONNECT_COUNT 6*5 //6*20*5s=10min
 #define NB_MODEM_OTA_TX_BUFFER_SIZE 320U
 #define NB_AT_TICK_MS 20UL
-#define NB_QMTOPEN_TIMEOUT_MS 45000UL
+#define NB_QMTOPEN_TIMEOUT_MS 120000UL
 #define NB_QMTCONN_TIMEOUT_MS 30000UL
-#define NB_QMTSUB_TIMEOUT_MS 30000UL
-#define NB_QMTCLOSE_TIMEOUT_MS 5000UL
+#define NB_QMTSUB_TIMEOUT_MS 15000UL
+#define NB_QMTCLOSE_TIMEOUT_MS 30000UL
 #define NB_QMTPUB_PROMPT_TIMEOUT_MS 5000UL
-#define NB_QMTPUB_ACK_TIMEOUT_MS 30000UL
+#define NB_QMTPUB_ACK_TIMEOUT_MS 15000UL
 #define NB_AT_TIMEOUT_COUNT(ms) (((ms) + NB_AT_TICK_MS - 1UL) / NB_AT_TICK_MS)
-#define NB_NET_REG_QUERY_INTERVAL_MS 3000UL
-#define NB_NET_REG_MAX_WAIT_ATTEMPTS 100U
-#define NB_MQTT_SETUP_RETRY_INTERVAL_MS 30000UL
+#define NB_AT_PROBE_TIMEOUT_MS 300UL
+#define NB_AT_READY_QUERY_INTERVAL_MS 500UL
+#define NB_AT_READY_WAIT_MS 12000UL
+#define NB_CEREG_QUERY_INTERVAL_MS 1000UL
+#define NB_CEREG_RECOVERY_TIMEOUT_MS 30000UL
+#define NB_CFUN_TIMEOUT_MS 15000UL
+#define NB_MQTT_FAST_RETRY_COUNT 2U
+#define NB_MQTT_RETRY_1_MS 2000UL
+#define NB_MQTT_RETRY_2_MS 5000UL
+#define NB_WILL_PAYLOAD_SIZE 192U
 #define NB_DEBUG_PRINT
 uint8 stringBuf[RECV_BUF_LENGTH];//���ݽ��ջ���
 static  uint16 recvLength = 0;//���ݽ��ճ���
@@ -51,20 +58,63 @@ static u8 nb_modem_ota_tx_buffer[NB_MODEM_OTA_TX_BUFFER_SIZE];
 uint8 simCardICCID[22]={0};
 char * IMEI_CHAR;
 u32 IMEI_DEC;
-static u8 POWERED_DOWN_read_count=0;
 CONNECT_CONFIG_state_en connect_state=CONNECT_CONFIG_STATE_IDLE;
 static boolean_en imei_ready = BOOL_FALSE;
 static boolean_en iccid_ready = BOOL_FALSE;
 static boolean_en rsrp_ready = BOOL_FALSE;
 static s32 nb_rsrp_dbm10 = 0;
-static char nb_net_reg_status[16] = "";
-static boolean_en nb_net_reg_ready = BOOL_FALSE;
-static u8 nb_net_reg_wait_count = 0;
-static boolean_en nb_net_reg_waiting = BOOL_FALSE;
-static uint32 nb_net_reg_query_interval_ms = NB_NET_REG_QUERY_INTERVAL_MS;
+static s8 nb_cereg_stat = -1;
+static int nb_cereg_cause_type = -1;
+static int nb_cereg_reject_cause = -1;
+static boolean_en nb_cereg_ready = BOOL_FALSE;
+static uint32 nb_boot_tick = 0;
+static uint32 nb_registration_tick = 0;
+static uint32 nb_at_ready_tick = 0;
+static uint32 nb_recovery_wait_tick = 0;
+static uint32 nb_recovery_wait_ms = 0;
+static u8 nb_cfun_recovery_used = 0;
+static u8 nb_mqtt_fast_retry_count = 0;
+static boolean_en nb_offline_event_sent = BOOL_FALSE;
+static char nb_will_command[128];
+static char nb_will_payload[NB_WILL_PAYLOAD_SIZE];
+static u16 nb_will_payload_length = 0;
+static uint32 nb_will_tick = 0;
+
+typedef enum
+{
+    NB_RECOVERY_NONE = 0,
+    NB_RECOVERY_MQTT_FAST,
+    NB_RECOVERY_NETWORK,
+    NB_RECOVERY_HARD_RESET,
+} NB_RECOVERY_LEVEL_EN;
+
+typedef enum
+{
+    NB_START_REASON_UNKNOWN = 0,
+    NB_START_REASON_AT_REUSE,
+    NB_START_REASON_COLD_PWRKEY,
+    NB_START_REASON_HARD_RECOVERY,
+} NB_START_REASON_EN;
+
+typedef enum
+{
+    NB_DISCONNECT_NONE = 0,
+    NB_DISCONNECT_QMTSTAT,
+    NB_DISCONNECT_PDP_DEACT,
+    NB_DISCONNECT_PUBLISH,
+    NB_DISCONNECT_LOGIN,
+    NB_DISCONNECT_HEARTBEAT,
+    NB_DISCONNECT_MQTT_SETUP,
+    NB_DISCONNECT_OTA_PLANNED,
+} NB_DISCONNECT_REASON_EN;
+
+static NB_RECOVERY_LEVEL_EN nb_recovery_level = NB_RECOVERY_NONE;
+static NB_START_REASON_EN nb_start_reason = NB_START_REASON_UNKNOWN;
+static NB_DISCONNECT_REASON_EN nb_disconnect_reason = NB_DISCONNECT_NONE;
 
 static void parseResult(uint8 *buf);
 static boolean_en nb_is_link_lost_line(uint8 *buf);
+static boolean_en nb_mqtt_publish_read_prompt(void);
 
 typedef enum
 {
@@ -96,21 +146,28 @@ static const char *connect_state_name(CONNECT_CONFIG_state_en value)
     switch (value)
     {
         case CONNECT_CONFIG_STATE_IDLE: return "STATE_IDLE";
-        case CONNECT_CONFIG_RESETING: return "RESETING";
-        case CONNECT_CONFIG_READY: return "READY";
+        case CONNECT_CONFIG_PROBE_AT: return "PROBE_AT";
+        case CONNECT_CONFIG_PWRKEY_START: return "PWRKEY_START";
+        case CONNECT_CONFIG_WAIT_AT: return "WAIT_AT";
+        case CONNECT_CONFIG_HARD_RESET_START: return "HARD_RESET_START";
+        case CONNECT_CONFIG_WAIT_HARD_RESET_AT: return "WAIT_HARD_RESET_AT";
         case CONNECT_CONFIG_AT_CFUN0: return "AT_CFUN0";
         case CONNECT_CONFIG_AT_CFUN1: return "AT_CFUN1";
         case CONNECT_CONFIG_AT_CPIN: return "AT_CPIN";
-        case CONNECT_CONFIG_AT_QENG: return "AT_QENG";
+        case CONNECT_CONFIG_AT_CEREG_ENABLE: return "AT_CEREG_ENABLE";
+        case CONNECT_CONFIG_AT_CEREG_QUERY: return "AT_CEREG_QUERY";
+        case CONNECT_CONFIG_WAIT_CEREG_QUERY: return "WAIT_CEREG_QUERY";
         case CONNECT_CONFIG_AT_RECVMODE: return "AT_RECVMODE";
         case CONNECT_CONFIG_AT_VERSION: return "AT_VERSION";
         case CONNECT_CONFIG_AT_keepalive: return "AT_KEEPALIVE";
+        case CONNECT_CONFIG_AT_SESSION: return "AT_SESSION";
+        case CONNECT_CONFIG_AT_TIMEOUT: return "AT_TIMEOUT";
         case CONNECT_CONFIG_AT_IEMI: return "AT_IEMI";
         case CONNECT_CONFIG_AT_QCCID: return "AT_QCCID";
-        case CONNECT_CONFIG_HTTP_ACTIVE: return "HTTP_ACTIVE";
-        case CONNECT_CONFIG_WAIT_ACTIVE: return "WAIT_ACTIVE";
-        case CONNECT_CONFIG_AT_qmtping: return "AT_QMTPING";
+        case CONNECT_CONFIG_AT_WILL_PROMPT: return "AT_WILL_PROMPT";
+        case CONNECT_CONFIG_AT_WILL_RESULT: return "AT_WILL_RESULT";
         case CONNECT_CONFIG_WAITING_QMTCLOSE: return "WAITING_QMTCLOSE";
+        case CONNECT_CONFIG_RECOVERY_WAIT: return "RECOVERY_WAIT";
         case CONNECT_CONFIG_AT_IPPORT: return "AT_IPPORT";
         case CONNECT_CONFIG_AT_QMTCONN: return "AT_QMTCONN";
         case CONNECT_CONFIG_AT_QMTSUB: return "AT_QMTSUB";
@@ -155,6 +212,49 @@ static void nb_trace_state_change(void)
         last_nb_state = state;
     }
 #endif
+}
+
+void nb_mark_boot_start(void)
+{
+    nb_boot_tick = Timer_GetTickCount();
+    printf("[BOOT] stage=BOOT_START elapsed=0ms\r\n");
+}
+
+static const char *nb_start_reason_name(NB_START_REASON_EN reason)
+{
+    switch (reason)
+    {
+        case NB_START_REASON_AT_REUSE: return "AT_REUSE";
+        case NB_START_REASON_COLD_PWRKEY: return "COLD_PWRKEY";
+        case NB_START_REASON_HARD_RECOVERY: return "HARD_RECOVERY";
+        case NB_START_REASON_UNKNOWN:
+        default: return "UNKNOWN";
+    }
+}
+
+void nb_trace_milestone(const char *stage)
+{
+    if (stage == 0)
+    {
+        return;
+    }
+    printf("[BOOT] stage=%s elapsed=%lums\r\n",
+           stage,
+           (unsigned long)(Timer_GetTickCount() - nb_boot_tick));
+}
+
+static void nb_trace_at_ready(void)
+{
+    printf("[BOOT] start_reason=%s\r\n", nb_start_reason_name(nb_start_reason));
+    nb_trace_milestone("AT_READY");
+}
+
+void nb_mark_business_online(void)
+{
+    nb_mqtt_fast_retry_count = 0;
+    nb_offline_event_sent = BOOL_FALSE;
+    nb_recovery_level = NB_RECOVERY_NONE;
+    nb_disconnect_reason = NB_DISCONNECT_NONE;
 }
 
  extern   boolean_en  _4g_reset_finish(void) ;
@@ -301,7 +401,8 @@ static boolean_en nb_at_command_allowed_during_ota(const char *command)
     {
         return BOOL_FALSE;
     }
-    if (strstr(command, "AT+QMTCLOSE") != 0 ||
+    if (strstr(command, "AT+QMTDISC") != 0 ||
+        strstr(command, "AT+QMTCLOSE") != 0 ||
         strstr(command, "AT+QICLOSE") != 0 ||
         strstr(command, "AT+QHTTPCFG") != 0 ||
         strstr(command, "AT+QHTTP") != 0 ||
@@ -338,6 +439,12 @@ static boolean_en nb_at_command_is_qeng(void)
     return BOOL_FALSE;
 }
 
+static boolean_en nb_at_command_is_cereg(void)
+{
+    return (atcommand != 0 &&
+            strstr((const char *)atcommand, "AT+CEREG") != 0) ? BOOL_TRUE : BOOL_FALSE;
+}
+
 static boolean_en nb_at_command_is_mqtt_setup(void)
 {
     if (atcommand == 0)
@@ -346,7 +453,9 @@ static boolean_en nb_at_command_is_mqtt_setup(void)
     }
     if (strstr((const char *)atcommand, "AT+QMTOPEN") != 0 ||
         strstr((const char *)atcommand, "AT+QMTCONN") != 0 ||
-        strstr((const char *)atcommand, "AT+QMTSUB") != 0)
+        strstr((const char *)atcommand, "AT+QMTSUB") != 0 ||
+        strstr((const char *)atcommand, "AT+QMTDISC") != 0 ||
+        strstr((const char *)atcommand, "AT+QMTCLOSE") != 0)
     {
         return BOOL_TRUE;
     }
@@ -355,7 +464,11 @@ static boolean_en nb_at_command_is_mqtt_setup(void)
 
 static u8 nb_at_command_max_attempts(void)
 {
-    if (nb_at_command_is_mqtt_setup() == BOOL_TRUE)
+    if (nb_at_command_is_mqtt_setup() == BOOL_TRUE ||
+        nb_at_command_is_cereg() == BOOL_TRUE ||
+        nb_at_command_is_qeng() == BOOL_TRUE ||
+        (atcommand != 0 && strcmp((const char *)atcommand, "AT\r\n") == 0) ||
+        (atcommand != 0 && strstr((const char *)atcommand, "AT+CFUN") != 0))
     {
         return 1U;
     }
@@ -380,6 +493,18 @@ static const char *nb_at_command_tag(void)
     if (strstr((const char *)atcommand, "AT+QMTSUB") != 0)
     {
         return "QMTSUB";
+    }
+    if (strstr((const char *)atcommand, "AT+QMTDISC") != 0)
+    {
+        return "QMTDISC";
+    }
+    if (strstr((const char *)atcommand, "AT+QMTCLOSE") != 0)
+    {
+        return "QMTCLOSE";
+    }
+    if (nb_at_command_is_cereg() == BOOL_TRUE)
+    {
+        return "CEREG";
     }
     if (nb_at_command_is_qeng() == BOOL_TRUE)
     {
@@ -452,27 +577,31 @@ static boolean_en nb_at_command_terminal_failure(const uint8 *line)
     {
         return BOOL_TRUE;
     }
+    if (strstr((const char *)atcommand, "AT+QMTDISC") != 0 &&
+        strstr((const char *)line, "+QMTDISC:") != 0)
+    {
+        return BOOL_TRUE;
+    }
+    if (strstr((const char *)atcommand, "AT+QMTCLOSE") != 0 &&
+        strstr((const char *)line, "+QMTCLOSE:") != 0)
+    {
+        return BOOL_TRUE;
+    }
     return BOOL_FALSE;
 }
 
 static void nb_net_reg_clear(void)
 {
-    nb_net_reg_ready = BOOL_FALSE;
-    memset(nb_net_reg_status, 0, sizeof(nb_net_reg_status));
+    nb_cereg_ready = BOOL_FALSE;
+    nb_cereg_stat = -1;
+    nb_cereg_cause_type = -1;
+    nb_cereg_reject_cause = -1;
 }
 
 static boolean_en nb_net_registered_for_mqtt(void)
 {
-    if (nb_net_reg_ready == BOOL_FALSE)
-    {
-        return BOOL_FALSE;
-    }
-    if (strcmp(nb_net_reg_status, "NOCONN") == 0 ||
-        strcmp(nb_net_reg_status, "CONNECT") == 0)
-    {
-        return BOOL_TRUE;
-    }
-    return BOOL_FALSE;
+    return (nb_cereg_ready == BOOL_TRUE &&
+            (nb_cereg_stat == 1 || nb_cereg_stat == 5)) ? BOOL_TRUE : BOOL_FALSE;
 }
 
 #if APP_LOG_ENABLE
@@ -687,44 +816,14 @@ static void capture_iccid_from_line(const u8 *line)
 static boolean_en capture_rsrp_from_qeng_line(const u8 *line)
 {
     const char *p;
-    const char *state_start;
-    const char *state_end;
     s32 sign;
     s32 value;
-    u8 reg_len;
 
     if (line == 0 ||
         strstr((const char *)line, "+QENG:") == 0 ||
         strstr((const char *)line, "servingcell") == 0)
     {
         return BOOL_FALSE;
-    }
-
-    /* 提取 servingcell 后的注册状态字段，存入静态变量供初始化阶段日志使用 */
-    p = strstr((const char *)line, "servingcell");
-    if (p != 0)
-    {
-        state_start = strchr(p, ',');
-        if (state_start != 0)
-        {
-            ++state_start;
-            while (*state_start == ' ' || *state_start == '\"')
-            {
-                ++state_start;
-            }
-            state_end = state_start;
-            while (*state_end != '\0' && *state_end != '\"' && *state_end != ',')
-            {
-                ++state_end;
-            }
-            reg_len = (u8)(state_end - state_start);
-            if (reg_len > 0 && reg_len < (u8)sizeof(nb_net_reg_status))
-            {
-                memcpy(nb_net_reg_status, state_start, reg_len);
-                nb_net_reg_status[reg_len] = '\0';
-                nb_net_reg_ready = BOOL_TRUE;
-            }
-        }
     }
 
     p = (const char *)line;
@@ -771,6 +870,59 @@ static boolean_en capture_rsrp_from_qeng_line(const u8 *line)
     return BOOL_FALSE;
 }
 
+static boolean_en capture_cereg_from_line(const u8 *line)
+{
+    const char *p;
+    int first;
+    int second;
+    int matched;
+    int cause_type;
+    int reject_cause;
+
+    if (line == 0)
+    {
+        return BOOL_FALSE;
+    }
+    p = strstr((const char *)line, "+CEREG:");
+    if (p == 0)
+    {
+        return BOOL_FALSE;
+    }
+    first = -1;
+    second = -1;
+    cause_type = -1;
+    reject_cause = -1;
+    if (sscanf(p,
+               "+CEREG: %d,%d,\"%*[^\"]\",\"%*[^\"]\",%*d,%d,%d",
+               &first,
+               &second,
+               &cause_type,
+               &reject_cause) == 4)
+    {
+        nb_cereg_cause_type = cause_type;
+        nb_cereg_reject_cause = reject_cause;
+    }
+    matched = sscanf(p, "+CEREG: %d,%d", &first, &second);
+    if (matched == 2)
+    {
+        nb_cereg_stat = (s8)second;
+    }
+    else if (sscanf(p, "+CEREG: %d", &first) == 1)
+    {
+        nb_cereg_stat = (s8)first;
+    }
+    else
+    {
+        return BOOL_FALSE;
+    }
+    nb_cereg_ready = BOOL_TRUE;
+    printf("[NET] CEREG stat=%d cause_type=%d reject_cause=%d\r\n",
+           (int)nb_cereg_stat,
+           nb_cereg_cause_type,
+           nb_cereg_reject_cause);
+    return BOOL_TRUE;
+}
+
 static void capture_identity_line(const u8 *line)
 {
     if (strstr((const char *)atcommand, "AT+CGSN"))
@@ -784,6 +936,10 @@ static void capture_identity_line(const u8 *line)
     else if (nb_at_command_is_qeng() == BOOL_TRUE)
     {
         (void)capture_rsrp_from_qeng_line(line);
+    }
+    else if (nb_at_command_is_cereg() == BOOL_TRUE)
+    {
+        (void)capture_cereg_from_line(line);
     }
 }
 
@@ -965,92 +1121,280 @@ static boolean_en nb_mqtt_publish_owns_uart(void)
 }
 
 
-void  _4G_configModule_machine_star(void)
+
+static void nb_start_at_probe(CONNECT_CONFIG_state_en next_state)
+{
+    send_AT_Command_machine_idle();
+    send_AT_Command_machine_star("AT\r\n",
+                                 strlen("AT\r\n"),
+                                 "OK",
+                                 NB_AT_TIMEOUT_COUNT(NB_AT_PROBE_TIMEOUT_MS),
+                                 0);
+    connect_state = next_state;
+}
+
+static void nb_start_cpin_query(void)
+{
+    send_AT_Command_machine_star("AT+CPIN?\r\n",
+                                 strlen("AT+CPIN?\r\n"),
+                                 "+CPIN: READY",
+                                 NB_AT_TIMEOUT_COUNT(1000UL),
+                                 0);
+    connect_state = CONNECT_CONFIG_AT_CPIN;
+}
+
+static void nb_start_cereg_query(void)
+{
+    nb_net_reg_clear();
+    send_AT_Command_machine_star("AT+CEREG?\r\n",
+                                 strlen("AT+CEREG?\r\n"),
+                                 "OK",
+                                 NB_AT_TIMEOUT_COUNT(1000UL),
+                                 0);
+    connect_state = CONNECT_CONFIG_AT_CEREG_QUERY;
+}
+
+static void nb_start_mqtt_configuration(void)
+{
+    clear_imei_data();
+    send_AT_Command_machine_star("AT+CGSN\r\n",
+                                 strlen("AT+CGSN\r\n"),
+                                 "OK",
+                                 NB_AT_TIMEOUT_COUNT(1000UL),
+                                 1);
+    connect_state = CONNECT_CONFIG_AT_IEMI;
+}
+
+static void nb_schedule_hardware_reset(const char *reason)
+{
+    printf("[NB][E] hardware recovery reason=%s\r\n",
+           (reason != 0) ? reason : "unknown");
+    nb_recovery_level = NB_RECOVERY_HARD_RESET;
+    send_AT_Command_machine_idle();
+    connect_state = CONNECT_CONFIG_HARD_RESET_START;
+}
+
+static NB_DISCONNECT_REASON_EN nb_disconnect_reason_from_text(const char *reason)
+{
+    if (reason == 0)
+    {
+        return NB_DISCONNECT_NONE;
+    }
+    if (strstr(reason, "QMTSTAT") != 0)
+    {
+        return NB_DISCONNECT_QMTSTAT;
+    }
+    if (strstr(reason, "PDP") != 0)
+    {
+        return NB_DISCONNECT_PDP_DEACT;
+    }
+    if (strstr(reason, "HEARTBEAT") != 0 ||
+        strstr(reason, "heartbeat") != 0)
+    {
+        return NB_DISCONNECT_HEARTBEAT;
+    }
+    if (strstr(reason, "LOGIN") != 0 ||
+        strstr(reason, "login") != 0)
+    {
+        return NB_DISCONNECT_LOGIN;
+    }
+    if (strstr(reason, "PUBLISH") != 0)
+    {
+        return NB_DISCONNECT_PUBLISH;
+    }
+    if (strstr(reason, "OTA") != 0)
+    {
+        return NB_DISCONNECT_OTA_PLANNED;
+    }
+    return NB_DISCONNECT_MQTT_SETUP;
+}
+
+static void nb_notify_offline_once(const char *reason)
+{
+    if (nb_offline_event_sent == BOOL_FALSE)
+    {
+        nb_offline_event_sent = BOOL_TRUE;
+        nb_disconnect_reason = nb_disconnect_reason_from_text(reason);
+        printf("[NB] offline reason=%s code=%u\r\n",
+               (reason != 0) ? reason : "unknown",
+               (unsigned int)nb_disconnect_reason);
+        onNBEvent(NB_EVENT_LOST_CONNECTION, 0, 0);
+    }
+}
+
+void nb_request_reconnect(const char *reason)
+{
+    uint32 backoff_ms;
+
+    nb_notify_offline_once(reason);
+    pubsend_state_set_idle();
+    if (nb_modem_ota_lock)
+    {
+        printf("[NB] intentional OTA disconnect; reconnect suppressed\r\n");
+        return;
+    }
+
+    if (nb_mqtt_fast_retry_count < NB_MQTT_FAST_RETRY_COUNT)
+    {
+        ++nb_mqtt_fast_retry_count;
+        backoff_ms = (nb_mqtt_fast_retry_count == 1U) ?
+                     NB_MQTT_RETRY_1_MS : NB_MQTT_RETRY_2_MS;
+        nb_recovery_level = NB_RECOVERY_MQTT_FAST;
+        nb_recovery_wait_ms = backoff_ms;
+        printf("[NB] recovery=mqtt attempt=%u/%u backoff=%lums reason=%s\r\n",
+               (unsigned int)nb_mqtt_fast_retry_count,
+               (unsigned int)NB_MQTT_FAST_RETRY_COUNT,
+               (unsigned long)backoff_ms,
+               (reason != 0) ? reason : "unknown");
+        send_AT_Command_machine_idle();
+        send_AT_Command_machine_star("AT+QMTCLOSE=0\r\n",
+                                     strlen("AT+QMTCLOSE=0\r\n"),
+                                     "+QMTCLOSE: 0,0",
+                                     NB_AT_TIMEOUT_COUNT(NB_QMTCLOSE_TIMEOUT_MS),
+                                     1);
+        connect_state = CONNECT_CONFIG_WAITING_QMTCLOSE;
+        return;
+    }
+
+    nb_mqtt_fast_retry_count = 0;
+    nb_recovery_level = NB_RECOVERY_NETWORK;
+    nb_cfun_recovery_used = 0;
+    nb_registration_tick = Timer_GetTickCount();
+    printf("[NB] recovery=network reason=%s\r\n",
+           (reason != 0) ? reason : "unknown");
+    nb_start_cpin_query();
+}
+
+void _4G_configModule_machine_star(void)
 {
     clear_imei_data();
     clear_iccid_data();
     nb_net_reg_clear();
-    nb_net_reg_wait_count = 0;
-    nb_net_reg_waiting = BOOL_FALSE;
-    nb_net_reg_query_interval_ms = NB_NET_REG_QUERY_INTERVAL_MS;
+    nb_cfun_recovery_used = 0;
+    nb_mqtt_fast_retry_count = 0;
+    nb_offline_event_sent = BOOL_FALSE;
+    nb_recovery_level = NB_RECOVERY_NONE;
+    nb_start_reason = NB_START_REASON_UNKNOWN;
+    nb_disconnect_reason = NB_DISCONNECT_NONE;
     sendcommand_failed = BOOL_FALSE;
-    sendcommad_state=SEND_COMMAND_STATE_IDLE;
-    connect_state=CONNECT_CONFIG_RESETING;
+    state = NB_STATE_CONNECTING;
+    nb_start_at_probe(CONNECT_CONFIG_PROBE_AT);
 }
 
-void  _4G_configModule_star_from_onestate(CONNECT_CONFIG_state_en start_state) 
-{//��ĳһ��״̬��ʼ����MQTT
-    connect_state=start_state;
-    sendcommand_failed = BOOL_FALSE;
-    sendcommad_state=SEND_COMMAND_STATE_RXING_COMPLETE;
-}
-  
-boolean_en  _4G_configModule_machine_finish(void)
+boolean_en _4G_configModule_machine_finish(void)
 {
-   if( connect_state==CONNECT_CONFIG__COMPLETE)
-    {
-        return BOOL_TRUE;
-    }
-    else
-    {
-    return BOOL_FALSE; 
-      }  
+    return (connect_state == CONNECT_CONFIG__COMPLETE) ? BOOL_TRUE : BOOL_FALSE;
 }
 
-static boolean_en nb_config_step_is_mqtt_setup(const char *step)
+static void nb_process_wait_at(boolean_en after_hard_reset)
 {
-    if (step == 0)
+    if (_4g_reset_finish() == BOOL_FALSE)
     {
-        return BOOL_FALSE;
+        return;
     }
-    if (strcmp(step, "QMTOPEN") == 0 ||
-        strcmp(step, "QMTCONN") == 0 ||
-        strcmp(step, "QMTSUB_DOWN") == 0 ||
-        strcmp(step, "QMTSUB_UP") == 0)
+    if (sendcommad_state == SEND_COMMAND_STATE_IDLE)
     {
-        return BOOL_TRUE;
+        nb_at_ready_tick = Timer_GetTickCount();
+        nb_recovery_wait_tick = 0;
+        nb_start_at_probe(after_hard_reset ?
+                          CONNECT_CONFIG_WAIT_HARD_RESET_AT :
+                          CONNECT_CONFIG_WAIT_AT);
+        return;
     }
-    return BOOL_FALSE;
+    if (send_AT_Command_machine_finish() == BOOL_FALSE)
+    {
+        return;
+    }
+    if (send_AT_Command_machine_failed() == BOOL_FALSE)
+    {
+        nb_trace_at_ready();
+        _4g_reset_idle();
+        nb_start_cpin_query();
+        return;
+    }
+    if (Timer_PassedDelay(nb_at_ready_tick, NB_AT_READY_WAIT_MS) == BOOL_TRUE)
+    {
+        send_AT_Command_machine_idle();
+        if (after_hard_reset == BOOL_TRUE)
+        {
+            nb_recovery_level = NB_RECOVERY_HARD_RESET;
+            nb_recovery_wait_tick = Timer_GetTickCount();
+            nb_recovery_wait_ms = NB_MQTT_RETRY_2_MS;
+            connect_state = CONNECT_CONFIG_RECOVERY_WAIT;
+        }
+        else
+        {
+            connect_state = CONNECT_CONFIG_HARD_RESET_START;
+        }
+        return;
+    }
+    if (nb_recovery_wait_tick == 0U ||
+        Timer_PassedDelay(nb_recovery_wait_tick, NB_AT_READY_QUERY_INTERVAL_MS) == BOOL_TRUE)
+    {
+        nb_recovery_wait_tick = Timer_GetTickCount();
+        nb_start_at_probe(after_hard_reset ?
+                          CONNECT_CONFIG_WAIT_HARD_RESET_AT :
+                          CONNECT_CONFIG_WAIT_AT);
+    }
 }
 
-static void nb_config_enter_mqtt_retry_wait(const char *step)
-{
-    printf("[NB][E] config step=%s failed, wait net %lus before mqtt retry\n",
-           (step != 0) ? step : connect_state_name(connect_state),
-           (unsigned long)(NB_MQTT_SETUP_RETRY_INTERVAL_MS / 1000UL));
-    sendcommand_failed = BOOL_FALSE;
-    sendcommad_state=SEND_COMMAND_STATE_IDLE;
-    nb_net_reg_clear();
-    nb_net_reg_wait_count = 0;
-    nb_net_reg_query_interval_ms = NB_MQTT_SETUP_RETRY_INTERVAL_MS;
-    wait_timer = Timer_GetTickCount();
-    nb_net_reg_waiting = BOOL_TRUE;
-    connect_state=CONNECT_CONFIG_AT_QENG;
-}
-
-static boolean_en nb_config_step_failed_recover(const char *step)
+static boolean_en nb_mqtt_step_failed(const char *step)
 {
     if (send_AT_Command_machine_failed() == BOOL_FALSE)
     {
         return BOOL_FALSE;
     }
-    if (nb_config_step_is_mqtt_setup(step) == BOOL_TRUE)
-    {
-        printf("[NB][E] config step=%s failed, close mqtt before retry\n",
-               (step != 0) ? step : connect_state_name(connect_state));
-        sendcommand_failed = BOOL_FALSE;
-        send_AT_Command_machine_star("AT+QMTCLOSE=0\r\n",
-                                     strlen("AT+QMTCLOSE=0\r\n"),
-                                     "OK",
-                                     NB_AT_TIMEOUT_COUNT(NB_QMTCLOSE_TIMEOUT_MS),
-                                     1);
-        connect_state=CONNECT_CONFIG_WAITING_QMTCLOSE;
-        return BOOL_TRUE;
-    }
-    printf("[NB][E] config step=%s failed, restart mqtt init\n",
-           (step != 0) ? step : connect_state_name(connect_state));
-    _4G_configModule_machine_star();
+    printf("[NB][E] mqtt step=%s failed\r\n", (step != 0) ? step : "unknown");
+    nb_request_reconnect(step);
     return BOOL_TRUE;
+}
+
+static boolean_en nb_prepare_will(void)
+{
+    const char *topic;
+    int payload_len;
+    int command_len;
+
+    topic = zk_mqtt_get_will_topic();
+    if (topic == 0)
+    {
+        return BOOL_FALSE;
+    }
+    payload_len = zk_make_offline_packet(nb_will_payload, sizeof(nb_will_payload));
+    if (payload_len <= 0 || payload_len >= (int)sizeof(nb_will_payload))
+    {
+        return BOOL_FALSE;
+    }
+    command_len = snprintf(nb_will_command,
+                           sizeof(nb_will_command),
+                           "AT+QMTCFG=\"willex\",0,1,1,0,\"%s\",%u\r\n",
+                           topic,
+                           (unsigned int)payload_len);
+    if (command_len <= 0 || command_len >= (int)sizeof(nb_will_command))
+    {
+        return BOOL_FALSE;
+    }
+    nb_will_payload_length = (u16)payload_len;
+    return BOOL_TRUE;
+}
+
+static void nb_start_qmtopen(void)
+{
+    static char sendStringBufOpen[96];
+    int cmd_len;
+
+    cmd_len = zk_build_qmt_open_cmd(sendStringBufOpen, sizeof(sendStringBufOpen));
+    if (cmd_len <= 0 || cmd_len >= (int)sizeof(sendStringBufOpen))
+    {
+        nb_request_reconnect("QMTOPEN_BUILD");
+        return;
+    }
+    send_AT_Command_machine_star(sendStringBufOpen,
+                                 (uint8)cmd_len,
+                                 "+QMTOPEN: 0,0",
+                                 NB_AT_TIMEOUT_COUNT(NB_QMTOPEN_TIMEOUT_MS),
+                                 1);
+    connect_state = CONNECT_CONFIG_AT_IPPORT;
 }
 
 void _4G_configModule_machine(void)
@@ -1063,320 +1407,402 @@ void _4G_configModule_machine(void)
     switch(connect_state)
     {
         case CONNECT_CONFIG_STATE_IDLE:
-        break;
-        case CONNECT_CONFIG_RESETING:
-           resetNbModule();//ģ�鸴λ
-           connect_state=CONNECT_CONFIG_READY;
-        break;
-        case CONNECT_CONFIG_READY:                 
-             if( _4g_reset_finish()==BOOL_TRUE)
-             {//ģ�鸴λ�ɹ���ʼ��ATָ��
-                recvLength = 0;
-                  // printf_buf(stringBuf,72);
-                if (readLine(stringBuf, &recvLength, 0))
-                {   
-                     printf_buf(stringBuf,recvLength);
-                    if( strstr((const char *) stringBuf, "POWERED DOWN"))
+            break;
+
+        case CONNECT_CONFIG_PROBE_AT:
+            if (send_AT_Command_machine_finish() == BOOL_TRUE)
+            {
+                if (send_AT_Command_machine_failed() == BOOL_FALSE)
+                {
+                    nb_start_reason = NB_START_REASON_AT_REUSE;
+                    nb_trace_at_ready();
+                    nb_start_cpin_query();
+                }
+                else
+                {
+                    send_AT_Command_machine_idle();
+                    connect_state = CONNECT_CONFIG_PWRKEY_START;
+                }
+            }
+            break;
+
+        case CONNECT_CONFIG_PWRKEY_START:
+            nb_start_reason = NB_START_REASON_COLD_PWRKEY;
+            resetNbModule();
+            send_AT_Command_machine_idle();
+            connect_state = CONNECT_CONFIG_WAIT_AT;
+            break;
+
+        case CONNECT_CONFIG_WAIT_AT:
+            nb_process_wait_at(BOOL_FALSE);
+            break;
+
+        case CONNECT_CONFIG_HARD_RESET_START:
+            nb_start_reason = NB_START_REASON_HARD_RECOVERY;
+            nb_cfun_recovery_used = 0U;
+            hardResetNbModule();
+            send_AT_Command_machine_idle();
+            connect_state = CONNECT_CONFIG_WAIT_HARD_RESET_AT;
+            break;
+
+        case CONNECT_CONFIG_WAIT_HARD_RESET_AT:
+            nb_process_wait_at(BOOL_TRUE);
+            break;
+
+        case CONNECT_CONFIG_AT_CPIN:
+            if (send_AT_Command_machine_finish() == BOOL_TRUE)
+            {
+                if (send_AT_Command_machine_failed() == BOOL_TRUE)
+                {
+                    nb_schedule_hardware_reset("CPIN");
+                    break;
+                }
+                nb_trace_milestone("SIM_READY");
+                nb_registration_tick = Timer_GetTickCount();
+                send_AT_Command_machine_star("AT+CEREG=1\r\n",
+                                             strlen("AT+CEREG=1\r\n"),
+                                             "OK",
+                                             NB_AT_TIMEOUT_COUNT(1000UL),
+                                             0);
+                connect_state = CONNECT_CONFIG_AT_CEREG_ENABLE;
+            }
+            break;
+
+        case CONNECT_CONFIG_AT_CEREG_ENABLE:
+            if (send_AT_Command_machine_finish() == BOOL_TRUE)
+            {
+                if (send_AT_Command_machine_failed() == BOOL_TRUE)
+                {
+                    nb_schedule_hardware_reset("CEREG_ENABLE");
+                    break;
+                }
+                nb_start_cereg_query();
+            }
+            break;
+
+        case CONNECT_CONFIG_AT_CEREG_QUERY:
+            if (send_AT_Command_machine_finish() == BOOL_TRUE)
+            {
+                if (send_AT_Command_machine_failed() == BOOL_FALSE &&
+                    nb_net_registered_for_mqtt() == BOOL_TRUE)
+                {
+                    nb_trace_milestone("REGISTERED");
+                    nb_start_mqtt_configuration();
+                    break;
+                }
+                if ((nb_cereg_ready == BOOL_TRUE && nb_cereg_stat == 3) ||
+                    Timer_PassedDelay(nb_registration_tick, NB_CEREG_RECOVERY_TIMEOUT_MS) == BOOL_TRUE)
+                {
+                    if (nb_cfun_recovery_used == 0U)
                     {
-                         printf("POWERED DOWN");
-                         connect_state=CONNECT_CONFIG_RESETING;
-                         _4g_reset_idle() ;//��λ�ź���ɺ����idle
-                         printf("__________________ģ�����ϵ�___________________\n");
-                         break;
+                        nb_cfun_recovery_used = 1U;
+                        printf("[NET] CEREG recovery via CFUN stat=%d\r\n", (int)nb_cereg_stat);
+                        send_AT_Command_machine_star("AT+CFUN=0\r\n",
+                                                     strlen("AT+CFUN=0\r\n"),
+                                                     "OK",
+                                                     NB_AT_TIMEOUT_COUNT(NB_CFUN_TIMEOUT_MS),
+                                                     0);
+                        connect_state = CONNECT_CONFIG_AT_CFUN0;
                     }
-                    else if( strstr((const char *) stringBuf, "RDY"))
-                    {
-                        printf("POWERED RDY");
-                        send_AT_Command_machine_star("AT+CFUN=0\r\n", 11, "OK", 50, 0) ;
-                        connect_state=CONNECT_CONFIG_AT_CFUN0;
-                    }
-               
                     else
-                    {//δ����
-                            printf_buf(stringBuf,recvLength);
-                           if(POWERED_DOWN_read_count<2) 
-                             {    //�ض�                   
-                                 connect_state= CONNECT_CONFIG_READY;
-                                 break;
-                             }
-                             else
-                             {//ֱ������ȥ
-                                 
-                                 POWERED_DOWN_read_count=0;
-                             }
-                    
+                    {
+                        nb_schedule_hardware_reset("CEREG");
                     }
-                 }
-                     send_AT_Command_machine_star("AT+CFUN=0\r\n", 11, "OK", 50, 0) ;
-                     connect_state=CONNECT_CONFIG_AT_CFUN0;
-              }
-       
-       break;
-       case CONNECT_CONFIG_AT_CFUN0:
-             if(send_AT_Command_machine_finish()==TRUE)
-             {
-              if (nb_config_step_failed_recover("CFUN0") == BOOL_TRUE)
-              {
-                  break;
-              }
-              send_AT_Command_machine_star("AT+CFUN=1\r\n", 11, "OK", 50, 0);
-              connect_state=CONNECT_CONFIG_AT_CFUN1;
-             }
-       break;   
-       case CONNECT_CONFIG_AT_CFUN1:
-             if(send_AT_Command_machine_finish()==TRUE)
-             {
-             if (nb_config_step_failed_recover("CFUN1") == BOOL_TRUE)
-             {
-                 break;
-             }
-             send_AT_Command_machine_star("AT+CPIN?\r\n", strlen("AT+CPIN?\r\n"), "+CPIN: READY",20, 0);
-        
-              connect_state=CONNECT_CONFIG_AT_CPIN;   
-             }                 
-      break;  
-      case CONNECT_CONFIG_AT_CPIN:
-             if(send_AT_Command_machine_finish()==TRUE)
-             {
-               if (nb_config_step_failed_recover("CPIN") == BOOL_TRUE)
-               {
-                   break;
-               }
-               nb_net_reg_clear();
-               nb_net_reg_wait_count = 0;
-               nb_net_reg_waiting = BOOL_FALSE;
-               nb_net_reg_query_interval_ms = NB_NET_REG_QUERY_INTERVAL_MS;
-               send_AT_Command_machine_star("at+qeng=\"servingcell\"\r\n", strlen("at+qeng=\"servingcell\"\r\n"), "OK", 20, 0);
-        
-              connect_state=CONNECT_CONFIG_AT_QENG;   
-             }                 
-      break;                         
-      case CONNECT_CONFIG_AT_QENG:
-             if (nb_net_reg_waiting == BOOL_TRUE)
-             {
-              if (Timer_PassedDelay(wait_timer, nb_net_reg_query_interval_ms) == BOOL_TRUE)
-              {
-                  nb_net_reg_waiting = BOOL_FALSE;
-                  nb_net_reg_query_interval_ms = NB_NET_REG_QUERY_INTERVAL_MS;
-                  nb_net_reg_clear();
-                  send_AT_Command_machine_star("at+qeng=\"servingcell\"\r\n", strlen("at+qeng=\"servingcell\"\r\n"), "OK", 20, 0);
-              }
-             }
-             else
-             {
-             if(send_AT_Command_machine_finish()==TRUE)
-             {
-              if (nb_config_step_failed_recover("QENG") == BOOL_TRUE)
-              {
-                  break;
-              }
-              if (nb_net_reg_ready == BOOL_TRUE)
-              {
-                  printf("[NET] reg=%s\n", nb_net_reg_status);
-              }
-              else
-              {
-                  printf("[NET] reg=UNKNOWN\n");
-              }
-              if (nb_net_registered_for_mqtt() == BOOL_FALSE)
-              {
-                  ++nb_net_reg_wait_count;
-                  printf("[NET] wait mqtt reg=%s attempt=%u/%u interval=%lus\n",
-                         (nb_net_reg_ready == BOOL_TRUE) ? nb_net_reg_status : "UNKNOWN",
-                         (unsigned int)nb_net_reg_wait_count,
-                         (unsigned int)NB_NET_REG_MAX_WAIT_ATTEMPTS,
-                         (unsigned long)(nb_net_reg_query_interval_ms / 1000UL));
-                  if (nb_net_reg_wait_count >= NB_NET_REG_MAX_WAIT_ATTEMPTS)
-                  {
-                      printf("[NET][E] mqtt registration timeout, restart modem\n");
-                      _4G_configModule_machine_star();
-                      break;
-                  }
-                  nb_net_reg_query_interval_ms = NB_NET_REG_QUERY_INTERVAL_MS;
-                  wait_timer = Timer_GetTickCount();
-                  nb_net_reg_waiting = BOOL_TRUE;
-                  connect_state=CONNECT_CONFIG_AT_QENG;
-                  break;
-              }
-              nb_net_reg_wait_count = 0;
-              nb_net_reg_waiting = BOOL_FALSE;
-              send_AT_Command_machine_star("AT+QMTCFG=\"recv/mode\",0,0,0\r\n",strlen("AT+QMTCFG=\"recv/mode\",0,0,0\r\n"),"OK",20, 1);
-              connect_state=CONNECT_CONFIG_AT_RECVMODE;
-             }
-             }
-       break;
+                    break;
+                }
+                nb_recovery_wait_tick = Timer_GetTickCount();
+                send_AT_Command_machine_idle();
+                connect_state = CONNECT_CONFIG_WAIT_CEREG_QUERY;
+            }
+            break;
 
-       case CONNECT_CONFIG_AT_RECVMODE:
-             if(send_AT_Command_machine_finish()==TRUE)
-             {
-              if (nb_config_step_failed_recover("RECVMODE") == BOOL_TRUE)
-              {
-                  break;
-              }
-              send_AT_Command_machine_star("AT+QMTCFG=\"version\",0,4\r\n",strlen("AT+QMTCFG=\"version\",0,4\r\n"),"OK",25, 1);
-              connect_state=CONNECT_CONFIG_AT_VERSION;
-             }
-        break;
+        case CONNECT_CONFIG_WAIT_CEREG_QUERY:
+            if (Timer_PassedDelay(nb_recovery_wait_tick, NB_CEREG_QUERY_INTERVAL_MS) == BOOL_TRUE)
+            {
+                nb_start_cereg_query();
+            }
+            break;
+
+        case CONNECT_CONFIG_AT_CFUN0:
+            if (send_AT_Command_machine_finish() == BOOL_TRUE)
+            {
+                if (send_AT_Command_machine_failed() == BOOL_TRUE)
+                {
+                    nb_schedule_hardware_reset("CFUN0");
+                    break;
+                }
+                send_AT_Command_machine_star("AT+CFUN=1\r\n",
+                                             strlen("AT+CFUN=1\r\n"),
+                                             "OK",
+                                             NB_AT_TIMEOUT_COUNT(NB_CFUN_TIMEOUT_MS),
+                                             0);
+                connect_state = CONNECT_CONFIG_AT_CFUN1;
+            }
+            break;
+
+        case CONNECT_CONFIG_AT_CFUN1:
+            if (send_AT_Command_machine_finish() == BOOL_TRUE)
+            {
+                if (send_AT_Command_machine_failed() == BOOL_TRUE)
+                {
+                    nb_schedule_hardware_reset("CFUN1");
+                    break;
+                }
+                nb_registration_tick = Timer_GetTickCount();
+                nb_start_cpin_query();
+            }
+            break;
+
+        case CONNECT_CONFIG_AT_IEMI:
+            if (send_AT_Command_machine_finish() == BOOL_TRUE)
+            {
+                if (send_AT_Command_machine_failed() == BOOL_TRUE ||
+                    zk_mqtt_init() == BOOL_FALSE)
+                {
+                    nb_request_reconnect("CGSN");
+                    break;
+                }
+                send_AT_Command_machine_star("AT+QMTCFG=\"recv/mode\",0,0,0\r\n",
+                                             strlen("AT+QMTCFG=\"recv/mode\",0,0,0\r\n"),
+                                             "OK",
+                                             NB_AT_TIMEOUT_COUNT(1000UL),
+                                             1);
+                connect_state = CONNECT_CONFIG_AT_RECVMODE;
+            }
+            break;
+
+        case CONNECT_CONFIG_AT_RECVMODE:
+            if (send_AT_Command_machine_finish() == BOOL_TRUE)
+            {
+                if (nb_mqtt_step_failed("RECVMODE") == BOOL_TRUE) break;
+                send_AT_Command_machine_star("AT+QMTCFG=\"version\",0,4\r\n",
+                                             strlen("AT+QMTCFG=\"version\",0,4\r\n"),
+                                             "OK",
+                                             NB_AT_TIMEOUT_COUNT(1000UL),
+                                             1);
+                connect_state = CONNECT_CONFIG_AT_VERSION;
+            }
+            break;
+
         case CONNECT_CONFIG_AT_VERSION:
-             if(send_AT_Command_machine_finish()==TRUE)
-             {
-              if (nb_config_step_failed_recover("VERSION") == BOOL_TRUE)
-              {
-                  break;
-              }
-              send_AT_Command_machine_star("AT+QMTCFG=\"keepalive\",0,120\r\n",strlen("AT+QMTCFG=\"keepalive\",0,120\r\n"),"OK",25, 1);
-              connect_state=CONNECT_CONFIG_AT_keepalive;
-             }
-        break;
+            if (send_AT_Command_machine_finish() == BOOL_TRUE)
+            {
+                if (nb_mqtt_step_failed("VERSION") == BOOL_TRUE) break;
+                send_AT_Command_machine_star("AT+QMTCFG=\"keepalive\",0,30\r\n",
+                                             strlen("AT+QMTCFG=\"keepalive\",0,30\r\n"),
+                                             "OK",
+                                             NB_AT_TIMEOUT_COUNT(1000UL),
+                                             1);
+                connect_state = CONNECT_CONFIG_AT_keepalive;
+            }
+            break;
+
         case CONNECT_CONFIG_AT_keepalive:
-             if(send_AT_Command_machine_finish()==TRUE)
-             {
-              if (nb_config_step_failed_recover("KEEPALIVE") == BOOL_TRUE)
-              {
-                  break;
-              }
-              send_AT_Command_machine_star("AT+QMTCFG=\"qmtping\",0,30\r\n",strlen("AT+QMTCFG=\"qmtping\",0,30\r\n"),"OK", 25, 1);
-              connect_state=CONNECT_CONFIG_AT_IEMI;
-             }
-      break;
-      case   CONNECT_CONFIG_AT_IEMI:
-           if(send_AT_Command_machine_finish()==TRUE)
-             {
-                 if (nb_config_step_failed_recover("QMTPING") == BOOL_TRUE)
-                 {
-                     break;
-                 }
-                 send_AT_Command_machine_star("AT+CGSN\r\n",strlen("AT+CGSN\r\n"),"OK", 50, 1);
-              connect_state=CONNECT_CONFIG_AT_qmtping;
-             }
-      break;
-      case   CONNECT_CONFIG_AT_QCCID:
-           if(send_AT_Command_machine_finish()==TRUE)
-             {
-                 static char sendStringBufSub[96];
-                 int cmd_len;
-                 zk_device_config_refresh_iccid();
-                 cmd_len = zk_build_qmt_sub_cmd(sendStringBufSub, sizeof(sendStringBufSub));
-                 if (cmd_len <= 0 || cmd_len >= (int)sizeof(sendStringBufSub))
-                 {
-                     _4G_configModule_machine_star();
-                     break;
-                 }
-                 send_AT_Command_machine_star(sendStringBufSub,(uint8)cmd_len,"+QMTSUB: 0,1,0", NB_AT_TIMEOUT_COUNT(NB_QMTSUB_TIMEOUT_MS), 1);
-                 connect_state=CONNECT_CONFIG_AT_QMTSUB;
-             }
-       break;
+            if (send_AT_Command_machine_finish() == BOOL_TRUE)
+            {
+                if (nb_mqtt_step_failed("KEEPALIVE") == BOOL_TRUE) break;
+                send_AT_Command_machine_star("AT+QMTCFG=\"session\",0,1\r\n",
+                                             strlen("AT+QMTCFG=\"session\",0,1\r\n"),
+                                             "OK",
+                                             NB_AT_TIMEOUT_COUNT(1000UL),
+                                             1);
+                connect_state = CONNECT_CONFIG_AT_SESSION;
+            }
+            break;
 
-       case CONNECT_CONFIG_HTTP_ACTIVE:
-       break;
-       case CONNECT_CONFIG_WAIT_ACTIVE:
-       break;
+        case CONNECT_CONFIG_AT_SESSION:
+            if (send_AT_Command_machine_finish() == BOOL_TRUE)
+            {
+                if (nb_mqtt_step_failed("SESSION") == BOOL_TRUE) break;
+                send_AT_Command_machine_star("AT+QMTCFG=\"timeout\",0,5,3,1\r\n",
+                                             strlen("AT+QMTCFG=\"timeout\",0,5,3,1\r\n"),
+                                             "OK",
+                                             NB_AT_TIMEOUT_COUNT(1000UL),
+                                             1);
+                connect_state = CONNECT_CONFIG_AT_TIMEOUT;
+            }
+            break;
 
-       case CONNECT_CONFIG_AT_qmtping:
-             if(send_AT_Command_machine_finish()==TRUE)
-             {
-              static char sendStringBufOpen[96];
-              int cmd_len;
-              if (nb_config_step_failed_recover("CGSN") == BOOL_TRUE)
-              {
-                  break;
-              }
-              if (zk_mqtt_init() == BOOL_FALSE)
-              {
-                  printf("MQTT config blocked: invalid real IMEI\n");
-                  _4G_configModule_machine_star();
-                  break;
-              }
-              cmd_len = zk_build_qmt_open_cmd(sendStringBufOpen, sizeof(sendStringBufOpen));
-              if (cmd_len <= 0 || cmd_len >= (int)sizeof(sendStringBufOpen))
-              {
-                  _4G_configModule_machine_star();
-                  break;
-              }
-              send_AT_Command_machine_star(sendStringBufOpen,(uint8)cmd_len, "+QMTOPEN: 0,0", NB_AT_TIMEOUT_COUNT(NB_QMTOPEN_TIMEOUT_MS), 1);
-              connect_state=CONNECT_CONFIG_AT_IPPORT;
-             }
-       break;
-       case CONNECT_CONFIG_WAITING_QMTCLOSE:
-             if(send_AT_Command_machine_finish()==TRUE)
-             {
-              nb_config_enter_mqtt_retry_wait("QMTCLOSE");
-             }
-       break;
-       case CONNECT_CONFIG_AT_IPPORT:
-             if(send_AT_Command_machine_finish()==TRUE)
-              {
-              static char sendStringBufConn[128];
-              int cmd_len;
-              if (nb_config_step_failed_recover("QMTOPEN") == BOOL_TRUE)
-              {
-                  break;
-              }
-              cmd_len = zk_build_qmt_conn_cmd(sendStringBufConn, sizeof(sendStringBufConn));
-              if (cmd_len <= 0 || cmd_len >= (int)sizeof(sendStringBufConn))
-              {
-                  _4G_configModule_machine_star();
-                  break;
-              }
-              send_AT_Command_machine_star(sendStringBufConn,(uint8)cmd_len,"+QMTCONN: 0,0,0", NB_AT_TIMEOUT_COUNT(NB_QMTCONN_TIMEOUT_MS), 1);
-              connect_state=CONNECT_CONFIG_AT_QMTCONN;
-              }
-        break;
+        case CONNECT_CONFIG_AT_TIMEOUT:
+            if (send_AT_Command_machine_finish() == BOOL_TRUE)
+            {
+                if (nb_mqtt_step_failed("TIMEOUT") == BOOL_TRUE) break;
+                if (nb_prepare_will() == BOOL_FALSE)
+                {
+                    nb_request_reconnect("WILL_BUILD");
+                    break;
+                }
+                send_AT_Command_machine_idle();
+                sendCommand((uint8 *)nb_will_command, (uint16)strlen(nb_will_command));
+                nb_will_tick = Timer_GetTickCount();
+                connect_state = CONNECT_CONFIG_AT_WILL_PROMPT;
+            }
+            break;
+
+        case CONNECT_CONFIG_AT_WILL_PROMPT:
+            if (nb_mqtt_publish_read_prompt() == BOOL_TRUE)
+            {
+                usartSendData((uint8 *)nb_will_payload, nb_will_payload_length);
+                recvLength = 0;
+                nb_will_tick = Timer_GetTickCount();
+                connect_state = CONNECT_CONFIG_AT_WILL_RESULT;
+            }
+            else if (Timer_PassedDelay(nb_will_tick, 5000UL) == BOOL_TRUE)
+            {
+                nb_request_reconnect("WILL_PROMPT");
+            }
+            break;
+
+        case CONNECT_CONFIG_AT_WILL_RESULT:
+            if (readLine(stringBuf, &recvLength, 0))
+            {
+                if (strstr((const char *)stringBuf, "OK") != 0)
+                {
+                    recvLength = 0;
+                    nb_start_qmtopen();
+                }
+                else if (strstr((const char *)stringBuf, "ERROR") != 0)
+                {
+                    recvLength = 0;
+                    nb_request_reconnect("WILL_RESULT");
+                }
+                else
+                {
+                    recvLength = 0;
+                }
+            }
+            else if (Timer_PassedDelay(nb_will_tick, 5000UL) == BOOL_TRUE)
+            {
+                nb_request_reconnect("WILL_TIMEOUT");
+            }
+            break;
+
+        case CONNECT_CONFIG_AT_IPPORT:
+            if (send_AT_Command_machine_finish() == BOOL_TRUE)
+            {
+                static char sendStringBufConn[128];
+                int cmd_len;
+
+                if (nb_mqtt_step_failed("QMTOPEN") == BOOL_TRUE) break;
+                nb_trace_milestone("QMTOPEN");
+                cmd_len = zk_build_qmt_conn_cmd(sendStringBufConn, sizeof(sendStringBufConn));
+                if (cmd_len <= 0 || cmd_len >= (int)sizeof(sendStringBufConn))
+                {
+                    nb_request_reconnect("QMTCONN_BUILD");
+                    break;
+                }
+                send_AT_Command_machine_star(sendStringBufConn,
+                                             (uint8)cmd_len,
+                                             "+QMTCONN: 0,0,0",
+                                             NB_AT_TIMEOUT_COUNT(NB_QMTCONN_TIMEOUT_MS),
+                                             1);
+                connect_state = CONNECT_CONFIG_AT_QMTCONN;
+            }
+            break;
+
         case CONNECT_CONFIG_AT_QMTCONN:
-             if(send_AT_Command_machine_finish()==TRUE)
-             {
-                 if (nb_config_step_failed_recover("QMTCONN") == BOOL_TRUE)
-                 {
-                     break;
-                 }
-                 send_AT_Command_machine_star("AT+QCCID\r\n",strlen("AT+QCCID\r\n"),"+QCCID:", 25, 1);
-                 connect_state=CONNECT_CONFIG_AT_QCCID;
-             }
-       break;
-       case CONNECT_CONFIG_AT_QMTSUB:
-             if(send_AT_Command_machine_finish()==TRUE)
-             {
-                 static char sendStringBufSubUp[96];
-                 int cmd_len;
-                 if (nb_config_step_failed_recover("QMTSUB_DOWN") == BOOL_TRUE)
-                 {
-                     break;
-                 }
-                 cmd_len = zk_build_qmt_sub_upgrade_cmd(sendStringBufSubUp, sizeof(sendStringBufSubUp));
-                 if (cmd_len <= 0 || cmd_len >= (int)sizeof(sendStringBufSubUp))
-                 {
-                     _4G_configModule_machine_star();
-                     break;
-                 }
-                 send_AT_Command_machine_star(sendStringBufSubUp,(uint8)cmd_len,"+QMTSUB: 0,2,0", NB_AT_TIMEOUT_COUNT(NB_QMTSUB_TIMEOUT_MS), 1);
-                 connect_state=CONNECT_CONFIG_AT_LAST;
-             }
-       break;
-       case CONNECT_CONFIG_AT_LAST:
-             if(send_AT_Command_machine_finish()==TRUE)
-             {
-              if (nb_config_step_failed_recover("QMTSUB_UP") == BOOL_TRUE)
-              {
-                  break;
-              }
-              connect_state=CONNECT_CONFIG__COMPLETE;
-              state = NB_STATE_CONNECTED;
-              onNBEvent(NB_EVENT_CONNECTED, 0, 0);
-             }
-      break;
+            if (send_AT_Command_machine_finish() == BOOL_TRUE)
+            {
+                if (nb_mqtt_step_failed("QMTCONN") == BOOL_TRUE) break;
+                nb_trace_milestone("QMTCONN");
+                send_AT_Command_machine_star("AT+QCCID\r\n",
+                                             strlen("AT+QCCID\r\n"),
+                                             "+QCCID:",
+                                             NB_AT_TIMEOUT_COUNT(1000UL),
+                                             1);
+                connect_state = CONNECT_CONFIG_AT_QCCID;
+            }
+            break;
 
-      case CONNECT_CONFIG__COMPLETE:
-      break;    
-    
-      default:   
-      break;    
+        case CONNECT_CONFIG_AT_QCCID:
+            if (send_AT_Command_machine_finish()==TRUE)
+            {
+                static char sendStringBufSub[96];
+                int cmd_len;
+
+                zk_device_config_refresh_iccid();
+                cmd_len = zk_build_qmt_sub_cmd(sendStringBufSub, sizeof(sendStringBufSub));
+                if (cmd_len <= 0 || cmd_len >= (int)sizeof(sendStringBufSub))
+                {
+                    nb_request_reconnect("QMTSUB_BUILD");
+                    break;
+                }
+                send_AT_Command_machine_star(sendStringBufSub,
+                                             (uint8)cmd_len,
+                                             "+QMTSUB: 0,1,0",
+                                             NB_AT_TIMEOUT_COUNT(NB_QMTSUB_TIMEOUT_MS),
+                                             1);
+                connect_state = CONNECT_CONFIG_AT_QMTSUB;
+            }
+            break;
+
+        case CONNECT_CONFIG_AT_QMTSUB:
+            if (send_AT_Command_machine_finish()==TRUE)
+            {
+                static char sendStringBufSubUp[96];
+                int cmd_len;
+
+                if (nb_mqtt_step_failed("QMTSUB_DOWN") == BOOL_TRUE) break;
+                cmd_len = zk_build_qmt_sub_upgrade_cmd(sendStringBufSubUp, sizeof(sendStringBufSubUp));
+                if (cmd_len <= 0 || cmd_len >= (int)sizeof(sendStringBufSubUp))
+                {
+                    nb_request_reconnect("QMTSUB_UP_BUILD");
+                    break;
+                }
+                send_AT_Command_machine_star(sendStringBufSubUp,
+                                             (uint8)cmd_len,
+                                             "+QMTSUB: 0,2,0",
+                                             NB_AT_TIMEOUT_COUNT(NB_QMTSUB_TIMEOUT_MS),
+                                             1);
+                connect_state = CONNECT_CONFIG_AT_LAST;
+            }
+            break;
+
+        case CONNECT_CONFIG_AT_LAST:
+            if (send_AT_Command_machine_finish()==TRUE)
+            {
+                if (nb_mqtt_step_failed("QMTSUB_UP") == BOOL_TRUE) break;
+                connect_state = CONNECT_CONFIG__COMPLETE;
+                state = NB_STATE_CONNECTED;
+                nb_trace_milestone("SUBSCRIBED");
+                onNBEvent(NB_EVENT_CONNECTED, 0, 0);
+            }
+            break;
+
+        case CONNECT_CONFIG_WAITING_QMTCLOSE:
+            if (send_AT_Command_machine_finish()==TRUE)
+            {
+                send_AT_Command_machine_idle();
+                nb_recovery_wait_tick = Timer_GetTickCount();
+                connect_state = CONNECT_CONFIG_RECOVERY_WAIT;
+            }
+            break;
+
+        case CONNECT_CONFIG_RECOVERY_WAIT:
+            if (Timer_PassedDelay(nb_recovery_wait_tick, nb_recovery_wait_ms) == BOOL_TRUE)
+            {
+                if (nb_recovery_level == NB_RECOVERY_MQTT_FAST)
+                {
+                    nb_start_mqtt_configuration();
+                }
+                else if (nb_recovery_level == NB_RECOVERY_NETWORK)
+                {
+                    nb_start_cpin_query();
+                }
+                else
+                {
+                    connect_state = CONNECT_CONFIG_HARD_RESET_START;
+                }
+            }
+            break;
+
+        case CONNECT_CONFIG__COMPLETE:
+            break;
+
+        default:
+            break;
     }
- 
 }
-
-
- 
-
 
 
 /**
@@ -1765,6 +2191,10 @@ void nbSendTcpData_sm(void)
               else if (Timer_PassedDelay(pub_timer, NB_QMTPUB_PROMPT_TIMEOUT_MS))
               {
                   nb_mqtt_publish_fail("prompt_timeout", BOOL_TRUE);
+                  if (zk_ota_is_busy() == BOOL_FALSE)
+                  {
+                      nb_request_reconnect("PUBLISH_PROMPT_TIMEOUT");
+                  }
               }
               break;
         case PUBSEDN_STATE_SEND_PAYLOAD:
@@ -1788,8 +2218,17 @@ void nbSendTcpData_sm(void)
                   }
                   else if (nb_mqtt_publish_ack_failed(stringBuf) == BOOL_TRUE)
                   {
+                      boolean_en link_lost;
+
+                      link_lost = nb_is_link_lost_line(stringBuf);
                       recvLength = 0;
                       nb_mqtt_publish_fail("ack_error", BOOL_FALSE);
+                      if (zk_ota_is_busy() == BOOL_FALSE)
+                      {
+                          nb_request_reconnect((link_lost == BOOL_TRUE) ?
+                                               "PUBLISH_LINK_LOST" :
+                                               "PUBLISH_ACK_ERROR");
+                      }
                   }
                   else
                   {
@@ -1800,6 +2239,10 @@ void nbSendTcpData_sm(void)
               else if (Timer_PassedDelay(pub_timer, NB_QMTPUB_ACK_TIMEOUT_MS))
               {
                   nb_mqtt_publish_fail("ack_timeout", BOOL_TRUE);
+                  if (zk_ota_is_busy() == BOOL_FALSE)
+                  {
+                      nb_request_reconnect("PUBLISH_ACK_TIMEOUT");
+                  }
               }
               break;
         case  PUBSEDN_STATE_SENDFINISH:
@@ -1829,7 +2272,7 @@ void nbSendTcpData_sm(void)
 uint8 geteSimCardICCID(uint8 *simCardICCIDLength, uint8 *simCardICCID) 
 {
     //+QCCID: 89860492192071686658
-     uint8 *p;
+     uint8 *p = 0;
     *simCardICCIDLength = 0;
    // p = sendCommandAndReceiveResponse("AT+QCCID\r\n", 10, "+QCCID", 100, 1);
     send_AT_Command_machine_star("AT+QCCID\r\n",strlen("AT+QCCID\r\n"),"+QCCID",100,1);  //
@@ -2128,11 +2571,26 @@ static uint8 readTcpData(uint8 *pData, uint16 *pLength, uint8 *recvURC)
 
 static boolean_en nb_is_link_lost_line(uint8 *buf)
 {
-    if (strstr((const char *)buf, "+QIURC: \"pdpdeact\"") ||
-        strstr((const char *)buf, "+QMTSTAT: 0,1") ||
-        strstr((const char *)buf, "+QMTSTAT: 0,2") ||
-        strstr((const char *)buf, "+QMTSTAT: 0,3"))
+    const char *qmtstat;
+    unsigned int client_id;
+    int error_code;
+
+    if (buf == 0)
     {
+        return BOOL_FALSE;
+    }
+    if (strstr((const char *)buf, "+QIURC: \"pdpdeact\"") != 0)
+    {
+        return BOOL_TRUE;
+    }
+    qmtstat = strstr((const char *)buf, "+QMTSTAT:");
+    if (qmtstat != 0 &&
+        sscanf(qmtstat, "+QMTSTAT: %u,%d", &client_id, &error_code) == 2 &&
+        client_id == 0U &&
+        error_code >= 1 &&
+        error_code <= 255)
+    {
+        printf("[MQTT] QMTSTAT disconnect code=%d\r\n", error_code);
         return BOOL_TRUE;
     }
     return BOOL_FALSE;
@@ -2144,9 +2602,18 @@ static boolean_en nb_is_link_lost_line(uint8 *buf)
 *@return  ��
 */
 static void parseResult(uint8 *buf)                //�������
-    { 
-     uint16 dataLength;
-    switch (state) 
+    {
+    uint16 dataLength;
+
+    (void)capture_cereg_from_line(buf);
+    if (nb_is_link_lost_line(buf) == BOOL_TRUE)
+    {
+        nb_request_reconnect((strstr((const char *)buf, "pdpdeact") != 0) ?
+                             "PDP_DEACT" :
+                             "QMTSTAT");
+        return;
+    }
+    switch (state)
         {
         case NB_STATE_CONNECTING:
             /*
@@ -2174,13 +2641,7 @@ static void parseResult(uint8 *buf)                //�������
             } else */  
         
         
-            if (nb_is_link_lost_line(buf))
-            {
-                extern void resetTcpState(void);
-                onNBEvent(NB_EVENT_LOST_CONNECTION, 0, 0);
-                resetTcpState();
-            }
-            else if (strstr((const char *) buf,"+QMTRECV:"))
+            if (strstr((const char *) buf,"+QMTRECV:"))
             {
                     //+QMTRECV: 0,0,"DL-WDJ","erewre"       "+QIURC: \"recv\""
                     //�յ��������·�����Ϣ
@@ -2219,7 +2680,9 @@ static void parseResult(uint8 *buf)                //�������
                     break;
                    */
             }
-     break;
+            break;
+        default:
+            break;
     }
 }
 
@@ -2251,7 +2714,7 @@ void changea_to_MQTT_modle(void)
     OTA_ENABLE_state=0;//�͸������ϱ��Ǳ�֪ͨ��־
     gateway_state=GATEWAY_STATE_CYCLIC_SCAN_AND_REAPORT_DRIVER_DATA;            
     //����OTA����ǰ��MQTT����ָ��
-    _4G_configModule_star_from_onestate( CONNECT_CONFIG_AT_qmtping) ;    //��ĳһ��״̬��ʼ����,����MQTT����ָ��  
+    _4G_configModule_machine_star();
 }
 boolean_en OTA_ENABLE_IS_SET(void)
 {
@@ -2354,10 +2817,15 @@ void nbModuleProcess(void)
                 }
                 else         //MQTTģʽ
                 {
+                      if (nb_modem_ota_lock)
+                      {
+                          break;
+                      }
                       if(_4G_configModule_machine_finish() ==BOOL_TRUE)
                       {  //ģ���������
                              
-                            if (nb_mqtt_publish_owns_uart() == BOOL_TRUE)
+                            if (nb_mqtt_publish_owns_uart() == BOOL_TRUE ||
+                                nb_at_command_is_busy() == BOOL_TRUE)
                             {
                                 break;
                             }

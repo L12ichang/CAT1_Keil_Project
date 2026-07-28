@@ -50,7 +50,7 @@
 #define ZK_LOGIN_REQUEST_ID     "000001"
 #define ZK_JSON_ID_FIRST_REPORT 2UL
 #define ZK_JSON_ID_MAX          999999UL
-#define ZK_LOGIN_ACK_TIMEOUT_MS (30UL * 1000UL)
+#define ZK_LOGIN_ACK_TIMEOUT_MS (10UL * 1000UL)
 #define ZK_HEARTBEAT_INTERVAL_SEC 60
 #define ZK_UPLOAD_INTERVAL_SEC  300
 #define ZK_TIME_REQUEST_INTERVAL_SEC 3600
@@ -148,6 +148,7 @@ const zk_mqtt_config_t *zk_mqtt_get_config(void);
 const char *zk_mqtt_get_pub_topic(void);
 const char *zk_mqtt_get_sub_topic(void);
 const char *zk_mqtt_get_upgrade_sub_topic(void);
+const char *zk_mqtt_get_will_topic(void);
 uint32 zk_mqtt_next_json_id(void);
 uint16 zk_mqtt_next_packet_id(void);
 
@@ -165,8 +166,10 @@ int zk_parse_message_header_from_root(cJSON *root, zk_message_header_t *header);
 boolean_en zk_message_header_matches_device(const zk_message_header_t *header);
 int zk_make_login_packet(char *buf, int buf_size);
 int zk_make_heartbeat_packet(char *buf, int buf_size);
+int zk_make_offline_packet(char *buf, int buf_size);
 int zk_publish_login_packet(void);
 int zk_publish_heartbeat_packet(void);
+int zk_publish_offline_packet(void);
 int zk_publish_error_response(const zk_message_header_t *request, int err_code);
 int zk_publish_response_with_dt(const zk_message_header_t *request,
                                 int err_code,

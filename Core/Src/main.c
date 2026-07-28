@@ -212,6 +212,7 @@ int main(void)
     hw_uart1_init();
     hw_tim2_init();
     sys_tick_init();
+    nb_mark_boot_start();
     hw_tim4_pwm2_init();
     hw_tim4_cap1_init();
     hw_tim3_pwm2_init();
@@ -238,8 +239,6 @@ int main(void)
     meter_runtime_init();
     system_colock_monitor();
     hw_4g_io_init();
-    pwr_off(); //λ�ò�Ҫת��  �ϵ����׹ػ�
-    delayMs(750);//��ʱ750mS   ģ��������λ�ò�Ҫת��
     sys_bl0942_init();
     sys_pow_drop_check_inint();  
     mac_reset();

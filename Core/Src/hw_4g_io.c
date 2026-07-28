@@ -68,11 +68,15 @@ void hw_4g_io_init(void)
     PB4     ------> 4G_RESET//PB4复位会产生高电平
     PB3 /  PC15  ------> 4G_RESET
     */
-    
+
+    /* Preload both outputs inactive before switching the pins to output mode. */
+    PWR_OFF();
+    RESET_OFF();
     GPIO_InitStruct.Pin = GPIO_PIN_9|GPIO_PIN_3;
     GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
     HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-    RESET_OFF(); 
+    PWR_OFF();
+    RESET_OFF();
 }
 

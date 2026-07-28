@@ -550,7 +550,6 @@ static cJSON_bool print_number(const cJSON * const item, printbuffer * const out
     size_t i = 0;
     unsigned char number_buffer[26] = {0}; /* temporary buffer to print the number into */
     unsigned char decimal_point = get_decimal_point();
-    double test = 0.0;
 
     if (output_buffer == NULL)
     {
@@ -568,15 +567,12 @@ static cJSON_bool print_number(const cJSON * const item, printbuffer * const out
 	}
     else
     {
-        /* Try 15 decimal places of precision to avoid nonsignificant nonzero digits */
-        length = sprintf((char*)number_buffer, "%1.15g", d);
-
-        /* Check whether the original double can be recovered */
-        if ((sscanf((char*)number_buffer, "%lg", &test) != 1) || !compare_double((double)test, d))
-        {
-            /* If not, print with 17 decimal places of precision */
-            length = sprintf((char*)number_buffer, "%1.17g", d);
-        }
+        /*
+         * 17 significant digits guarantee a round-trip for IEEE-754 double.
+         * Avoid parsing the freshly formatted value here: newlib's strtod
+         * pulls several KiB of conversion code into this small MCU image.
+         */
+        length = sprintf((char*)number_buffer, "%1.17g", d);
     }
 
     /* sprintf failed or buffer overrun occurred */

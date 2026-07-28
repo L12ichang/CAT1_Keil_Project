@@ -3,7 +3,7 @@
 
 #include "common.h"
 #include "sys_data.h"
-extern uint32_t IMEI_DEC;
+extern u32 IMEI_DEC;
 extern char * IMEI_CHAR;
 extern uint8 IMEI[18];
 extern u8 IMEI10[13];

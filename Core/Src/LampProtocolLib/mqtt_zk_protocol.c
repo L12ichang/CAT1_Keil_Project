@@ -39,8 +39,16 @@ static zk_mqtt_config_t zk_mqtt_cfg;
 static zk_login_state_en zk_login_state = ZK_LOGIN_STATE_IDLE;
 static uint32 zk_login_tick = 0;
 static uint32 zk_heartbeat_tick = 0;
+static boolean_en zk_heartbeat_publish_pending = BOOL_FALSE;
+static uint32 zk_heartbeat_publish_tick = 0;
+static uint32 zk_heartbeat_pub_success_count = 0;
+static uint32 zk_heartbeat_pub_fail_count = 0;
+static uint32 zk_heartbeat_pub_timeout_count = 0;
 static uint32 zk_report_tick = 0;
 static uint32 zk_time_request_tick = 0;
+static uint32 zk_signal_query_tick = 0;
+static boolean_en zk_signal_query_pending = BOOL_FALSE;
+static boolean_en zk_signal_query_due = BOOL_TRUE;
 static uint32 zk_json_message_counter = ZK_JSON_ID_FIRST_REPORT - 1;
 static uint16 zk_mqtt_packet_counter = 0;
 static u8 zk_last_brightness = 100;
@@ -81,7 +89,10 @@ static int zk_control_restore_brightness = 0;
 #define ZK_RESPONSE_QUEUE_SIZE 2U
 #define ZK_LOGIN_ACK_RECONNECT_THRESHOLD 2U
 #define ZK_LOGIN_PUBLISH_TIMEOUT_MS (45UL * 1000UL)
+#define ZK_HEARTBEAT_PUBLISH_TIMEOUT_MS (15UL * 1000UL)
+#define ZK_SIGNAL_QUERY_INTERVAL_MS (5UL * 60UL * 1000UL)
 #define ZK_OTA_ACK_PUBLISH_TIMEOUT_MS (45UL * 1000UL)
+#define ZK_OTA_OFFLINE_PUBLISH_TIMEOUT_MS 5000UL
 #define ZK_OTA_ACK_RETRY_LIMIT 3U
 #define ZK_OTA_REPORT_FLASH_MAGIC 0x5A4B4F54UL
 #define ZK_OTA_REPORT_FLASH_VERSION 1U
@@ -114,6 +125,8 @@ typedef enum
     ZK_OTA_ACK_STATE_IDLE = 0,
     ZK_OTA_ACK_STATE_SEND,
     ZK_OTA_ACK_STATE_WAIT_PUBLISH,
+    ZK_OTA_ACK_STATE_SEND_OFFLINE,
+    ZK_OTA_ACK_STATE_WAIT_OFFLINE,
 } zk_ota_ack_state_en;
 
 typedef enum
@@ -1167,8 +1180,16 @@ void zk_mqtt_reset_session(void)
     zk_login_state = ZK_LOGIN_STATE_IDLE;
     zk_login_tick = 0;
     zk_heartbeat_tick = 0;
+    zk_heartbeat_publish_pending = BOOL_FALSE;
+    zk_heartbeat_publish_tick = 0;
+    zk_heartbeat_pub_success_count = 0;
+    zk_heartbeat_pub_fail_count = 0;
+    zk_heartbeat_pub_timeout_count = 0;
     zk_report_tick = 0;
     zk_time_request_tick = 0;
+    zk_signal_query_tick = 0;
+    zk_signal_query_pending = BOOL_FALSE;
+    zk_signal_query_due = BOOL_TRUE;
     zk_last_heartbeat_id[0] = '\0';
     zk_last_ota_id[0] = '\0';
     zk_change_report_pending = BOOL_FALSE;
@@ -1226,6 +1247,14 @@ const char *zk_mqtt_get_upgrade_sub_topic(void)
 
     cfg = zk_mqtt_get_config();
     return (cfg != NULL) ? cfg->sub_upgrade_topic : NULL;
+}
+
+const char *zk_mqtt_get_will_topic(void)
+{
+    const zk_mqtt_config_t *cfg;
+
+    cfg = zk_mqtt_get_config();
+    return (cfg != NULL) ? cfg->will_topic : NULL;
 }
 
 uint32 zk_mqtt_next_json_id(void)
@@ -1375,9 +1404,7 @@ static void zk_log_periodic_send_failure(const char *task_name)
 static void zk_mqtt_force_reconnect(const char *reason)
 {
     printf("ZK MQTT force reconnect: %s\r\n", reason == NULL ? "unknown" : reason);
-    pubsend_state_set_idle();
-    onNBEvent(NB_EVENT_LOST_CONNECTION, 0, 0);
-    _4G_configModule_machine_star();
+    nb_request_reconnect(reason);
 }
 
 static int zk_send_payload(const char *payload, uint16 length, const char *topic)
@@ -1605,6 +1632,30 @@ int zk_make_heartbeat_packet(char *buf, int buf_size)
                     header.ct);
 }
 
+int zk_make_offline_packet(char *buf, int buf_size)
+{
+    zk_message_header_t header;
+    char message_id[8];
+
+    if (buf == NULL || buf_size <= 0 || zk_mqtt_get_config() == NULL)
+    {
+        return -1;
+    }
+    snprintf(message_id, sizeof(message_id), "%06lu", (unsigned long)zk_mqtt_next_json_id());
+    zk_fill_message_header(&header, ZK_SV_REPT, message_id, ZK_CT_HEARTBEAT);
+    if (header.sn[0] == '\0')
+    {
+        return -1;
+    }
+    return snprintf(buf, buf_size,
+                    "{\"SN\":\"%s\",\"TM\":\"%s\",\"SV\":\"%s\",\"ID\":\"%s\",\"CT\":\"%s\"}",
+                    header.sn,
+                    header.tm,
+                    header.sv,
+                    header.id,
+                    header.ct);
+}
+
 int zk_publish_login_packet(void)
 {
     int len;
@@ -1625,9 +1676,9 @@ int zk_publish_login_packet(void)
     zk_login_wait_pub_success_count = nb_mqtt_get_publish_success_count();
     zk_login_wait_pub_fail_count = nb_mqtt_get_publish_fail_count();
     zk_login_wait_pub_timeout_count = nb_mqtt_get_publish_timeout_count();
-    zk_login_ack_timeout_count = 0;
     zk_login_state = ZK_LOGIN_STATE_WAIT_PUBLISH;
     zk_login_tick = Timer_GetTickCount();
+    nb_trace_milestone("LOGIN_SENT");
     return 0;
 }
 
@@ -1648,8 +1699,30 @@ int zk_publish_heartbeat_packet(void)
     {
         return -1;
     }
-    zk_heartbeat_tick = Timer_GetTickCount();
+    zk_heartbeat_pub_success_count = nb_mqtt_get_publish_success_count();
+    zk_heartbeat_pub_fail_count = nb_mqtt_get_publish_fail_count();
+    zk_heartbeat_pub_timeout_count = nb_mqtt_get_publish_timeout_count();
+    zk_heartbeat_publish_tick = Timer_GetTickCount();
+    zk_heartbeat_publish_pending = BOOL_TRUE;
     return 0;
+}
+
+int zk_publish_offline_packet(void)
+{
+    const char *topic;
+    int len;
+
+    topic = zk_mqtt_get_will_topic();
+    if (topic == NULL)
+    {
+        return -1;
+    }
+    len = zk_make_offline_packet(zk_tx_buf, sizeof(zk_tx_buf));
+    if (len <= 0 || len >= (int)sizeof(zk_tx_buf))
+    {
+        return -1;
+    }
+    return zk_send_payload(zk_tx_buf, (uint16)len, topic);
 }
 
 int zk_publish_error_response(const zk_message_header_t *request, int err_code)
@@ -1747,8 +1820,33 @@ boolean_en zk_dispatch_message(cJSON *root, const zk_message_header_t *header)
 
 static boolean_en zk_signal_query_process(uint32 now)
 {
-    (void)now;
-    /* Runtime QENG shares the modem UART with MQTT publish and can break ACK timing. */
+    if (zk_signal_query_pending == BOOL_TRUE)
+    {
+        if (send_AT_Command_machine_finish() == BOOL_TRUE)
+        {
+            send_AT_Command_machine_idle();
+            zk_signal_query_pending = BOOL_FALSE;
+            zk_signal_query_tick = now;
+            return BOOL_FALSE;
+        }
+        return BOOL_TRUE;
+    }
+    if (zk_signal_query_due == BOOL_FALSE &&
+        Timer_PassedDelay(zk_signal_query_tick, ZK_SIGNAL_QUERY_INTERVAL_MS) == BOOL_FALSE)
+    {
+        return BOOL_FALSE;
+    }
+    if (pubsend_state_idle() == BOOL_FALSE)
+    {
+        return BOOL_FALSE;
+    }
+    send_AT_Command_machine_star("AT+QENG=\"servingcell\"\r\n",
+                                 strlen("AT+QENG=\"servingcell\"\r\n"),
+                                 "OK",
+                                 50,
+                                 0);
+    zk_signal_query_due = BOOL_FALSE;
+    zk_signal_query_pending = BOOL_TRUE;
     return BOOL_FALSE;
 }
 
@@ -2329,11 +2427,10 @@ static boolean_en zk_ota_ack_process(uint32 now)
     if (zk_ota_ack_state == ZK_OTA_ACK_STATE_WAIT_PUBLISH &&
         nb_mqtt_get_publish_success_count() != zk_ota_ack_pub_success_count)
     {
-        OTA_LOGI("cmd ack published id=%s, start download local=%s\r\n",
-                 zk_ota_ack_header.id,
-                 firm_name_buffer);
-        zk_ota_ack_clear();
-        set_OTA_ENABLE();
+        OTA_LOGI("cmd ack published id=%s, publish planned offline\r\n",
+                 zk_ota_ack_header.id);
+        zk_ota_ack_state = ZK_OTA_ACK_STATE_SEND_OFFLINE;
+        zk_ota_ack_tick = now;
         return BOOL_TRUE;
     }
 
@@ -2356,6 +2453,56 @@ static boolean_en zk_ota_ack_process(uint32 now)
                  (unsigned int)zk_ota_ack_retry_count);
         zk_ota_ack_state = ZK_OTA_ACK_STATE_SEND;
         zk_ota_ack_tick = now;
+    }
+
+    if (zk_ota_ack_state == ZK_OTA_ACK_STATE_SEND_OFFLINE)
+    {
+        if (pubsend_state_idle() == BOOL_FALSE)
+        {
+            return BOOL_TRUE;
+        }
+        if (zk_publish_offline_packet() == 0)
+        {
+            zk_ota_ack_pub_success_count = nb_mqtt_get_publish_success_count();
+            zk_ota_ack_pub_fail_count = nb_mqtt_get_publish_fail_count();
+            zk_ota_ack_pub_timeout_count = nb_mqtt_get_publish_timeout_count();
+            zk_ota_ack_tick = now;
+            zk_ota_ack_state = ZK_OTA_ACK_STATE_WAIT_OFFLINE;
+            OTA_LOGI("planned offline publish started\r\n");
+            return BOOL_TRUE;
+        }
+        if (Timer_PassedDelay(zk_ota_ack_tick, ZK_OTA_OFFLINE_PUBLISH_TIMEOUT_MS) == BOOL_FALSE)
+        {
+            return BOOL_TRUE;
+        }
+        OTA_LOGW("planned offline start timeout; continue OTA\r\n");
+        zk_ota_ack_clear();
+        set_OTA_ENABLE();
+        nb_request_reconnect("OTA_PLANNED_OFFLINE");
+        return BOOL_TRUE;
+    }
+
+    if (zk_ota_ack_state == ZK_OTA_ACK_STATE_WAIT_OFFLINE)
+    {
+        if (nb_mqtt_get_publish_success_count() != zk_ota_ack_pub_success_count)
+        {
+            OTA_LOGI("planned offline PUBACK received; start download local=%s\r\n",
+                     firm_name_buffer);
+        }
+        else if (nb_mqtt_get_publish_fail_count() == zk_ota_ack_pub_fail_count &&
+                 nb_mqtt_get_publish_timeout_count() == zk_ota_ack_pub_timeout_count &&
+                 Timer_PassedDelay(zk_ota_ack_tick, ZK_OTA_OFFLINE_PUBLISH_TIMEOUT_MS) == BOOL_FALSE)
+        {
+            return BOOL_TRUE;
+        }
+        else
+        {
+            OTA_LOGW("planned offline PUBACK timeout; continue OTA\r\n");
+        }
+        zk_ota_ack_clear();
+        set_OTA_ENABLE();
+        nb_request_reconnect("OTA_PLANNED_OFFLINE");
+        return BOOL_TRUE;
     }
 
     return BOOL_TRUE;
@@ -2398,6 +2545,30 @@ static void zk_control_restore_process(void)
     }
 }
 
+static boolean_en zk_heartbeat_publish_process(uint32 now)
+{
+    if (zk_heartbeat_publish_pending == BOOL_FALSE)
+    {
+        return BOOL_FALSE;
+    }
+    if (nb_mqtt_get_publish_success_count() != zk_heartbeat_pub_success_count)
+    {
+        zk_heartbeat_publish_pending = BOOL_FALSE;
+        zk_heartbeat_tick = now;
+        printf("[MQTT] heartbeat PUBACK link healthy\r\n");
+        return BOOL_FALSE;
+    }
+    if (nb_mqtt_get_publish_fail_count() != zk_heartbeat_pub_fail_count ||
+        nb_mqtt_get_publish_timeout_count() != zk_heartbeat_pub_timeout_count ||
+        Timer_PassedDelay(zk_heartbeat_publish_tick, ZK_HEARTBEAT_PUBLISH_TIMEOUT_MS) == BOOL_TRUE)
+    {
+        zk_heartbeat_publish_pending = BOOL_FALSE;
+        zk_mqtt_force_reconnect("heartbeat_puback_timeout");
+        return BOOL_TRUE;
+    }
+    return BOOL_TRUE;
+}
+
 void zk_mqtt_session_process(void)
 {
     uint32 now;
@@ -2427,7 +2598,6 @@ void zk_mqtt_session_process(void)
         if (nb_mqtt_get_publish_success_count() != zk_login_wait_pub_success_count)
         {
             zk_login_state = ZK_LOGIN_STATE_WAIT_ACK;
-            zk_login_ack_timeout_count = 0;
             zk_login_tick = now;
             return;
         }
@@ -2475,6 +2645,16 @@ void zk_mqtt_session_process(void)
 
     if (zk_login_state == ZK_LOGIN_STATE_ONLINE)
     {
+        if (zk_heartbeat_publish_process(now) == BOOL_TRUE)
+        {
+            return;
+        }
+        if (zk_signal_query_pending == BOOL_TRUE &&
+            zk_signal_query_process(now) == BOOL_TRUE)
+        {
+            return;
+        }
+
         if (zk_alarm_process() == BOOL_TRUE)
         {
             return;

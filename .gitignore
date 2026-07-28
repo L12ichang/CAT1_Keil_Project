@@ -63,8 +63,20 @@ EventRecorderStub.scvd
 # OS generated files
 .DS_Store
 Thumbs.db
+~$*.docx
 
 # VS Code / IDE settings (optional but recommended to ignore)
 .vscode/
 .history/
 out/final_report/mqtt_login_publish_gate_20260705_014140.jsonl
+
+# Local cache and user-specific IDE state
+.cache/
+MDK-ARM-8008000/project.uvoptx
+
+# Local document exports and archives
+docs/out_current_correct/
+docs/*.rar
+
+# Local desktop packaging artifacts
+*.app/
