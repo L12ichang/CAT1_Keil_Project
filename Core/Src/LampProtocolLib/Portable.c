@@ -144,7 +144,8 @@ void saveUsartByte(uint8 byte)
 static  volatile uint32 TickCount = 0;
 static  volatile uint32 timeDelay = 0;
 
-void delayMs(uint32 ms) 
+/* 阶段 2 删除：AT 引擎迁移后移除 delayMs() 忙等及其中断计时依赖。 */
+void delayMs(uint32 ms)
 {
     timeDelay = ms;
     while (timeDelay);
@@ -175,12 +176,19 @@ uint8 Timer_PassedDelay(uint32 startTime, uint32 msDelay)
     }
 }
 
-void updateTimeTick(uint32 ms) 
-{   
+void updateTimeTick(uint32 ms)
+{
     TickCount += ms;
-    if (timeDelay > 0) 
+    if (timeDelay > 0)
     {
-        timeDelay -= 10;
+        if (timeDelay <= ms)
+        {
+            timeDelay = 0;
+        }
+        else
+        {
+            timeDelay -= ms;
+        }
     }
 }
 
