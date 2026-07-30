@@ -12,6 +12,7 @@
 #include "current_calibration.h"
 #include "danger_current_check.h"
 #include "hw_gateway.h"
+#include "hw_uart1.h"
 #include "hw_uart3.h"
 #include "Json_Protocol.h"
 #include "meter_runtime.h"
@@ -20,6 +21,7 @@
 #include "ota.h"
 #include "Portable.h"
 #include "sys_aip1302.h"
+#include "sys_at_engine.h"
 #include "sys_bl0942.h"
 #include "sys_event.h"
 #include "sys_pow_drop_check.h"
@@ -379,6 +381,10 @@ void app_scheduler_process(void)
             _task_stats[APP_SCHEDULER_TASK_LEGACY_10MS].max_lag_ms);
     }
 
+    app_scheduler_run_profiled(APP_SCHEDULER_TASK_UART1,
+                               hw_uart1_process);
+    app_scheduler_run_profiled(APP_SCHEDULER_TASK_AT_ENGINE,
+                               sys_at_engine_process);
     app_scheduler_run_profiled(APP_SCHEDULER_TASK_METER_RUNTIME,
                                meter_runtime_process);
     app_scheduler_run_profiled(APP_SCHEDULER_TASK_RUNTIME_COUNTER,

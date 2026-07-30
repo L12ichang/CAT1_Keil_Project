@@ -8,8 +8,8 @@
 *************************************************************/
 /* 当前CAT.1 AT收发状态机仍依赖本模块；仅保留4G/MQTT链路相关逻辑。 */
 #include "hw_gateway.h"
-#include "Queue.h"
 #include "NbDriver.h"
+#include "nb_at_legacy_adapter.h"
 #include "TcpClient.h"
 #include "Portable.h"
 #include "type.h"
@@ -26,7 +26,6 @@ uint32 DeviceId;//DEVICE_ID ;
 GATEWAY_STATE  gateway_state;
 gateway_rx_state_en  gateway_rx_state=GATEWAY_RX_STATE_NONE;//230924
 u8  login_success_flag =0; //用于登录各ID标记//230924
-extern QUEUE  usartRecvQueue;//串口数据接收队列
 static  u8 _timer_for_packet_rx;
 static  u16 rx_count;
 static  boolean_en gateway_rx_ready = BOOL_FALSE;
@@ -115,7 +114,7 @@ void rx1_state_timer(void)
 void queue_out_process(void)
 {
     u8 dat;
-     while (dequeue(&usartRecvQueue, &dat))
+     while (nb_at_legacy_adapter_read_byte(&dat) == BOOL_TRUE)
      {
          if(gateway_rx_state==GATEWAY_RX_STATE_NONE)
         {  

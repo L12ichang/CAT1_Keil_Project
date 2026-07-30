@@ -11,6 +11,12 @@ fi
 
 if [[ "$#" -eq 0 ]]; then
   set -- \
+    "${ROOT_DIR}/Core/Src/hw_uart1.c" \
+    "${ROOT_DIR}/Core/System/sys_resource.c" \
+    "${ROOT_DIR}/Core/System/sys_at_engine.c" \
+    "${ROOT_DIR}/Core/Src/LampProtocolLib/nb_at_legacy_adapter.c" \
+    "${ROOT_DIR}/Core/Src/LampProtocolLib/NbDriver.c" \
+    "${ROOT_DIR}/Core/Src/LampProtocolLib/ota.c" \
     "${ROOT_DIR}/Core/Src/LampProtocolLib/mqtt_zk_protocol.c" \
     "${ROOT_DIR}/Core/Src/LampProtocolLib/zk_alarm.c" \
     "${ROOT_DIR}/Core/Src/LampProtocolLib/zk_runtime_stats.c" \

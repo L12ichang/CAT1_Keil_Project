@@ -226,16 +226,15 @@ class Phase1ArchitectureContractTests(unittest.TestCase):
         self.assertIn("sys_event_find_policy(SYS_EVENT_POLICY_LOW", queue_full)
         self.assertNotIn("sys_event_find_policy(SYS_EVENT_POLICY_CRITICAL", queue_full)
 
-    def test_portable_time_delay_consumes_requested_ms_and_saturates(self):
+    def test_phase2_removes_portable_busy_wait_delay(self):
+        portable_source = read_text("Core/Src/LampProtocolLib/Portable.c")
         portable = function_body(
-            read_text("Core/Src/LampProtocolLib/Portable.c"), "updateTimeTick"
+            portable_source, "updateTimeTick"
         )
 
         self.assertIn("TickCount += ms;", portable)
-        self.assertIn("if (timeDelay <= ms)", portable)
-        self.assertIn("timeDelay = 0;", portable)
-        self.assertIn("timeDelay -= ms;", portable)
-        self.assertNotIn("timeDelay -= 10", portable)
+        self.assertNotIn("timeDelay", portable_source)
+        self.assertNotIn("delayMs", portable_source)
 
 
 if __name__ == "__main__":

@@ -30,6 +30,8 @@
 #include "sys_bl0942.h"
 #include "sys_data.h"
 #include "sys_event.h"
+#include "sys_at_engine.h"
+#include "sys_resource.h"
 #include "sys_pow_drop_check.h"
 #include "sys_tick.h"
 #include "sys_time.h"
@@ -189,6 +191,8 @@ void app_boot_init(void)
     hw_tim2_init();
     sys_time_init();
     sys_event_init();
+    sys_resource_init();
+    sys_at_engine_init();
     sys_tick_init();
     nb_mark_boot_start();
     hw_tim4_pwm2_init();

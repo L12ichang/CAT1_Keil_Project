@@ -150,6 +150,7 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
       __HAL_UART_CLEAR_NEFLAG(&huart2);
       (void)HAL_UART_Receive_IT(&huart2, (uint8_t*)rx3_buffer, 1);
   }
+  HAL_UART_Error1Callback(huart);
 }
 
 u32 hw_uart2_get_error_count(void)

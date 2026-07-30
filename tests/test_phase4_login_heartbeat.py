@@ -89,26 +89,20 @@ class Phase4LoginHeartbeatTests(unittest.TestCase):
         self.assertIn("void zk_device_config_refresh_iccid(void);", mqtt_header)
 
         imei_block = nb_source[
-            nb_source.index("case   CONNECT_CONFIG_AT_IEMI"):
-            nb_source.index("case   CONNECT_CONFIG_AT_QCCID")
+            nb_source.index("static void nb_start_mqtt_configuration"):
+            nb_source.index("static void nb_schedule_hardware_reset")
         ]
         self.assertIn("AT+CGSN", imei_block)
-        self.assertIn("connect_state=CONNECT_CONFIG_AT_qmtping;", imei_block)
+        self.assertIn("connect_state = CONNECT_CONFIG_AT_IEMI;", imei_block)
         self.assertNotIn("AT+QCCID", imei_block)
 
-        qmtconn_start = nb_source.index(
-            "case CONNECT_CONFIG_AT_QMTCONN:\n"
-            "             if(send_AT_Command_machine_finish()==TRUE)"
-        )
-        qmtsub_start = nb_source.index(
-            "case CONNECT_CONFIG_AT_QMTSUB:\n"
-            "             if(send_AT_Command_machine_finish()==TRUE)",
-            qmtconn_start
-        )
+        machine_start = nb_source.index("void _4G_configModule_machine(void)")
+        qmtconn_start = nb_source.index("case CONNECT_CONFIG_AT_QMTCONN:", machine_start)
+        qmtsub_start = nb_source.index("case CONNECT_CONFIG_AT_QMTSUB:", qmtconn_start)
         qmtconn_block = nb_source[qmtconn_start:qmtsub_start]
         self.assertIn('send_AT_Command_machine_star("AT+QCCID\\r\\n"', qmtconn_block)
         self.assertIn('"+QCCID:"', qmtconn_block)
-        self.assertIn("connect_state=CONNECT_CONFIG_AT_QCCID;", qmtconn_block)
+        self.assertIn("connect_state = CONNECT_CONFIG_AT_QCCID;", qmtconn_block)
         qccid_send = nb_source.index('send_AT_Command_machine_star("AT+QCCID\\r\\n"', qmtconn_start)
         self.assertLess(qmtconn_start, qccid_send)
         self.assertLess(
@@ -116,17 +110,18 @@ class Phase4LoginHeartbeatTests(unittest.TestCase):
             qmtsub_start
         )
 
-        iccid_start = nb_source.index(
-            "case   CONNECT_CONFIG_AT_QCCID:\n"
-            "           if(send_AT_Command_machine_finish()==TRUE)"
-        )
-        http_start = nb_source.index("case CONNECT_CONFIG_HTTP_ACTIVE:", iccid_start)
-        iccid_block = nb_source[iccid_start:http_start]
+        iccid_start = nb_source.index("case CONNECT_CONFIG_AT_QCCID:", machine_start)
+        iccid_end = nb_source.index("case CONNECT_CONFIG_AT_QMTSUB:", iccid_start)
+        iccid_block = nb_source[iccid_start:iccid_end]
         self.assertIn("zk_device_config_refresh_iccid();", iccid_block)
         self.assertIn("zk_build_qmt_sub_cmd", iccid_block)
-        self.assertIn("connect_state=CONNECT_CONFIG_AT_QMTSUB;", iccid_block)
+        self.assertIn("connect_state = CONNECT_CONFIG_AT_QMTSUB;", iccid_block)
 
-        self.assertIn("resend_counter >= NB_ICCID_MAX_ATTEMPTS", nb_source)
+        self.assertIn(
+            "(u8)(NB_ICCID_MAX_ATTEMPTS - 1U)",
+            nb_source,
+        )
+        self.assertIn("nb_at_legacy_adapter_start", nb_source)
         self.assertIn("use default invalid iccid", nb_source)
         self.assertIn("zk_device_config_refresh_iccid();", mqtt_source)
 

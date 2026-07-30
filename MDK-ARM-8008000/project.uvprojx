@@ -435,6 +435,16 @@
               <FilePath>..\Core\System\sys_event.c</FilePath>
             </File>
             <File>
+              <FileName>sys_at_engine.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\System\sys_at_engine.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_resource.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\System\sys_resource.c</FilePath>
+            </File>
+            <File>
               <FileName>sys_time.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\System\sys_time.c</FilePath>
@@ -1831,6 +1841,11 @@
               <FileName>NbDriver.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\LampProtocolLib\NbDriver.c</FilePath>
+            </File>
+            <File>
+              <FileName>nb_at_legacy_adapter.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\LampProtocolLib\nb_at_legacy_adapter.c</FilePath>
             </File>
             <File>
               <FileName>TcpClient.c</FileName>
@@ -2348,6 +2363,16 @@
               <FilePath>..\Core\System\sys_event.c</FilePath>
             </File>
             <File>
+              <FileName>sys_at_engine.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\System\sys_at_engine.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_resource.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\System\sys_resource.c</FilePath>
+            </File>
+            <File>
               <FileName>sys_time.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\System\sys_time.c</FilePath>
@@ -3744,6 +3769,11 @@
               <FileName>NbDriver.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\LampProtocolLib\NbDriver.c</FilePath>
+            </File>
+            <File>
+              <FileName>nb_at_legacy_adapter.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\LampProtocolLib\nb_at_legacy_adapter.c</FilePath>
             </File>
             <File>
               <FileName>TcpClient.c</FileName>
