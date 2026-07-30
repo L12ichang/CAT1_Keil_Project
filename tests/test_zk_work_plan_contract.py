@@ -98,12 +98,16 @@ class ZkWorkPlanContractTests(unittest.TestCase):
         self.assertIn("zk_plan_publish_dt_response(header, NULL, NULL)", source)
         self.assertNotIn("static int zk_plan_build_now_dt", source)
 
-    def test_main_uses_new_plan_executor_not_legacy_offline_executor(self):
+    def test_phase1_boot_and_scheduler_use_new_plan_executor(self):
         main_c = read_text("Core/Src/main.c")
+        app_boot_c = read_text("Core/App/app_boot.c")
+        scheduler_c = read_text("Core/App/app_scheduler.c")
 
-        self.assertIn("zk_work_plan_init();", main_c)
-        self.assertIn("zk_work_plan_process();", main_c)
-        for line in main_c.splitlines():
+        self.assertIn("app_boot_init();", main_c)
+        self.assertIn("app_scheduler_process();", main_c)
+        self.assertIn("zk_work_plan_init();", app_boot_c)
+        self.assertIn("zk_work_plan_process", scheduler_c)
+        for line in scheduler_c.splitlines():
             if "Work_offline_dimming_process();" in line:
                 self.assertTrue(line.strip().startswith("//"), line)
 

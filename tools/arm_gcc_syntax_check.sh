@@ -27,6 +27,8 @@ arm-none-eabi-gcc \
   -DAPROM_OFFSET \
   -isystem "${SDK_PATH}/usr/include" \
   -I"${ROOT_DIR}/Core/Inc" \
+  -I"${ROOT_DIR}/Core/App" \
+  -I"${ROOT_DIR}/Core/System" \
   -I"${ROOT_DIR}/Core/Src" \
   -I"${ROOT_DIR}/Core/Src/CJSON" \
   -I"${ROOT_DIR}/Core/Src/LampProtocolLib" \
