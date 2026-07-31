@@ -150,6 +150,12 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
       __HAL_UART_CLEAR_NEFLAG(&huart2);
       (void)HAL_UART_Receive_IT(&huart2, (uint8_t*)rx3_buffer, 1);
   }
+  else if (huart->Instance == USART1)
+  {
+      /* USART1(4G模组口)发生ORE/FE/NE错误后，HAL会关闭RXNEIE/EIE中断（阻塞性ORE走UART_EndRxTransfer）。
+         必须清除错误标志并重新挂起接收，否则USART1将永久收不到模组数据（假在线）。 */
+      hw_uart1_resume_rx();
+  }
 }
 
 u32 hw_uart2_get_error_count(void)

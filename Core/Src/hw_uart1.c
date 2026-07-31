@@ -1,23 +1,19 @@
 #include "hw_uart1.h"
 #include "Portable.h"
 UART_HandleTypeDef huart1;
-u8 rx1_buffer[1024];
-static int rx_index = 0;    //此处对外关闭
+/* USART1单字节中断接收缓冲。HAL_UART_IRQHandler的UART_Receive_IT已把DR数据读入此变量，
+   回调直接使用，不再二次读DR（二次读在RXNE清后可能读到新字节或残留值，导致丢/重字节）。 */
+static u8 uart1_rx_byte;
 static u8 * _pTx;
 static u16 _tx_length;
 static u16 _tx_index;
 static u8 _timer;
 void HAL_UART_Rx1CpltCallback(UART_HandleTypeDef *huart)
-{  
-     u8 dat;
-     if (huart->Instance == USART1)
-    { 
-        if (rx_index < sizeof(rx1_buffer))
-        { 
-           dat = (u8)huart->Instance->DR;         
-            saveUsartByte(dat);
-        }
-        HAL_UART_Receive_IT(&huart1, (uint8_t*)rx1_buffer + rx_index, 1);
+{
+    if (huart->Instance == USART1)
+    {
+        saveUsartByte(uart1_rx_byte);
+        HAL_UART_Receive_IT(&huart1, &uart1_rx_byte, 1);
     }
 }
 
@@ -32,20 +28,6 @@ void HAL_UART_Tx1CpltCallback(UART_HandleTypeDef *huart)
             }
       }
 }
-void hw_uart1_timer(void)
-{
-    if(_timer > 0)
-    {
-        --_timer;
-        if(_timer == 0)
-        {
-            printf_buf(rx1_buffer, rx_index);
-            hw_uart1_send(rx1_buffer, rx_index);
-            rx_index = 0;
-        }
-    }
-}
-
 u8 hw_uart1_send_with_result(u8* buf, u32 length)
 {
       HAL_StatusTypeDef status;
@@ -80,6 +62,17 @@ void hw_uart1_send(u8* buf, u32 length)
 }
 
 
+/* USART1(4G模组口)接收恢复：ORE/FE/NE 错误后HAL会关闭RXNEIE/EIE中断（阻塞性ORE走UART_EndRxTransfer），
+   必须清除错误标志并重新挂起接收，否则USART1将永久收不到模组数据（假在线）。 */
+void hw_uart1_resume_rx(void)
+{
+    __HAL_UART_CLEAR_OREFLAG(&huart1);
+    __HAL_UART_CLEAR_FEFLAG(&huart1);
+    __HAL_UART_CLEAR_NEFLAG(&huart1);
+    huart1.ErrorCode = HAL_UART_ERROR_NONE;
+    (void)HAL_UART_Receive_IT(&huart1, &uart1_rx_byte, 1);
+}
+
 void hw_uart1_init(void)
 {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
@@ -111,7 +104,7 @@ void hw_uart1_init(void)
   }
     HAL_NVIC_SetPriority(USART1_IRQn, 6, 0);
     HAL_NVIC_EnableIRQ(USART1_IRQn);
-    HAL_UART_Receive_IT(&huart1, (uint8_t*)rx1_buffer, 1);
+    HAL_UART_Receive_IT(&huart1, &uart1_rx_byte, 1);
 
 }
 

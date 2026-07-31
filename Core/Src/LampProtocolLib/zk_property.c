@@ -254,10 +254,10 @@ static void zk_device_config_set_defaults(zk_device_config_t *config)
     memset(config, 0, sizeof(*config));
     config->protId = 100;
     strcpy(config->clas, "DL-MXG");
-    strcpy(config->prottp, "DL-56T-MXG");
+    strcpy(config->prottp, "DL-50Z-56T-MXG");
     config->hver = 1;
     config->sver = APP_VERSION;
-    strcpy(config->mver, "BC28GJAR01A01");
+    strcpy(config->mver, "EC801E");
     zk_device_config_refresh_iccid_field(config);
     config->lng = 120000000;
     config->lat = 30000000;
