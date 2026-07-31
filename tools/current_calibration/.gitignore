@@ -1,0 +1,6 @@
+__pycache__/
+logs/
+.desktop_venv/
+*.app/
+!calibration_station.py
+!test_calibration_logic.py
