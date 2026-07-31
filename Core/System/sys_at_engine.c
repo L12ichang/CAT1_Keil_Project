@@ -11,12 +11,18 @@
 #include "sys_time.h"
 
 #define SYS_AT_QUEUE_CAPACITY          ((u8)6U)
+/*
+ * QMTPUBEX 的 payload 由 MQTT 固定 600B 缓冲持有；AT 队列仍做值拷贝，
+ * 640B 上限覆盖完整 payload，避免为旧 2KB JSON 缓冲扩大每个队列槽。
+ */
 #define SYS_AT_COMMAND_CAPACITY        ((u16)384U)
+#define SYS_AT_CONTINUATION_CAPACITY   ((u16)600U)
 #define SYS_AT_EXPECTED_CAPACITY       ((u16)64U)
 #define SYS_AT_ERROR_CAPACITY          ((u16)32U)
 #define SYS_AT_LINE_CAPACITY           ((u16)640U)
 #define SYS_AT_RAW_TRIGGER_CAPACITY    ((u16)32U)
 #define SYS_AT_RX_BUDGET               ((u16)256U)
+#define SYS_AT_URC_HANDLER_CAPACITY     ((u8)4U)
 #define SYS_AT_RETRY_DELAY_MS          ((u32)100U)
 #define SYS_AT_SEND_WAIT_MS            ((u32)1000U)
 #define SYS_AT_U32_MAX                 ((u32)0xFFFFFFFFUL)
@@ -25,6 +31,9 @@ typedef struct
 {
     char command[SYS_AT_COMMAND_CAPACITY];
     u16 command_length;
+    u16 continuation_length;
+    char continuation_expected_token[SYS_AT_EXPECTED_CAPACITY];
+    u32 continuation_timeout_ms;
     char expected_token[SYS_AT_EXPECTED_CAPACITY];
     char error_token[SYS_AT_ERROR_CAPACITY];
     u32 timeout_ms;
@@ -48,8 +57,8 @@ static sys_resource_token_st _active_resource_token;
 static boolean_en _active_resource_valid;
 static char _line[SYS_AT_LINE_CAPACITY];
 static u16 _line_length;
-static sys_at_line_handler_fn _urc_handler;
-static void *_urc_context;
+static sys_at_line_handler_fn _urc_handlers[SYS_AT_URC_HANDLER_CAPACITY];
+static void *_urc_contexts[SYS_AT_URC_HANDLER_CAPACITY];
 static sys_at_parse_mode_en _parse_mode;
 static sys_resource_token_st _raw_token;
 static sys_at_raw_handler_fn _raw_handler;
@@ -57,6 +66,9 @@ static void *_raw_context;
 static char _raw_trigger[SYS_AT_RAW_TRIGGER_CAPACITY];
 static boolean_en _raw_armed;
 static sys_at_stats_st _stats;
+static u8 _continuation[SYS_AT_CONTINUATION_CAPACITY];
+static boolean_en _continuation_reserved;
+static boolean_en _sending_continuation;
 
 static void sys_at_increment_saturated(u32 *value)
 {
@@ -186,6 +198,10 @@ static void sys_at_remove_queue_at(u8 index)
 {
     u8 move_index;
 
+    if (_queue[index].continuation_length > 0U)
+    {
+        _continuation_reserved = BOOL_FALSE;
+    }
     for (move_index = index; (move_index + 1U) < _queue_count; move_index++)
     {
         _queue[move_index] = _queue[move_index + 1U];
@@ -215,6 +231,7 @@ static boolean_en sys_at_dequeue_highest(sys_at_request_slot_st *slot)
         }
     }
     *slot = _queue[selected];
+    _queue[selected].continuation_length = 0U;
     sys_at_remove_queue_at(selected);
     return BOOL_TRUE;
 }
@@ -312,12 +329,22 @@ static boolean_en sys_at_line_is_known_nonplus_urc(void)
 
 static void sys_at_route_urc(const u8 *line, u16 length)
 {
-    if ((_urc_handler != NULL) && (length > 0U))
+    u8 index;
+
+    if (length == 0U)
     {
-        _urc_handler(line,
-                     length,
-                     (u16)SYS_RESOURCE_OWNER_NONE,
-                     _urc_context);
+        return;
+    }
+    for (index = 0U; index < SYS_AT_URC_HANDLER_CAPACITY; index++)
+    {
+        if (_urc_handlers[index] != NULL)
+        {
+            _urc_handlers[index](
+                line,
+                length,
+                (u16)SYS_RESOURCE_OWNER_NONE,
+                _urc_contexts[index]);
+        }
     }
     sys_at_increment_saturated(&_stats.urc_count);
 }
@@ -354,6 +381,11 @@ static void sys_at_finish(sys_at_result_en result)
         sys_at_increment_saturated(&_stats.failed_count);
         _stats.state = SYS_AT_STATE_FAILED;
     }
+    if (_active.continuation_length > 0U)
+    {
+        _continuation_reserved = BOOL_FALSE;
+    }
+    _sending_continuation = BOOL_FALSE;
     sys_at_release_active_resource();
     _active_valid = BOOL_FALSE;
     _stats.active_owner_id = 0U;
@@ -470,6 +502,27 @@ static void sys_at_handle_prompt(void)
         _active.line_handler(prompt, 1U, _active.owner_id, _active.context);
     }
     if ((_active_valid == BOOL_TRUE) &&
+        (_active.continuation_length > 0U) &&
+        ((_active.expect_prompt == BOOL_TRUE) ||
+         (strcmp(_active.expected_token, ">") == 0)))
+    {
+        /*
+         * Prompt 后继续持有同一 MODEM_EXCLUSIVE token；payload 与
+         * PUBACK 之间不可插入其他 AT 命令。
+         */
+        memcpy(
+            _active.expected_token,
+            _active.continuation_expected_token,
+            sizeof(_active.expected_token));
+        _active.timeout_ms = _active.continuation_timeout_ms;
+        _active.expect_prompt = BOOL_FALSE;
+        _sending_continuation = BOOL_TRUE;
+        _state_since_ms = sys_time_get_ms();
+        _deadline_ms = _state_since_ms + SYS_AT_SEND_WAIT_MS;
+        _stats.state = SYS_AT_STATE_SEND;
+        return;
+    }
+    if ((_active_valid == BOOL_TRUE) &&
         ((_active.expect_prompt == BOOL_TRUE) ||
          (strcmp(_active.expected_token, ">") == 0)))
     {
@@ -571,19 +624,22 @@ void sys_at_engine_init(void)
     memset(&_stats, 0, sizeof(_stats));
     memset(&_active_resource_token, 0, sizeof(_active_resource_token));
     memset(&_raw_token, 0, sizeof(_raw_token));
+    memset(_urc_handlers, 0, sizeof(_urc_handlers));
+    memset(_urc_contexts, 0, sizeof(_urc_contexts));
+    memset(_continuation, 0, sizeof(_continuation));
     _queue_count = 0U;
     _active_valid = BOOL_FALSE;
     _active_attempt = 0U;
     _active_resource_valid = BOOL_FALSE;
     _line_length = 0U;
     _line[0] = '\0';
-    _urc_handler = NULL;
-    _urc_context = NULL;
     _parse_mode = SYS_AT_PARSE_LINE;
     _raw_handler = NULL;
     _raw_context = NULL;
     _raw_trigger[0] = '\0';
     _raw_armed = BOOL_FALSE;
+    _continuation_reserved = BOOL_FALSE;
+    _sending_continuation = BOOL_FALSE;
     _stats.state = SYS_AT_STATE_IDLE;
     _stats.parse_mode = SYS_AT_PARSE_LINE;
 }
@@ -603,6 +659,52 @@ boolean_en sys_at_engine_submit(const sys_at_request_st *request)
         return BOOL_FALSE;
     }
 
+    _queue[_queue_count++] = slot;
+    _stats.queued_count = _queue_count;
+    sys_at_increment_saturated(&_stats.submitted_count);
+    return BOOL_TRUE;
+}
+
+boolean_en sys_at_engine_submit_continuation(
+    const sys_at_request_st *request,
+    const u8 *continuation,
+    u16 continuation_length,
+    const char *continuation_expected_token,
+    u32 continuation_timeout_ms)
+{
+    sys_at_request_slot_st slot;
+
+    if ((_parse_mode != SYS_AT_PARSE_LINE) ||
+        (_queue_count >= SYS_AT_QUEUE_CAPACITY) ||
+        (_continuation_reserved == BOOL_TRUE) ||
+        (continuation == NULL) ||
+        (continuation_length == 0U) ||
+        (continuation_length > SYS_AT_CONTINUATION_CAPACITY) ||
+        (continuation_timeout_ms == 0U) ||
+        (sys_at_make_slot(request, &slot) != BOOL_TRUE) ||
+        (sys_at_copy_text(
+             slot.continuation_expected_token,
+             SYS_AT_EXPECTED_CAPACITY,
+             continuation_expected_token,
+             0U,
+             NULL) != BOOL_TRUE))
+    {
+        if (_queue_count >= SYS_AT_QUEUE_CAPACITY)
+        {
+            sys_at_increment_saturated(&_stats.queue_full_count);
+        }
+        return BOOL_FALSE;
+    }
+
+    sys_at_trim_line_end(slot.continuation_expected_token);
+    if (slot.continuation_expected_token[0] == '\0')
+    {
+        return BOOL_FALSE;
+    }
+    slot.continuation_length = continuation_length;
+    slot.continuation_timeout_ms = continuation_timeout_ms;
+    memcpy(_continuation, continuation, continuation_length);
+    _continuation_reserved = BOOL_TRUE;
     _queue[_queue_count++] = slot;
     _stats.queued_count = _queue_count;
     sys_at_increment_saturated(&_stats.submitted_count);
@@ -636,6 +738,11 @@ void sys_at_engine_process(void)
                     SYS_AT_SEND_WAIT_MS) *
                     ((u32)_active.retry_max + 1U)) +
                     ((u32)_active.retry_max * SYS_AT_RETRY_DELAY_MS);
+                if (_active.continuation_length > 0U)
+                {
+                    lease_ms += _active.continuation_timeout_ms +
+                        SYS_AT_SEND_WAIT_MS;
+                }
                 if (sys_resource_acquire(
                         SYS_RESOURCE_MODEM_EXCLUSIVE,
                         _active.owner_id,
@@ -661,11 +768,18 @@ void sys_at_engine_process(void)
             break;
 
         case SYS_AT_STATE_SEND:
-            if ((_active.command_length == 0U) ||
-                (hw_uart1_write((const u8 *)_active.command,
-                                _active.command_length) ==
-                 _active.command_length))
+            if (((_sending_continuation != BOOL_TRUE) &&
+                 ((_active.command_length == 0U) ||
+                  (hw_uart1_write((const u8 *)_active.command,
+                                  _active.command_length) ==
+                   _active.command_length))) ||
+                ((_sending_continuation == BOOL_TRUE) &&
+                 (hw_uart1_write(
+                      _continuation,
+                      _active.continuation_length) ==
+                  _active.continuation_length)))
             {
+                _sending_continuation = BOOL_FALSE;
                 _state_since_ms = now_ms;
                 _deadline_ms = now_ms + _active.timeout_ms;
                 _stats.state = SYS_AT_STATE_WAIT_RESPONSE;
@@ -738,8 +852,57 @@ void sys_at_engine_set_urc_handler(
     sys_at_line_handler_fn handler,
     void *context)
 {
-    _urc_handler = handler;
-    _urc_context = context;
+    _urc_handlers[0] = handler;
+    _urc_contexts[0] = context;
+}
+
+boolean_en sys_at_engine_add_urc_handler(
+    sys_at_line_handler_fn handler,
+    void *context)
+{
+    u8 index;
+
+    if (handler == NULL)
+    {
+        return BOOL_FALSE;
+    }
+    for (index = 1U; index < SYS_AT_URC_HANDLER_CAPACITY; index++)
+    {
+        if ((_urc_handlers[index] == handler) &&
+            (_urc_contexts[index] == context))
+        {
+            return BOOL_TRUE;
+        }
+    }
+    for (index = 1U; index < SYS_AT_URC_HANDLER_CAPACITY; index++)
+    {
+        if (_urc_handlers[index] == NULL)
+        {
+            _urc_handlers[index] = handler;
+            _urc_contexts[index] = context;
+            return BOOL_TRUE;
+        }
+    }
+    return BOOL_FALSE;
+}
+
+boolean_en sys_at_engine_remove_urc_handler(
+    sys_at_line_handler_fn handler,
+    void *context)
+{
+    u8 index;
+
+    for (index = 1U; index < SYS_AT_URC_HANDLER_CAPACITY; index++)
+    {
+        if ((_urc_handlers[index] == handler) &&
+            (_urc_contexts[index] == context))
+        {
+            _urc_handlers[index] = NULL;
+            _urc_contexts[index] = NULL;
+            return BOOL_TRUE;
+        }
+    }
+    return BOOL_FALSE;
 }
 
 boolean_en sys_at_engine_enter_raw_mode(

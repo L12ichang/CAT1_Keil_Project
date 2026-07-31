@@ -156,14 +156,10 @@ boolean_en mcu_health_is_ok(void)
     {
         return BOOL_FALSE;
     }
-    if (mcu_runtime_diag.mqtt_pub_timeout_bad_count >= WATCHDOG_MQTT_PUB_TIMEOUT_BAD_LIMIT)
-    {
-        return BOOL_FALSE;
-    }
-    if (mcu_runtime_diag.uart1_queue_drop_bad_count >= WATCHDOG_UART_DROP_BAD_LIMIT)
-    {
-        return BOOL_FALSE;
-    }
+    /*
+     * 蜂窝/MQTT 超时与 UART1 网络侧丢包保留在运行诊断中，但网络故障
+     * 不得通过拒绝喂狗升级为 MCU 复位。网络恢复仅由阶段3状态机负责。
+     */
     if (mcu_runtime_diag.bl0942_timeout_bad_count >= WATCHDOG_BL0942_TIMEOUT_BAD_LIMIT)
     {
         return BOOL_FALSE;
@@ -204,4 +200,3 @@ const mcu_runtime_diag_t *mcu_runtime_diag_get(void)
 {
     return &mcu_runtime_diag;
 }
-

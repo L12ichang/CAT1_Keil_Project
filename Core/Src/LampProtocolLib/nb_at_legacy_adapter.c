@@ -36,6 +36,7 @@ static u16 _transaction_owner;
 static sys_resource_token_st _exclusive_token;
 static boolean_en _exclusive_valid;
 static boolean_en _raw_mode;
+static boolean_en _urc_enabled;
 static nb_at_legacy_adapter_stats_st _stats;
 
 volatile uint32 usart_queue_drop_count;
@@ -90,6 +91,10 @@ static void nb_at_legacy_urc_handler(
 
     (void)owner_id;
     (void)context;
+    if (_urc_enabled != BOOL_TRUE)
+    {
+        return;
+    }
     for (index = 0U; index < length; index++)
     {
         nb_at_legacy_enqueue_byte(line[index]);
@@ -173,8 +178,16 @@ void nb_at_legacy_adapter_init(void)
     _transaction_owner = (u16)SYS_RESOURCE_OWNER_NONE;
     _exclusive_valid = BOOL_FALSE;
     _raw_mode = BOOL_FALSE;
+    _urc_enabled = BOOL_FALSE;
     usart_queue_drop_count = 0U;
     sys_at_engine_set_urc_handler(nb_at_legacy_urc_handler, NULL);
+}
+
+void nb_at_legacy_adapter_set_urc_enabled(boolean_en enabled)
+{
+    _urc_enabled = enabled;
+    _legacy_head = 0U;
+    _legacy_tail = 0U;
 }
 
 boolean_en nb_at_legacy_adapter_start(
@@ -377,6 +390,7 @@ boolean_en nb_at_legacy_adapter_begin_exclusive(
         return BOOL_FALSE;
     }
     _exclusive_valid = BOOL_TRUE;
+    nb_at_legacy_adapter_set_urc_enabled(BOOL_TRUE);
     return BOOL_TRUE;
 }
 
@@ -429,6 +443,7 @@ boolean_en nb_at_legacy_adapter_leave_raw_mode(void)
 
 void nb_at_legacy_adapter_end_exclusive(void)
 {
+    nb_at_legacy_adapter_set_urc_enabled(BOOL_FALSE);
     if (_exclusive_valid == BOOL_TRUE)
     {
         (void)nb_at_legacy_adapter_leave_raw_mode();

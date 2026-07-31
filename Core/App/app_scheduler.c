@@ -17,13 +17,17 @@
 #include "Json_Protocol.h"
 #include "meter_runtime.h"
 #include "NbDriver.h"
+#include "nb_at_legacy_adapter.h"
 #include "net_dim.h"
 #include "ota.h"
 #include "Portable.h"
 #include "sys_aip1302.h"
 #include "sys_at_engine.h"
+#include "sys_cellular.h"
+#include "sys_connectivity.h"
 #include "sys_bl0942.h"
 #include "sys_event.h"
+#include "sys_mqtt.h"
 #include "sys_pow_drop_check.h"
 #include "sys_pwm.h"
 #include "sys_temp_over_protect.h"
@@ -41,9 +45,6 @@
 #define APP_SCHEDULER_U32_MAX                   ((u32)0xFFFFFFFFUL)
 
 typedef void (*app_scheduler_task_fn)(void);
-
-/* 阶段 8 删除：旧 Portable.h 尚未公开该状态机入口。 */
-extern void resetNbModule_machine(void);
 
 static app_scheduler_task_stats_st _task_stats[APP_SCHEDULER_TASK_COUNT];
 static boolean_en _soft_start_pending;
@@ -199,21 +200,26 @@ static void app_scheduler_legacy_log_process(void)
 *************************************/
 static void app_scheduler_legacy_network_process(void)
 {
+    app_scheduler_run_profiled(APP_SCHEDULER_TASK_CELLULAR,
+                               sys_cellular_process);
+    app_scheduler_run_profiled(APP_SCHEDULER_TASK_NB_SEND,
+                               sys_mqtt_process);
     app_scheduler_run_profiled(APP_SCHEDULER_TASK_GATEWAY,
-                               hw_gateway_process);
+                               sys_connectivity_process);
     app_scheduler_run_profiled(APP_SCHEDULER_TASK_DIM_UART,
                                uart_diam_process);
     app_scheduler_run_profiled(APP_SCHEDULER_TASK_ADC, adc_process);
     app_scheduler_run_profiled(APP_SCHEDULER_TASK_TEMP_PROTECT,
                                sys_temp_over_protect_process);
-    app_scheduler_run_profiled(APP_SCHEDULER_TASK_MODEM_RESET,
-                               resetNbModule_machine);
-    app_scheduler_run_profiled(APP_SCHEDULER_TASK_CELLULAR,
-                               _4G_configModule_machine);
-    app_scheduler_run_profiled(APP_SCHEDULER_TASK_NB_SEND,
-                               nbSendTcpData_sm);
-    app_scheduler_run_profiled(APP_SCHEDULER_TASK_AT_COMMAND,
-                               send_AT_Command_machine);
+    /*
+     * 正常模式完全切断旧网络状态机。OTA 独占期间，新三模块已暂停，
+     * 旧 AT 适配器仅为 OTA 尚未迁移的逐行命令路径服务。
+     */
+    if (nb_at_legacy_adapter_has_exclusive() == BOOL_TRUE)
+    {
+        app_scheduler_run_profiled(APP_SCHEDULER_TASK_AT_COMMAND,
+                                   send_AT_Command_machine);
+    }
     if (OTA_ENABLE_IS_SET() == BOOL_FALSE)
     {
         app_scheduler_run_profiled(APP_SCHEDULER_TASK_TCP_CLIENT,

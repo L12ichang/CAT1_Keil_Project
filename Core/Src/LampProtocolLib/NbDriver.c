@@ -16,6 +16,9 @@
 #include "mqtt_zk_protocol.h"
 #include "nb_at_legacy_adapter.h"
 #include "sys_resource.h"
+#include "sys_cellular.h"
+#include "sys_connectivity.h"
+#include "sys_mqtt.h"
 #define RECV_BUF_LENGTH 600
 #define CONNECTING_MAX_WAIT_TIME 20
 #define CONNECTED_MAX_WAIT_TIME 5
@@ -650,11 +653,18 @@ void  send_AT_Command_machine_idle(void)
 
 boolean_en nb_get_rsrp_dbm10(s32 *rsrp_dbm10)
 {
-    if (rsrp_ready == BOOL_FALSE || rsrp_dbm10 == 0)
+    sys_cellular_snapshot_st cellular;
+
+    if (rsrp_dbm10 == 0)
     {
         return BOOL_FALSE;
     }
-    *rsrp_dbm10 = nb_rsrp_dbm10;
+    sys_cellular_get_snapshot(&cellular);
+    if ((cellular.rsrp_dbm < -160) || (cellular.rsrp_dbm > -40))
+    {
+        return BOOL_FALSE;
+    }
+    *rsrp_dbm10 = (s32)cellular.rsrp_dbm * 10;
     return BOOL_TRUE;
 }
 
@@ -1830,6 +1840,8 @@ static uint16 pub_msg_id=0;
 static u32 nb_mqtt_pub_success_count=0;
 static u32 nb_mqtt_pub_fail_count=0;
 static u32 nb_mqtt_pub_timeout_count=0;
+static u32 nb_stage3_publish_request_id=1U;
+static u32 nb_stage3_active_request_id=0U;
 static sys_resource_token_st nb_mqtt_modem_token;
 static boolean_en nb_mqtt_modem_token_valid=BOOL_FALSE;
 static boolean_en nb_mqtt_ack_seen=BOOL_FALSE;
@@ -2003,11 +2015,12 @@ uint8 nbSendTcpData(uint8 *pData, uint16 length)
     {
         return NB_ERROR_SEND_FAIL;
     }
-    if (pData == 0 || length == 0 || length >= sizeof(pubDataBuf))
+    if (pData == 0 || length == 0 ||
+        length > NETWORK_MQTT_PAYLOAD_CAPACITY)
     {
         return NB_ERROR_SEND_FAIL;
     }
-    if (pubsend_is_busy() == BOOL_TRUE)
+    if (pubsend_state != PUBSEDN_STATE_IDLE)
     {
         return NB_ERROR_SEND_FAIL;
     }
@@ -2017,7 +2030,24 @@ uint8 nbSendTcpData(uint8 *pData, uint16 length)
     {
         return NB_ERROR_SEND_FAIL;
     }
-    return nb_mqtt_publish_prepare(topic, pData, length);
+    nb_stage3_active_request_id = nb_stage3_publish_request_id++;
+    if (nb_stage3_publish_request_id == 0U)
+    {
+        nb_stage3_publish_request_id = 1U;
+    }
+    if (sys_mqtt_publish(
+            topic,
+            pData,
+            length,
+            5U,
+            NETWORK_SOURCE_LEGACY_APP,
+            nb_stage3_active_request_id) != BOOL_TRUE)
+    {
+        nb_stage3_active_request_id = 0U;
+        return NB_ERROR_SEND_FAIL;
+    }
+    pubsend_state = PUBSEDN_STATE_SEND_HEADER;
+    return NB_ERROR_NONE;
 }
 uint8 g4Send_MQTT_Data(char *topic,char *pData)
 {
@@ -2049,16 +2079,33 @@ uint8 g4Send_MQTT_Data(char *topic,char *pData)
     }
 #endif
     length = (uint16)strlen(pData);
-    if (length == 0 || length >= sizeof(pubDataBuf))
+    if (length == 0 || length > NETWORK_MQTT_PAYLOAD_CAPACITY)
     {
         return NB_ERROR_SEND_FAIL;
     }
-    if (pubsend_is_busy() == BOOL_TRUE)
+    if (pubsend_state != PUBSEDN_STATE_IDLE)
     {
         return NB_ERROR_SEND_FAIL;
     }
 
-    return nb_mqtt_publish_prepare(pub_topic, (uint8 *)pData, length);
+    nb_stage3_active_request_id = nb_stage3_publish_request_id++;
+    if (nb_stage3_publish_request_id == 0U)
+    {
+        nb_stage3_publish_request_id = 1U;
+    }
+    if (sys_mqtt_publish(
+            pub_topic,
+            (const u8 *)pData,
+            length,
+            5U,
+            NETWORK_SOURCE_LEGACY_APP,
+            nb_stage3_active_request_id) != BOOL_TRUE)
+    {
+        nb_stage3_active_request_id = 0U;
+        return NB_ERROR_SEND_FAIL;
+    }
+    pubsend_state = PUBSEDN_STATE_SEND_HEADER;
+    return NB_ERROR_NONE;
 }
 
 boolean_en pubsend_state_finish()
@@ -2073,7 +2120,40 @@ boolean_en pubsend_state_finish()
 }
 boolean_en pubsend_state_idle()
 {
-    return (pubsend_is_busy() == BOOL_FALSE) ? BOOL_TRUE : BOOL_FALSE;
+    return (pubsend_state == PUBSEDN_STATE_IDLE) ?
+        BOOL_TRUE : BOOL_FALSE;
+}
+
+void nb_mqtt_stage3_process_result(
+    u16 source_id,
+    u32 request_id,
+    u16 packet_id,
+    u16 session_generation,
+    u8 result)
+{
+    (void)packet_id;
+    (void)session_generation;
+    if ((source_id != NETWORK_SOURCE_LEGACY_APP) ||
+        (request_id == 0U) ||
+        (request_id != nb_stage3_active_request_id))
+    {
+        return;
+    }
+    nb_stage3_active_request_id = 0U;
+    if (result == (u8)SYS_MQTT_RESULT_SUCCESS)
+    {
+        nb_mqtt_pub_success_count++;
+        pubsend_state = PUBSEDN_STATE_SENDFINISH;
+    }
+    else
+    {
+        nb_mqtt_pub_fail_count++;
+        if (result == (u8)SYS_MQTT_RESULT_TIMEOUT)
+        {
+            nb_mqtt_pub_timeout_count++;
+        }
+        pubsend_state = PUBSEDN_STATE_FAIL;
+    }
 }
 
 uint32 nb_mqtt_get_publish_success_count(void)
@@ -2095,6 +2175,7 @@ uint32 nb_mqtt_get_publish_timeout_count(void)
 void pubsend_state_set_idle(void)
 {
     pub_en_flag=0;
+    nb_stage3_active_request_id=0U;
     nb_mqtt_release_modem_resource();
     pubsend_state=PUBSEDN_STATE_IDLE;
 }
@@ -2106,6 +2187,13 @@ void nb_modem_lock_for_ota(void)
         return;
     }
 
+    /*
+     * OTA handoff：先冻结新提交并同步取消活动事务，再申请独占 token。
+     * 申请失败时恢复正常三模块，调用方可在下一轮重试。
+     */
+    sys_connectivity_set_enabled(BOOL_FALSE);
+    sys_mqtt_set_enabled(BOOL_FALSE);
+    sys_cellular_set_enabled(BOOL_FALSE);
     nb_mqtt_release_modem_resource();
     nb_at_legacy_adapter_cancel((u16)SYS_RESOURCE_OWNER_LEGACY_AT);
     if (nb_at_legacy_adapter_begin_exclusive(
@@ -2113,6 +2201,9 @@ void nb_modem_lock_for_ota(void)
             NB_OTA_MODEM_LEASE_MS) != BOOL_TRUE)
     {
         OTA_LOGE("modem ota exclusive acquire failed\r\n");
+        sys_cellular_set_enabled(BOOL_TRUE);
+        sys_mqtt_set_enabled(BOOL_TRUE);
+        sys_connectivity_set_enabled(BOOL_TRUE);
         return;
     }
 
@@ -2138,6 +2229,9 @@ void nb_modem_unlock_for_ota(void)
     nb_at_legacy_adapter_cancel((u16)SYS_RESOURCE_OWNER_OTA);
     nb_at_legacy_adapter_end_exclusive();
     nb_modem_ota_lock = 0U;
+    sys_cellular_set_enabled(BOOL_TRUE);
+    sys_mqtt_set_enabled(BOOL_TRUE);
+    sys_connectivity_set_enabled(BOOL_TRUE);
 }
 
 boolean_en nb_modem_locked_by_ota(void)
@@ -2738,8 +2832,7 @@ void changea_to_MQTT_modle(void)
     OTA_ENABLE=0;//�ر�OTA���е�MQTT
     OTA_ENABLE_state=0;//�͸������ϱ��Ǳ�֪ͨ��־
     gateway_state=GATEWAY_STATE_CYCLIC_SCAN_AND_REAPORT_DRIVER_DATA;            
-    //����OTA����ǰ��MQTT����ָ��
-    _4G_configModule_machine_star();
+    /* 阶段3新链路已在 unlock 中恢复，禁止再次启动旧连接状态机。 */
 }
 boolean_en OTA_ENABLE_IS_SET(void)
 {

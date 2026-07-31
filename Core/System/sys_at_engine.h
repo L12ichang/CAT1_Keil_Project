@@ -87,9 +87,21 @@ typedef struct
 extern void sys_at_engine_init(void);
 extern void sys_at_engine_process(void);
 extern boolean_en sys_at_engine_submit(const sys_at_request_st *request);
+extern boolean_en sys_at_engine_submit_continuation(
+    const sys_at_request_st *request,
+    const u8 *continuation,
+    u16 continuation_length,
+    const char *continuation_expected_token,
+    u32 continuation_timeout_ms);
 extern boolean_en sys_at_engine_busy(void);
 extern boolean_en sys_at_engine_cancel_owner(u16 owner_id);
 extern void sys_at_engine_set_urc_handler(
+    sys_at_line_handler_fn handler,
+    void *context);
+extern boolean_en sys_at_engine_add_urc_handler(
+    sys_at_line_handler_fn handler,
+    void *context);
+extern boolean_en sys_at_engine_remove_urc_handler(
     sys_at_line_handler_fn handler,
     void *context);
 extern boolean_en sys_at_engine_enter_raw_mode(

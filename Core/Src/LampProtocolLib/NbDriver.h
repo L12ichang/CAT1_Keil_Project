@@ -98,6 +98,12 @@ boolean_en pubsend_state_idle(void);
 uint32 nb_mqtt_get_publish_success_count(void);
 uint32 nb_mqtt_get_publish_fail_count(void);
 uint32 nb_mqtt_get_publish_timeout_count(void);
+void nb_mqtt_stage3_process_result(
+    u16 source_id,
+    u32 request_id,
+    u16 packet_id,
+    u16 session_generation,
+    u8 result);
 void  _4G_configModule_machine_star(void) ;
 boolean_en  _4G_configModule_machine_finish(void) ;
 void _4G_configModule_machine(void) ;

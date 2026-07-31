@@ -14,6 +14,9 @@
 #include "Json_Protocol.h"
 #include "TcpClient.h"
 #include "mqtt_zk_protocol.h"
+#include "sys_cellular.h"
+#include "sys_connectivity.h"
+#include "sys_mqtt.h"
 #define STATUS_NOT_CONNECTED 0
 #define STATUS_TCP_CONNECTED 1
 #define STATUS_LOG_IN_SUCCESS 2
@@ -22,6 +25,9 @@
 static  uint32  timer = 0;//1s��ʱ��
 static  uint8 tcpConnectState = STATUS_NOT_CONNECTED;//0��δ���ӣ�1��tcp�����ӣ�2���ѵ�¼
 static  uint8 module_signal_level = 0;//�ź�ǿ��
+static boolean_en network_bridge_configured = BOOL_FALSE;
+static boolean_en network_bridge_ready_notified = BOOL_FALSE;
+static u16 network_bridge_generation = 0U;
 
 #if APP_LOG_ENABLE
 static const char *tcp_connect_state_name(uint8 value)
@@ -204,6 +210,131 @@ void onNBEvent(uint8 subEvent, uint8 *pData, uint16 length)
     }
 }
 
+/*
+ * 阶段3临时 App 桥：只翻译传输配置、READY、消息和发布结果。
+ * 业务登录/会话仍保留在现有 App 层，阶段4再迁移。
+ */
+static void tcpClientNetworkBridgeProcess(void)
+{
+    sys_cellular_snapshot_st cellular;
+    sys_connectivity_snapshot_st connectivity;
+    sys_mqtt_message_st message;
+    sys_mqtt_publish_result_st publish_result;
+    sys_mqtt_config_st transport_config;
+    const zk_mqtt_config_t *legacy_config;
+    const zk_device_config_t *device_config;
+    int will_length;
+
+    sys_cellular_get_snapshot(&cellular);
+    if ((network_bridge_configured != BOOL_TRUE) &&
+        (cellular.imei_ready == BOOL_TRUE) &&
+        (cellular.iccid_ready == BOOL_TRUE))
+    {
+        memset(IMEI, 0, sizeof(IMEI));
+        memcpy(IMEI, cellular.imei, 15U);
+        memset(simCardICCID, 0, sizeof(simCardICCID));
+        memcpy(simCardICCID, cellular.iccid, 20U);
+        if (zk_mqtt_init() == BOOL_TRUE)
+        {
+            legacy_config = zk_mqtt_get_config();
+            if (legacy_config != NULL)
+            {
+                memset(&transport_config, 0, sizeof(transport_config));
+                device_config = zk_device_config_get();
+                if ((device_config != NULL) &&
+                    (device_config->svrIp[0] != '\0') &&
+                    (device_config->svrPort > 0) &&
+                    (device_config->svrPort <= 65535))
+                {
+                    strcpy(
+                        transport_config.server_host,
+                        device_config->svrIp);
+                    transport_config.server_port =
+                        (u16)device_config->svrPort;
+                }
+                else
+                {
+                    strcpy(
+                        transport_config.server_host,
+                        NETWORK_MQTT_SERVER_HOST);
+                    transport_config.server_port =
+                        NETWORK_MQTT_SERVER_PORT;
+                }
+                strcpy(transport_config.client_id, legacy_config->client_id);
+                strcpy(transport_config.username, legacy_config->username);
+                strcpy(transport_config.password, legacy_config->password);
+                strcpy(
+                    transport_config.downlink_topic,
+                    legacy_config->sub_topic);
+                strcpy(
+                    transport_config.upgrade_topic,
+                    legacy_config->sub_upgrade_topic);
+                strcpy(
+                    transport_config.will_topic,
+                    legacy_config->will_topic);
+                will_length = zk_make_offline_packet(
+                    (char *)transport_config.will_payload,
+                    sizeof(transport_config.will_payload));
+                if ((will_length > 0) &&
+                    (will_length <=
+                     (int)sizeof(transport_config.will_payload)))
+                {
+                    transport_config.will_payload_length =
+                        (u16)will_length;
+                }
+                if ((transport_config.will_payload_length > 0U) &&
+                    (sys_mqtt_configure(&transport_config) == BOOL_TRUE) &&
+                    (sys_connectivity_set_probe_topic(
+                         legacy_config->pub_topic) == BOOL_TRUE))
+                {
+                    network_bridge_configured = BOOL_TRUE;
+                }
+            }
+        }
+    }
+
+    sys_connectivity_get_snapshot(&connectivity);
+    if (connectivity.session_generation != network_bridge_generation)
+    {
+        if (network_bridge_ready_notified == BOOL_TRUE)
+        {
+            onNBEvent(NB_EVENT_LOST_CONNECTION, NULL, 0U);
+        }
+        network_bridge_generation = connectivity.session_generation;
+        network_bridge_ready_notified = BOOL_FALSE;
+    }
+    if ((connectivity.transport_ready == BOOL_TRUE) &&
+        (network_bridge_ready_notified != BOOL_TRUE))
+    {
+        network_bridge_ready_notified = BOOL_TRUE;
+        onNBEvent(NB_EVENT_CONNECTED, NULL, 0U);
+    }
+    else if ((connectivity.transport_ready != BOOL_TRUE) &&
+             (network_bridge_ready_notified == BOOL_TRUE))
+    {
+        network_bridge_ready_notified = BOOL_FALSE;
+        onNBEvent(NB_EVENT_LOST_CONNECTION, NULL, 0U);
+    }
+
+    while (sys_mqtt_get_message(&message) == BOOL_TRUE)
+    {
+        onNBEvent(
+            NB_EVENT_DATA,
+            (u8 *)message.payload,
+            message.payload_length);
+    }
+    while (sys_connectivity_get_publish_result(&publish_result) ==
+           BOOL_TRUE)
+    {
+        nb_mqtt_stage3_process_result(
+            publish_result.source_id,
+            publish_result.request_id,
+            publish_result.packet_id,
+            publish_result.session_generation,
+            (u8)publish_result.result);
+    }
+}
+
 
 /**
 *@brief   ����tcp�ͻ�������
@@ -211,6 +342,7 @@ void onNBEvent(uint8 subEvent, uint8 *pData, uint16 length)
 */
 void tcpClientProcess(void)
 {
+    tcpClientNetworkBridgeProcess();
     if (tcpConnectState == STATUS_NOT_CONNECTED) 
     {
         return;
@@ -252,6 +384,8 @@ void tcpClientInit(uint32 id, uint32 model, uint32 firmware)
 void mac_reset(void)
 {
  tcpClientInit(DEVICE_ID, DEVICE_MODEL, FIRMWARE_VERSION);
- _4G_configModule_machine_star();//���ϵ�  ����ģ��
- gateway_state=GATEWAY_STATE_POWER_DOWN;//����״̬
+ resetTcpState();
+ network_bridge_configured=BOOL_FALSE;
+ network_bridge_ready_notified=BOOL_FALSE;
+ network_bridge_generation=0U;
 }

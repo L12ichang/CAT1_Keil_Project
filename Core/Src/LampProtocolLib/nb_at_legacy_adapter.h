@@ -13,6 +13,7 @@ typedef struct
 } nb_at_legacy_adapter_stats_st;
 
 extern void nb_at_legacy_adapter_init(void);
+extern void nb_at_legacy_adapter_set_urc_enabled(boolean_en enabled);
 extern boolean_en nb_at_legacy_adapter_start(
     const char *command,
     u16 command_length,

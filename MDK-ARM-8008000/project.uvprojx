@@ -340,7 +340,7 @@
               <MiscControls></MiscControls>
               <Define>USE_HAL_DRIVER,STM32F103xE,APROM_OFFSET,APP_LOG_ENABLE=1,APP_OTA_LOG_ENABLE=1,ZK_ENABLE_SUNRISE_PLAN=1,BL0942_USE_FLOAT_XCAP_COMPENSATION=1,LEGACY_DATAPOINT_PROTOCOL_ENABLE=1,LEGACY_APP_PROCESS_ENABLE=1,LEGACY_ACTIVE_ENABLE=1</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F1xx/Include;../Drivers/CMSIS/Include;..\Core\App;..\Core\System;..\Core\Src;..\Core\Src\LampProtocolLib;..\Core\Src\gateway;..\Core\Src\CJSON</IncludePath>
+              <IncludePath>../Core/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F1xx/Include;../Drivers/CMSIS/Include;..\Core\App;..\Core\System;..\Core\Config;..\Core\Src;..\Core\Src\LampProtocolLib;..\Core\Src\gateway;..\Core\Src\CJSON</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -448,6 +448,21 @@
               <FileName>sys_time.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\System\sys_time.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_cellular.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\System\sys_cellular.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_mqtt.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\System\sys_mqtt.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_connectivity.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\System\sys_connectivity.c</FilePath>
             </File>
             <File>
               <FileName>sys_tick.c</FileName>
@@ -2268,7 +2283,7 @@
               <MiscControls></MiscControls>
               <Define>USE_HAL_DRIVER,STM32F103xE,APROM_OFFSET,APP_LOG_ENABLE=0,APP_OTA_LOG_ENABLE=0,APP_HEX_LOG_ENABLE=0,APP_PERF_PROFILE_ENABLE=0,APP_PWM_DEBUG_ENABLE=0,OTA_RAW_HEX_LOG_ENABLE=0,OTA_DEBUG_DOWNLOAD_ONLY=0,OTA_STREAM_TO_BACKUP_DEBUG=0,OTA_DEBUG_CLEAR_ALL_UFS=0,ZK_ENABLE_SUNRISE_PLAN=0,BL0942_USE_FLOAT_XCAP_COMPENSATION=0,ZK_PROTOCOL_ONLY=1,LEGACY_DATAPOINT_PROTOCOL_ENABLE=0,LEGACY_APP_PROCESS_ENABLE=0,LEGACY_ACTIVE_ENABLE=0</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F1xx/Include;../Drivers/CMSIS/Include;..\Core\App;..\Core\System;..\Core\Src;..\Core\Src\LampProtocolLib;..\Core\Src\gateway;..\Core\Src\CJSON</IncludePath>
+              <IncludePath>../Core/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F1xx/Include;../Drivers/CMSIS/Include;..\Core\App;..\Core\System;..\Core\Config;..\Core\Src;..\Core\Src\LampProtocolLib;..\Core\Src\gateway;..\Core\Src\CJSON</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -2376,6 +2391,21 @@
               <FileName>sys_time.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\System\sys_time.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_cellular.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\System\sys_cellular.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_mqtt.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\System\sys_mqtt.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_connectivity.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\System\sys_connectivity.c</FilePath>
             </File>
             <File>
               <FileName>sys_tick.c</FileName>

@@ -286,7 +286,7 @@ U = V_RMS / 1580
 u16 sqrt_16(u32 M) 
 { 
     u16 N, i; 
-    u32 tmp, ttp;   // 结果、循环计数 
+    u32 tmp, ttp;   // 结果、循环计数   q
     if (M ==0)              // 被开方数，开方结果也为0 
         return 0;
    N = 0;
@@ -413,7 +413,7 @@ void sys_bl0942_write(u8 addr, u32 dat)
     _tx_buffer[5] = ~(_tx_buffer[0]+_tx_buffer[1]+_tx_buffer[2]+_tx_buffer[3]+_tx_buffer[4]);
     hw_bl0942_uart_write(_tx_buffer, 6);
 }
-
+ z
 
 void sys_bl0942_write_enable(void)
 {

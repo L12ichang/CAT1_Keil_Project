@@ -28,8 +28,11 @@
 #include "oco.h"
 #include "Portable.h"
 #include "sys_bl0942.h"
+#include "sys_cellular.h"
+#include "sys_connectivity.h"
 #include "sys_data.h"
 #include "sys_event.h"
+#include "sys_mqtt.h"
 #include "sys_at_engine.h"
 #include "sys_resource.h"
 #include "sys_pow_drop_check.h"
@@ -221,6 +224,9 @@ void app_boot_init(void)
     meter_runtime_init();
     app_boot_clock_monitor();
     hw_4g_io_init();
+    sys_cellular_init();
+    sys_mqtt_init();
+    sys_connectivity_init();
     sys_bl0942_init();
     sys_pow_drop_check_inint();
     mac_reset();

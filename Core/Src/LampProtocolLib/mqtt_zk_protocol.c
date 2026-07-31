@@ -24,6 +24,7 @@
 #include "hw_flash.h"
 #include "flash_address_assignment.h"
 #include "sys_pwm.h"
+#include "sys_cellular.h"
 #include "ntc.h"
 #include "main.h"
 #include <stdio.h>
@@ -49,6 +50,7 @@ static uint32 zk_time_request_tick = 0;
 static uint32 zk_signal_query_tick = 0;
 static boolean_en zk_signal_query_pending = BOOL_FALSE;
 static boolean_en zk_signal_query_due = BOOL_TRUE;
+static u16 zk_signal_query_generation = 0U;
 static uint32 zk_json_message_counter = ZK_JSON_ID_FIRST_REPORT - 1;
 static uint16 zk_mqtt_packet_counter = 0;
 static u8 zk_last_brightness = 100;
@@ -1820,11 +1822,14 @@ boolean_en zk_dispatch_message(cJSON *root, const zk_message_header_t *header)
 
 static boolean_en zk_signal_query_process(uint32 now)
 {
+    sys_cellular_snapshot_st cellular;
+
+    sys_cellular_get_snapshot(&cellular);
     if (zk_signal_query_pending == BOOL_TRUE)
     {
-        if (send_AT_Command_machine_finish() == BOOL_TRUE)
+        if (cellular.signal_query_generation !=
+            zk_signal_query_generation)
         {
-            send_AT_Command_machine_idle();
             zk_signal_query_pending = BOOL_FALSE;
             zk_signal_query_tick = now;
             return BOOL_FALSE;
@@ -1840,13 +1845,12 @@ static boolean_en zk_signal_query_process(uint32 now)
     {
         return BOOL_FALSE;
     }
-    send_AT_Command_machine_star("AT+QENG=\"servingcell\"\r\n",
-                                 strlen("AT+QENG=\"servingcell\"\r\n"),
-                                 "OK",
-                                 50,
-                                 0);
-    zk_signal_query_due = BOOL_FALSE;
-    zk_signal_query_pending = BOOL_TRUE;
+    if (sys_cellular_request_signal_query() == BOOL_TRUE)
+    {
+        zk_signal_query_generation = cellular.signal_query_generation;
+        zk_signal_query_due = BOOL_FALSE;
+        zk_signal_query_pending = BOOL_TRUE;
+    }
     return BOOL_FALSE;
 }
 
