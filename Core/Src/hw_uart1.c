@@ -7,7 +7,6 @@ static u8 uart1_rx_byte;
 static u8 * _pTx;
 static u16 _tx_length;
 static u16 _tx_index;
-static u8 _timer;
 void HAL_UART_Rx1CpltCallback(UART_HandleTypeDef *huart)
 {
     if (huart->Instance == USART1)
@@ -66,9 +65,9 @@ void hw_uart1_send(u8* buf, u32 length)
    必须清除错误标志并重新挂起接收，否则USART1将永久收不到模组数据（假在线）。 */
 void hw_uart1_resume_rx(void)
 {
+    /* F1上ORE/FE/NE共用"读SR再读DR"序列清除，一次调用即清全部；
+       连续多次清会在清错期间把新到达的字节（DR）读走丢弃。 */
     __HAL_UART_CLEAR_OREFLAG(&huart1);
-    __HAL_UART_CLEAR_FEFLAG(&huart1);
-    __HAL_UART_CLEAR_NEFLAG(&huart1);
     huart1.ErrorCode = HAL_UART_ERROR_NONE;
     (void)HAL_UART_Receive_IT(&huart1, &uart1_rx_byte, 1);
 }

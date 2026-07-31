@@ -1,8 +1,8 @@
 # Codex 执行文档：OTA 可靠升级改造 + J-Link 烧录 + MQTT 实机闭环验证
 
-> 适用工程：当前 CAT.1/4G MQTT 项目，上传代码包 `Core(4).rar` 中的 `Core/Src/LampProtocolLib/ota.c`、`mqtt_zk_protocol.c`、`NbDriver.c`、`watchdog.c`、`hw_flash.c` 等。  
-> 当前现场条件：电脑已连接 J-Link；设备已接 J-Link；允许 Codex 自动编译、烧录、复位、发送 MQTT OTA 指令、抓日志、验证 OTA 结果。  
-> 当前服务器限制：不支持 Range 分片；不会返回 HTTP 206；GET 响应不稳定或不携带 `Content-Length`；4G 模块 HTTP/UFS 全量缓存路径会失败，日志出现过类似 `+QHTTPREADFILE: 729`。  
+> 适用工程：当前 CAT.1/4G MQTT 项目，上传代码包 `Core(4).rar` 中的 `Core/Src/LampProtocolLib/ota.c`、`mqtt_zk_protocol.c`、`NbDriver.c`、`watchdog.c`、`hw_flash.c` 等。
+> 当前现场条件：电脑已连接 J-Link；设备已接 J-Link；允许 Codex 自动编译、烧录、复位、发送 MQTT OTA 指令、抓日志、验证 OTA 结果。
+> 当前服务器限制：不支持 Range 分片；不会返回 HTTP 206；GET 响应不稳定或不携带 `Content-Length`；4G 模块 HTTP/UFS 全量缓存路径会失败，日志出现过类似 `+QHTTPREADFILE: 729`。
 
 ---
 
@@ -144,11 +144,11 @@ if (ota_stream_verify_backup() == BOOL_TRUE)
 
 含义：
 
-| 区域 | 地址 | 大小 |
-|---|---:|---:|
-| Boot | `0x08000000 ~ 0x08004FFF` | 20KB |
-| 参数区 | `0x08005000 ~ 0x08007FFF` | 12KB |
-| APP 区 | `0x08008000 ~ 0x08023FFF` | 112KB |
+| 区域       |                        地址 |  大小 |
+| ---------- | --------------------------: | ----: |
+| Boot       | `0x08000000 ~ 0x08004FFF` |  20KB |
+| 参数区     | `0x08005000 ~ 0x08007FFF` |  12KB |
+| APP 区     | `0x08008000 ~ 0x08023FFF` | 112KB |
 | OTA 备份区 | `0x08024000 ~ 0x0803FFFF` | 112KB |
 
 因此实际 MCU 必须至少 256KB Flash。若实物是 `STM32F103CBT6 / HK32F103CBT6A` 128KB，则 `0x08024000` 已经超出 Flash，双区 OTA 物理上不成立。
@@ -1262,21 +1262,21 @@ tools/ota_test/
 
 只有同时满足以下条件，才算 OTA 问题解决：
 
-| 项目 | 标准 |
-|---|---|
-| 编译 | 0 Error |
-| 固件大小 | APP 和 OTA 包不超过分区上限 |
-| 下载路径 | raw TCP + QIRD，不进入 QHTTPREADFILE |
-| Content-Length | 没有也能升级 |
-| 206 分片 | 不需要 206 |
-| 备份区写入 | 无越界，无 Flash verify mismatch |
-| 校验 | checksum、size、device_type 全部通过 |
-| 看门狗 | OTA 全过程不因 IWDG 复位失败 |
-| 中断 | UART 接收无持续 overflow/drop |
-| 日志 | 无 HEX 洪泛，无 debug-only 成功假象 |
-| Boot | 写升级标志并跳 Boot |
-| 新 APP | OTA 后新版本启动并 MQTT 在线 |
-| 回退 | 校验失败/中断失败时保留旧 APP |
+| 项目           | 标准                                 |
+| -------------- | ------------------------------------ |
+| 编译           | 0 Error                              |
+| 固件大小       | APP 和 OTA 包不超过分区上限          |
+| 下载路径       | raw TCP + QIRD，不进入 QHTTPREADFILE |
+| Content-Length | 没有也能升级                         |
+| 206 分片       | 不需要 206                           |
+| 备份区写入     | 无越界，无 Flash verify mismatch     |
+| 校验           | checksum、size、device_type 全部通过 |
+| 看门狗         | OTA 全过程不因 IWDG 复位失败         |
+| 中断           | UART 接收无持续 overflow/drop        |
+| 日志           | 无 HEX 洪泛，无 debug-only 成功假象  |
+| Boot           | 写升级标志并跳 Boot                  |
+| 新 APP         | OTA 后新版本启动并 MQTT 在线         |
+| 回退           | 校验失败/中断失败时保留旧 APP        |
 
 ---
 
@@ -1327,4 +1327,7 @@ tools/ota_test/
 3. 如果 MQTT broker 需要账号密码，Codex 要复用设备协议中的 IMEI 密码规则或使用现有测试工具配置。
 4. 如果没有串口日志，Codex 应通过 MQTT 上报、J-Link 读 Flash、J-Link reset、版本查询组合验证，不要强依赖串口。
 5. 如果 OTA URL 指向的文件不是经过 `pack_ota_firmware.py` 处理后的固件，必须先更新服务器文件，否则设备应拒绝升级。
+
+```
+
 ```

@@ -145,9 +145,8 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
       _bl0942_state = BL0942_STATE_IDLE;
       _index = 0;
       hw_bl0942_uart_abort_rx();
+      /* F1上ORE/FE/NE共用"读SR再读DR"序列清除，一次调用即清全部 */
       __HAL_UART_CLEAR_OREFLAG(&huart2);
-      __HAL_UART_CLEAR_FEFLAG(&huart2);
-      __HAL_UART_CLEAR_NEFLAG(&huart2);
       (void)HAL_UART_Receive_IT(&huart2, (uint8_t*)rx3_buffer, 1);
   }
   else if (huart->Instance == USART1)
