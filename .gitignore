@@ -69,3 +69,9 @@ Thumbs.db
 .vscode/
 .history/
 out/final_report/mqtt_login_publish_gate_20260705_014140.jsonl
+
+# Ignore untracked working files
+.cache/
+docs/out_current_correct.rar
+docs/out_current_correct/
+tools/current_calibration/
