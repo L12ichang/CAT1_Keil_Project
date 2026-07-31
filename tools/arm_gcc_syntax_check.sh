@@ -11,6 +11,18 @@ fi
 
 if [[ "$#" -eq 0 ]]; then
   set -- \
+    "${ROOT_DIR}/Core/Src/hw_uart1.c" \
+    "${ROOT_DIR}/Core/System/sys_resource.c" \
+    "${ROOT_DIR}/Core/System/sys_at_engine.c" \
+    "${ROOT_DIR}/Core/System/sys_cellular.c" \
+    "${ROOT_DIR}/Core/System/sys_mqtt.c" \
+    "${ROOT_DIR}/Core/System/sys_connectivity.c" \
+    "${ROOT_DIR}/Core/App/app_boot.c" \
+    "${ROOT_DIR}/Core/App/app_scheduler.c" \
+    "${ROOT_DIR}/Core/Src/LampProtocolLib/nb_at_legacy_adapter.c" \
+    "${ROOT_DIR}/Core/Src/LampProtocolLib/NbDriver.c" \
+    "${ROOT_DIR}/Core/Src/LampProtocolLib/TcpClient.c" \
+    "${ROOT_DIR}/Core/Src/LampProtocolLib/ota.c" \
     "${ROOT_DIR}/Core/Src/LampProtocolLib/mqtt_zk_protocol.c" \
     "${ROOT_DIR}/Core/Src/LampProtocolLib/zk_alarm.c" \
     "${ROOT_DIR}/Core/Src/LampProtocolLib/zk_runtime_stats.c" \
@@ -27,6 +39,9 @@ arm-none-eabi-gcc \
   -DAPROM_OFFSET \
   -isystem "${SDK_PATH}/usr/include" \
   -I"${ROOT_DIR}/Core/Inc" \
+  -I"${ROOT_DIR}/Core/App" \
+  -I"${ROOT_DIR}/Core/System" \
+  -I"${ROOT_DIR}/Core/Config" \
   -I"${ROOT_DIR}/Core/Src" \
   -I"${ROOT_DIR}/Core/Src/CJSON" \
   -I"${ROOT_DIR}/Core/Src/LampProtocolLib" \

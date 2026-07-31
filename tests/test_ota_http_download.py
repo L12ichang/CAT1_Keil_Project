@@ -135,7 +135,11 @@ class OtaHttpDownloadTests(unittest.TestCase):
             "static ota_raw_prompt_result_en ota_raw_wait_prompt",
             "static void ota_raw_query_socket_state",
         )
-        self.assertIn("dequeue(&usartRecvQueue, &dat)", prompt_waiter)
+        self.assertIn(
+            "nb_at_legacy_adapter_read_byte(&dat) == BOOL_TRUE",
+            prompt_waiter,
+        )
+        self.assertNotIn("usartRecvQueue", prompt_waiter)
         self.assertIn("dat == '>'", prompt_waiter)
         self.assertIn("+CME ERROR:", prompt_waiter)
         self.assertIn('"ERROR"', prompt_waiter)

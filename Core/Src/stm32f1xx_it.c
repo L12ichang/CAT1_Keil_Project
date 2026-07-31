@@ -24,6 +24,7 @@
 #include "common.h"
 #include "hw_tim2.h"
 #include "hw_tim5.h"
+#include "sys_time.h"
 
 
 /* Private includes ----------------------------------------------------------*/
@@ -171,23 +172,16 @@ void PendSV_Handler(void)
   /* USER CODE END PendSV_IRQn 1 */
 }
 
-/**
-  * @brief This function handles System tick timer.
-  */
-  
-extern void sys_timer_1ms(void);
+/************************************
+功能描述：推进 HAL 与系统单调毫秒时间基准
+输入参数：无
+输出返回：无
+注意：ISR 中不得增加 ADC、PWM、RTC、网络、Flash 或日志业务。
+*************************************/
 void SysTick_Handler(void)
 {
-  /* USER CODE BEGIN SysTick_IRQn 0 */
-
-  /* USER CODE END SysTick_IRQn 0 */
-  HAL_IncTick();
-  
-  sys_timer_1ms();
-
-  /* USER CODE BEGIN SysTick_IRQn 1 */
-
-  /* USER CODE END SysTick_IRQn 1 */
+    HAL_IncTick();
+    sys_time_tick_isr();
 }
 
 /******************************************************************************/

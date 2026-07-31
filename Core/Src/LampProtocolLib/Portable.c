@@ -1,26 +1,14 @@
 
 #include "Portable.h"
-#include "Queue.h"
 #include "Utils.h"
 #include "NbDriver.h"
 #include "FirmwareUpdater.h"
-#include "hw_uart1.h"   //调佣外部文件
 #include "hw_4g_io.h"
-
-#define   POW_ON()    pwr_on()
-#define   POW_OFF()   pwr_off()
-#define   UART_SEND(buf,size)    hw_uart1_send( buf, size);
+#include "nb_at_legacy_adapter.h"
 
 #define NB_PWRKEY_BOOT_PULSE_MS 550UL
 #define NB_RESET_ASSERT_MS      320UL
 #define NB_RESET_TO_PWRKEY_MS    20UL
-
-void powerUpNbModule(void)
-{
-    POW_ON();
-    delayMs(NB_PWRKEY_BOOT_PULSE_MS);
-    POW_OFF();
-}
 
 //++++++++++++++++重启特殊处理+++++++++++++++++++AT+QPOWD
 #define  IDLE_delay    0
@@ -115,42 +103,23 @@ void resetNbModule_machine(void)
 
 }
 
-#define UART_RECV_QUEUE_SIZE 4096
- uint8 queueBuf[UART_RECV_QUEUE_SIZE + 1];
-QUEUE  usartRecvQueue;
  uint8 uartSendingFlag = 0;
 uint8 CREG_common[11]="AT+CREG?\r\n";
-volatile uint32 usart_queue_drop_count = 0;
 
 void usartSendData(uint8 *pBuf, uint16 length)
 {
-   UART_SEND(pBuf, length);
+    (void)nb_at_legacy_adapter_send_raw(pBuf, length);
 }
 
 uint8 usartSendDataWithResult(uint8 *pBuf, uint16 length)
 {
-   return hw_uart1_send_with_result(pBuf, length);
-}
-
-void saveUsartByte(uint8 byte)
-{
-    if(enqueue(&usartRecvQueue, byte) == 0)
-    {
-        usart_queue_drop_count++;
-    }
+    return nb_at_legacy_adapter_send_raw(pBuf, length);
 }
 
 //system time
 static  volatile uint32 TickCount = 0;
-static  volatile uint32 timeDelay = 0;
 
-void delayMs(uint32 ms) 
-{
-    timeDelay = ms;
-    while (timeDelay);
-}
-
-uint32 Timer_GetTickCount(void) 
+uint32 Timer_GetTickCount(void)
 {
     return TickCount;
 }
@@ -175,16 +144,12 @@ uint8 Timer_PassedDelay(uint32 startTime, uint32 msDelay)
     }
 }
 
-void updateTimeTick(uint32 ms) 
-{   
+void updateTimeTick(uint32 ms)
+{
     TickCount += ms;
-    if (timeDelay > 0) 
-    {
-        timeDelay -= 10;
-    }
 }
 
 void portableInit(void)
 {
-    createQueue(&usartRecvQueue, UART_RECV_QUEUE_SIZE + 1, queueBuf);
+    nb_at_legacy_adapter_init();
 }

@@ -15,8 +15,8 @@
 #include "for_iap.h"
 #include "ota_config.h"
 #include "hw_flash.h"
-#include "Queue.h"
 #include "mqtt_zk_protocol.h"
+#include "nb_at_legacy_adapter.h"
 #include "watchdog.h"
 
 boolean_en get_checksum_status(void);
@@ -47,7 +47,6 @@ static u8 OTA_DATA_IS_READY=0;
 static u8 OTA_DATA_IS_finish=0;
 static u32  pfile=0;//固件字节指针位置
 #endif
-extern QUEUE  usartRecvQueue;//串口数据接收队列
 extern volatile uint32 usart_queue_drop_count;
 #if OTA_USE_QHTTPREADFILE_UFS && !OTA_DEBUG_DOWNLOAD_ONLY
 static u8 last_server_big_pick=0;
@@ -1046,7 +1045,7 @@ static ota_raw_prompt_result_en ota_raw_wait_prompt(u32 timeout_ms)
     }
     ota_feed_watchdog_if_enabled();
 
-    while (dequeue(&usartRecvQueue, &dat))
+    while (nb_at_legacy_adapter_read_byte(&dat) == BOOL_TRUE)
     {
         ota_raw_prompt_rx_bytes++;
         ota_raw_prompt_record_tail(dat);
@@ -1191,6 +1190,7 @@ static void ota_reset_for_bad_url(void)
     OTA_LOGW("fail reset disabled reason=bad_url\r\n");
     changea_to_MQTT_modle();
 #else
+    nb_modem_unlock_for_ota();
     soft_reset();
 #endif
 }
@@ -1439,6 +1439,7 @@ static void ota_reset_after_diag(void)
     OTA_LOGW("fail reset disabled: keep running and return mqtt\r\n");
     changea_to_MQTT_modle();
 #else
+    nb_modem_unlock_for_ota();
     HAL_Delay(300);
     soft_reset();
 #endif
@@ -1461,6 +1462,7 @@ static void ota_log_qhttpreadfile_error_detail(int err_code)
 
 static void ota_start_http_stop_cleanup(const char *reason)
 {
+    (void)nb_at_legacy_adapter_leave_raw_mode();
     ota_clear_rx_buffer();
     OTA_LOGI("http cleanup start reason=%s\r\n", (reason != NULL) ? reason : "unknown");
     ota_log_raw_tx("AT+QHTTPSTOP\r\n");
@@ -2021,7 +2023,7 @@ static boolean_en ota_stream_write_byte(u8 dat)
 
 #if !OTA_RAW_TCP_STREAM_DEBUG
 /* 从串口接收队列批量提取 qhttpread 包体并写入备份区。
- * 输入：无，数据源为 usartRecvQueue。
+ * 输入：无，数据源为阶段2 AT 适配层。
  * 输出：无，处理结果通过 ota_stream_finished 与 ota_stream_flash_error 等全局状态体现。
  * 关联：CONNECT_OTA_AT_QHTTPREAD_STREAM 状态周期性调用该函数，实现“收队列 -> 页缓存 -> Flash”流水线。 */
 static void ota_stream_process_queue(void)
@@ -2031,7 +2033,8 @@ static void ota_stream_process_queue(void)
     u32 now;
 
     budget = 0;
-    while (ota_stream_finished == 0U && dequeue(&usartRecvQueue, &dat))
+    while ((ota_stream_finished == 0U) &&
+           (nb_at_legacy_adapter_read_byte(&dat) == BOOL_TRUE))
     {
         if (ota_stream_write_byte(dat) != BOOL_TRUE)
         {
@@ -2143,6 +2146,7 @@ static void ota_start_qhttpurl(void)
 
 static void ota_raw_start_close(const char *reason, u8 success_path)
 {
+    (void)nb_at_legacy_adapter_leave_raw_mode();
     OTA_LOGI("raw tcp close reason=%s success=%u\r\n",
              (reason != NULL) ? reason : "unknown",
              success_path);
@@ -2617,9 +2621,21 @@ void _4G_OTA_machine(void)
                        "AT+QIRD=%u,%u\r\n",
                        (unsigned int)OTA_RAW_TCP_CONNECT_ID,
                        (unsigned int)OTA_RAW_TCP_QIRD_LEN);
+              if (nb_at_legacy_adapter_arm_raw_mode("+QIRD:") != BOOL_TRUE)
+              {
+                    OTA_LOGE("raw tcp qird arm owner rejected\r\n");
+                    ota_raw_start_close("qird_raw_arm", 0U);
+                    break;
+              }
               ota_log_raw_tx(common_send_buff);
               ota_clear_rx_buffer();
-              nb_modem_send_command_ota(common_send_buff, strlen(common_send_buff));
+              if (nb_modem_send_command_ota(
+                      common_send_buff,
+                      strlen(common_send_buff)) != (u8)HAL_OK)
+              {
+                    ota_raw_start_close("qird_uart_send", 0U);
+                    break;
+              }
               http_get_timer=Timer_GetTickCount();
               ota_connect_state=CONNECT_OTA_AT_RAW_QIRD;
               break;
@@ -2638,6 +2654,12 @@ void _4G_OTA_machine(void)
                             ota_raw_qird_remaining = qird_len;
                             if (qird_len == 0U)
                             {
+                                if (nb_at_legacy_adapter_leave_raw_mode() != BOOL_TRUE)
+                                {
+                                    OTA_LOGE("raw tcp qird zero release failed\r\n");
+                                    ota_raw_start_close("qird_zero_raw_release", 0U);
+                                    break;
+                                }
                                 ota_raw_qird_zero_count++;
                                 ota_connect_state=CONNECT_OTA_AT_RAW_QIRD_TRAILER;
                             }
@@ -2645,7 +2667,15 @@ void _4G_OTA_machine(void)
                             {
                                 ota_raw_qird_zero_count = 0U;
                                 ota_raw_idle_timer=Timer_GetTickCount();
-                                ota_connect_state=CONNECT_OTA_AT_RAW_QIRD_DATA;
+                                if (nb_at_legacy_adapter_enter_raw_mode() == BOOL_TRUE)
+                                {
+                                    ota_connect_state=CONNECT_OTA_AT_RAW_QIRD_DATA;
+                                }
+                                else
+                                {
+                                    OTA_LOGE("raw tcp qird parse owner rejected\r\n");
+                                    ota_raw_start_close("qird_raw_owner", 0U);
+                                }
                             }
                             ota_clear_rx_buffer();
                             break;
@@ -2680,7 +2710,8 @@ void _4G_OTA_machine(void)
                     ota_feed_watchdog_if_enabled();
                     qird_feed_counter = 0U;
                     // 在 QIRD 数据窗口中逐字节推进 HTTP 解析状态机，并把纯固件字节送入 OTA 备份区。
-                    while (ota_raw_qird_remaining > 0U && dequeue(&usartRecvQueue, &dat))
+                    while ((ota_raw_qird_remaining > 0U) &&
+                           (nb_at_legacy_adapter_read_byte(&dat) == BOOL_TRUE))
                     {
                         if (ota_raw_http_consume_byte(dat) != BOOL_TRUE)
                         {
@@ -2703,6 +2734,7 @@ void _4G_OTA_machine(void)
                     }
                     if (ota_raw_qird_remaining == 0U)
                     {
+                        (void)nb_at_legacy_adapter_leave_raw_mode();
                         ota_connect_state=CONNECT_OTA_AT_RAW_QIRD_TRAILER;
                     }
                     else if (Timer_PassedDelay(http_get_timer, 5000U))
@@ -3133,7 +3165,19 @@ void _4G_OTA_machine(void)
                 }
                 ota_log_raw_tx(common_send_buff);
                 ota_clear_rx_buffer();
-                nb_modem_send_command_ota(common_send_buff, strlen(common_send_buff));
+                if (nb_at_legacy_adapter_arm_raw_mode("CONNECT") != BOOL_TRUE)
+                {
+                    OTA_LOGE("qhttpread raw arm owner rejected\r\n");
+                    ota_start_http_stop_cleanup("qhttpread_raw_arm");
+                    break;
+                }
+                if (nb_modem_send_command_ota(
+                        common_send_buff,
+                        strlen(common_send_buff)) != (u8)HAL_OK)
+                {
+                    ota_start_http_stop_cleanup("qhttpread_uart_send");
+                    break;
+                }
                 http_get_timer=Timer_GetTickCount();
                 ota_connect_state=CONNECT_OTA_AT_QHTTPREAD_WAIT_CONNECT;
               break;
@@ -3149,8 +3193,16 @@ void _4G_OTA_machine(void)
                         {
                             OTA_LOGI("qhttpread stream connected: start binary body receive\r\n");
                             ota_clear_rx_buffer();
-                            http_get_timer=Timer_GetTickCount();
-                            ota_connect_state=CONNECT_OTA_AT_QHTTPREAD_STREAM;
+                            if (nb_at_legacy_adapter_enter_raw_mode() == BOOL_TRUE)
+                            {
+                                http_get_timer=Timer_GetTickCount();
+                                ota_connect_state=CONNECT_OTA_AT_QHTTPREAD_STREAM;
+                            }
+                            else
+                            {
+                                OTA_LOGE("qhttpread raw parse owner rejected\r\n");
+                                ota_start_http_stop_cleanup("qhttpread_raw_owner");
+                            }
                             break;
                         }
                         if (strstr((const char *)stringBuf, "ERROR") != NULL ||
@@ -3183,6 +3235,7 @@ void _4G_OTA_machine(void)
               }
               if (ota_stream_finished)
               {
+                    (void)nb_at_legacy_adapter_leave_raw_mode();
                     OTA_LOGI("qhttpread body saved to backup: wait trailer\r\n");
                     http_get_timer=Timer_GetTickCount();
                     ota_connect_state=CONNECT_OTA_AT_QHTTPREAD_TRAILER;
@@ -3757,8 +3810,7 @@ void  mcu_copy_firmware_machine(void)
           case  MCU_OTA_STATE_QFDWL :
               if(send_AT_Command_machine_finish()==TRUE)
                {
-                    // 清空上一轮串口残留后，正式进入 QFDWL URC 解析状态。
-                    flushQueue(&usartRecvQueue);
+                    // AT 引擎已分离事务响应，直接进入 QFDWL URC 解析状态。
                     memset(stringBuf,0x00,recvLength);//不清空会多耗点时间进出缓冲
                     recvLength=0;//
                     printf("----MCU_OTA_state=%d,=%d\n",MCU_OTA_state,MCU_OTA_state==MCU_OTA_STATE_QFDWL_GET_FIRMWARE);
@@ -3777,10 +3829,10 @@ void  mcu_copy_firmware_machine(void)
                        static u16 chec_size=0;
                        //    watchdog_feed_dog();
                        /* 逐字节识别 "+QFDWL: <size>,<xor>"。
-                        * 输入：usartRecvQueue 中的模块 URC 文本流。
+                        * 输入：阶段2 AT 适配层中的模块 URC 文本流。
                         * 输出：更新 tihs_time_SERVER_PICK_SIZE、firmware_total_size 与 SERVER_CHECSUM，
                         * 为后续 QFSEEK/QFREAD 分块搬运建立边界与传输层校验基准。 */
-                       while (dequeue(&usartRecvQueue, &dat))       //+QFDWL: 152937,0a31   //2B 51 46 44 57 4C 3A
+                       while (nb_at_legacy_adapter_read_byte(&dat) == BOOL_TRUE)       //+QFDWL: 152937,0a31   //2B 51 46 44 57 4C 3A
                        {
                               //  log_u32(1,  dat);
                                 switch(data_state)

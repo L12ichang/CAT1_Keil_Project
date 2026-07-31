@@ -3,7 +3,6 @@
 #include "stdio.h"
 #include "Portable.h"
 #include "Utils.h"
-#include "Queue.h"
 #include "TcpClient.h"
 #include "Protocol.h"
 #include "App.h"
@@ -15,7 +14,11 @@
 #include "ota.h"
 #include "type.h"
 #include "mqtt_zk_protocol.h"
-extern QUEUE  usartRecvQueue;//�������ݽ��ն���
+#include "nb_at_legacy_adapter.h"
+#include "sys_resource.h"
+#include "sys_cellular.h"
+#include "sys_connectivity.h"
+#include "sys_mqtt.h"
 #define RECV_BUF_LENGTH 600
 #define CONNECTING_MAX_WAIT_TIME 20
 #define CONNECTED_MAX_WAIT_TIME 5
@@ -28,6 +31,9 @@ extern QUEUE  usartRecvQueue;//�������ݽ��ն���
 #define NB_QMTCLOSE_TIMEOUT_MS 30000UL
 #define NB_QMTPUB_PROMPT_TIMEOUT_MS 5000UL
 #define NB_QMTPUB_ACK_TIMEOUT_MS 15000UL
+#define NB_QMTPUB_RESOURCE_LEASE_MS \
+    (NB_QMTPUB_PROMPT_TIMEOUT_MS + NB_QMTPUB_ACK_TIMEOUT_MS + 2000UL)
+#define NB_OTA_MODEM_LEASE_MS 1800000UL
 #define NB_AT_TIMEOUT_COUNT(ms) (((ms) + NB_AT_TICK_MS - 1UL) / NB_AT_TICK_MS)
 #define NB_AT_PROBE_TIMEOUT_MS 300UL
 #define NB_AT_READY_QUERY_INTERVAL_MS 500UL
@@ -49,7 +55,6 @@ static  NB_STATE state = NB_STATE_POWER_DOWN;//nbģ��״̬
 //static  uint8 *serverAddress;//���ӵķ�������ַ
 //static  uint8 serverAddressLength = 0;//��������ַ����
 //static  uint16 serverPort = 0;//�������˿ں�
-static  uint32 pub_timer=0;//����delay
  u8   OTA_ENABLE=0;
 static u8 nb_modem_ota_lock=0;
 static u8 nb_modem_ota_tx_buffer[NB_MODEM_OTA_TX_BUFFER_SIZE];
@@ -78,7 +83,6 @@ static boolean_en nb_offline_event_sent = BOOL_FALSE;
 static char nb_will_command[128];
 static char nb_will_payload[NB_WILL_PAYLOAD_SIZE];
 static u16 nb_will_payload_length = 0;
-static uint32 nb_will_tick = 0;
 
 typedef enum
 {
@@ -114,7 +118,6 @@ static NB_DISCONNECT_REASON_EN nb_disconnect_reason = NB_DISCONNECT_NONE;
 
 static void parseResult(uint8 *buf);
 static boolean_en nb_is_link_lost_line(uint8 *buf);
-static boolean_en nb_mqtt_publish_read_prompt(void);
 
 typedef enum
 {
@@ -268,32 +271,12 @@ void nb_mark_business_online(void)
 */
  uint16 readLine(uint8 *buf, uint16 *len, uint8 syncMode)
 {
-     uint8 count = 0;
-    do {
-             while (dequeue(&usartRecvQueue, buf + *len))
-            {                
-                 if (++(*len) >= RECV_BUF_LENGTH) 
-                {
-                    *len = 0;
-                }
-                if ((*len >= 2) && (buf[*len - 2] == '\r') && (buf[*len - 1] == '\n')) 
-                {
-                    if (*len == 2) 
-                    {
-                         *len = 0;//���˿���
-                         continue;
-                    }
-                    buf[*len] = 0;
-                    return *len;
-                }
-          }
-          if (syncMode) 
-           {
-               delayMs(20);
-           }
-       } while (syncMode && (++count < 100));
-
-    return 0;
+    /*
+     * 阶段 2：同步忙等模式已删除。旧调用统一从 AT 适配层取完整行，
+     * 后续阶段 3/8 将由专属 URC 订阅者替换本兼容入口。
+     */
+    (void)syncMode;
+    return nb_at_legacy_adapter_read_line(buf, len, RECV_BUF_LENGTH);
 }
 /**
 *@brief   �Ӵ������ݶ��ж�ȡһ���ַ���
@@ -306,7 +289,7 @@ void nb_mark_business_online(void)
 {
    
     do {
-            while (dequeue(&usartRecvQueue, buf + *len))
+            while (nb_at_legacy_adapter_read_byte(buf + *len) == BOOL_TRUE)
             {
                      if (++(*len) >( *firmwarelenth)+6) //����ģ������ĳ����쳣   �̼���β��\r''\n'��"OK\r\n"
                         {
@@ -336,16 +319,12 @@ void nb_mark_business_online(void)
 */
 static uint8 nb_modem_send_command_raw_result(void *command,uint16 length)
 {
-    flushQueue(&usartRecvQueue);
-   // printf("usartSendData=%s\n",command);
-    return usartSendDataWithResult((uint8 *)command, length);
+    return nb_at_legacy_adapter_send_raw((const u8 *)command, length);
 }
 
 static void nb_modem_send_command_raw(void *command,uint16 length)
 {
-    flushQueue(&usartRecvQueue);
-   // printf("usartSendData=%s\n",command);
-    usartSendData((uint8 *)command, length);
+    (void)nb_at_legacy_adapter_send_raw((const u8 *)command, length);
 }
 
 uint8 nb_modem_send_command_ota(void *command,uint16 length)
@@ -382,14 +361,11 @@ void sendCommand(void *command,uint16 length)
 }
     
 static SEND_COMMAND_state_en sendcommad_state= SEND_COMMAND_STATE_IDLE;
-static u32  wait_timer=0;
-
-static u32  read_counter=0;
-static u8   resend_counter=0;
 static char * atcommand;
 static u8 atlength;
 static char *atresponse;
 static u32 atwaitCount;
+static u16 at_owner_id = (u16)SYS_RESOURCE_OWNER_LEGACY_AT;
 static boolean_en sendcommand_failed = BOOL_FALSE;
 
 static void clear_imei_data(void);
@@ -639,8 +615,9 @@ void  send_AT_Command_machine_star(char *command,uint8 length, char *response,ui
     atlength =length;
     atresponse=  response;
     atwaitCount=waitCount;
-    read_counter=0;
-    resend_counter=0;
+    at_owner_id = nb_modem_ota_lock ?
+        (u16)SYS_RESOURCE_OWNER_OTA :
+        (u16)SYS_RESOURCE_OWNER_LEGACY_AT;
     sendcommand_failed = BOOL_FALSE;
     if (strstr((const char *)command, "AT+CGSN"))
     {
@@ -667,16 +644,27 @@ boolean_en  send_AT_Command_machine_finish(void)
 }
 void  send_AT_Command_machine_idle(void)
 {
+    if (nb_at_legacy_adapter_busy() == BOOL_TRUE)
+    {
+        nb_at_legacy_adapter_cancel(at_owner_id);
+    }
     sendcommad_state=SEND_COMMAND_STATE_IDLE ;
 }
 
 boolean_en nb_get_rsrp_dbm10(s32 *rsrp_dbm10)
 {
-    if (rsrp_ready == BOOL_FALSE || rsrp_dbm10 == 0)
+    sys_cellular_snapshot_st cellular;
+
+    if (rsrp_dbm10 == 0)
     {
         return BOOL_FALSE;
     }
-    *rsrp_dbm10 = nb_rsrp_dbm10;
+    sys_cellular_get_snapshot(&cellular);
+    if ((cellular.rsrp_dbm < -160) || (cellular.rsrp_dbm > -40))
+    {
+        return BOOL_FALSE;
+    }
+    *rsrp_dbm10 = (s32)cellular.rsrp_dbm * 10;
     return BOOL_TRUE;
 }
 
@@ -943,23 +931,6 @@ static void capture_identity_line(const u8 *line)
     }
 }
 
-static void send_AT_Command_machine_wait_or_retry(void)
-{
-    if(++read_counter<atwaitCount)
-    {
-        wait_timer=Timer_GetTickCount();//�ٴζ�ȡ
-    }
-    else
-    {
-        if (nb_at_command_is_qccid() == BOOL_TRUE &&
-            iccid_fail_reason == NB_ICCID_FAIL_NONE)
-        {
-            iccid_fail_reason = NB_ICCID_FAIL_TIMEOUT;
-        }
-        sendcommad_state= SEND_COMMAND_STATE_READY;//���ζ�ȡ���ɹ��ط�
-    }
-}
-
 static boolean_en nb_mqtt_publish_owns_uart(void)
 {
     switch (pubsend_state)
@@ -986,6 +957,11 @@ static boolean_en nb_mqtt_publish_owns_uart(void)
 */
  void send_AT_Command_machine(void)
 {
+    sys_at_result_en result;
+    u16 response_length;
+    u8 retry_max;
+    u32 timeout_ms;
+
     if (nb_mqtt_publish_owns_uart() == BOOL_TRUE)
     {
         return;
@@ -999,125 +975,113 @@ static boolean_en nb_mqtt_publish_owns_uart(void)
     switch (sendcommad_state)
     {
         case  SEND_COMMAND_STATE_IDLE :
-               break;
+            break;
+
         case  SEND_COMMAND_STATE_READY:
         case  SEND_COMMAND_STATE_RESETING :
+            timeout_ms = atwaitCount * NB_AT_TICK_MS;
+            if (timeout_ms < NB_AT_TICK_MS)
+            {
+                timeout_ms = NB_AT_TICK_MS;
+            }
+            /*
+             * WILL payload 已在模块提示符后进入数据阶段，重复发送会被当作
+             * 新 payload/命令破坏同步；失败由 WILL_RESULT 统一发起重连。
+             */
+            if (atcommand == nb_will_payload)
+            {
+                retry_max = 0U;
+            }
+            else
+            {
+                retry_max = (nb_at_command_is_qccid() == BOOL_TRUE) ?
+                    (u8)(NB_ICCID_MAX_ATTEMPTS - 1U) :
+                    (u8)(nb_at_command_max_attempts() - 1U);
+            }
+            if (nb_at_legacy_adapter_start(
+                    atcommand,
+                    atlength,
+                    atresponse,
+                    timeout_ms,
+                    retry_max,
+                    at_owner_id,
+                    (atresponse != NULL &&
+                     strcmp(atresponse, ">") == 0) ?
+                        BOOL_TRUE : BOOL_FALSE) == BOOL_TRUE)
+            {
                 if (nb_at_command_is_qccid() == BOOL_TRUE)
                 {
-                    if (resend_counter >= NB_ICCID_MAX_ATTEMPTS)
-                    {
-                        if (iccid_fail_reason == NB_ICCID_FAIL_NONE)
-                        {
-                            iccid_fail_reason = NB_ICCID_FAIL_TIMEOUT;
-                        }
-                        nb_set_default_iccid();
-                        printf("[ICCID] failed reason=%s attempts=%u digits=%u use default invalid iccid=%s\n",
-                               nb_iccid_fail_reason_name(),
-                               (unsigned int)NB_ICCID_MAX_ATTEMPTS,
-                               (unsigned int)iccid_last_digit_count,
-                               NB_ICCID_DEFAULT);
-                        resend_counter=0;
-                        sendcommand_failed = BOOL_FALSE;
-                        sendcommad_state= SEND_COMMAND_STATE_RXING_COMPLETE;
-                        break;
-                    }
-                    ++resend_counter;
+                    printf("[ICCID] AT engine attempts=%u\n",
+                           (unsigned int)(retry_max + 1U));
                 }
-                else if (resend_counter >= nb_at_command_max_attempts())
-                {
-                    resend_counter=0;
-                    send_AT_Command_machine_mark_failed("timeout");
-                    sendcommad_state= SEND_COMMAND_STATE_RXING_COMPLETE;
-                    break; 
-                 }
-                 else
-                 {
-                    ++resend_counter;
-                 }
-                 
-                  sendcommad_state= SEND_COMMAND_STATE_TXING;
-
-               break;
-        case  SEND_COMMAND_STATE_TXING:
-               {
-                    if (nb_at_command_is_qccid() == BOOL_TRUE)
-                    {
-                        printf("[ICCID] attempt=%u send AT+QCCID\n", (unsigned int)resend_counter);
-                    }
-                    if (nb_modem_ota_lock)
-                    {
-                        nb_modem_send_command_ota((uint8*)atcommand, atlength);
-                    }
-                    else
-                    {
-                        sendCommand((uint8*)atcommand, atlength);
-                    }
-                    sendcommad_state= SEND_COMMAND_STATE_RXING;
-                    wait_timer=Timer_GetTickCount();
-                    read_counter=0;//�ض�����
-               }
-              break;
-        
-        case  SEND_COMMAND_STATE_RXING :   
-              if(Timer_PassedDelay(wait_timer, 20))
-               {
-                   if (readLine(stringBuf, &recvLength, 0))
-                    {
-                        capture_identity_line(stringBuf);
-                        if (nb_at_command_is_qccid() == BOOL_TRUE &&
-                            strstr((const char *)stringBuf, "ERROR") != 0)
-                        {
-                            iccid_fail_reason = NB_ICCID_FAIL_ERROR;
-                            printf("[ICCID] error line=%s", (const char *)stringBuf);
-                        }
-                        if (strstr((const char *) stringBuf, atresponse))
-                        {
-                            if (strstr((const char *)atcommand, "AT+CGSN") &&
-                                nb_imei_is_ready() == BOOL_FALSE)
-                            {
-                                recvLength = 0;
-                                send_AT_Command_machine_wait_or_retry();
-                                break;
-                            }
-                            if (nb_at_command_is_qccid() == BOOL_TRUE &&
-                                nb_iccid_is_ready() == BOOL_FALSE)
-                            {
-                                recvLength = 0;
-                                send_AT_Command_machine_wait_or_retry();
-                                break;
-                            }
-                            recvLength = 0;
-                            sendcommand_failed = BOOL_FALSE;
-                            sendcommad_state= SEND_COMMAND_STATE_RXING_COMPLETE;
-                            resend_counter=0;//�ط���������
-                        }
-                        else if (nb_at_command_terminal_failure(stringBuf) == BOOL_TRUE)
-                        {
-                            recvLength = 0;
-                            resend_counter=0;
-                            send_AT_Command_machine_mark_failed("terminal");
-                            sendcommad_state= SEND_COMMAND_STATE_RXING_COMPLETE;
-                        }
-                        else
-                        {
-                            recvLength = 0;
-                            send_AT_Command_machine_wait_or_retry();
-                        }
-                    }
-                    else
-                    {
-                        send_AT_Command_machine_wait_or_retry();
-                    }
-             }          
-             break;
-          case  SEND_COMMAND_STATE_RXING_COMPLETE :
+                sendcommad_state = SEND_COMMAND_STATE_RXING;
+            }
             break;
-       
-        default :
-          break;
+
+        case SEND_COMMAND_STATE_RXING:
+            while (nb_at_legacy_adapter_read_response_line(
+                       stringBuf,
+                       sizeof(stringBuf),
+                       &response_length) == BOOL_TRUE)
+            {
+                recvLength = response_length;
+                capture_identity_line(stringBuf);
+                if ((nb_at_command_is_qccid() == BOOL_TRUE) &&
+                    (strstr((const char *)stringBuf, "ERROR") != NULL))
+                {
+                    iccid_fail_reason = NB_ICCID_FAIL_ERROR;
+                }
+                if (nb_at_command_terminal_failure(stringBuf) == BOOL_TRUE)
+                {
+                    send_AT_Command_machine_mark_failed("terminal");
+                }
+                recvLength = 0U;
+            }
+
+            if (nb_at_legacy_adapter_take_result(&result) == BOOL_TRUE)
+            {
+                if (result != SYS_AT_RESULT_OK)
+                {
+                    if ((nb_at_command_is_qccid() == BOOL_TRUE) &&
+                        (iccid_fail_reason == NB_ICCID_FAIL_NONE))
+                    {
+                        iccid_fail_reason = NB_ICCID_FAIL_TIMEOUT;
+                    }
+                    send_AT_Command_machine_mark_failed(
+                        (result == SYS_AT_RESULT_TIMEOUT) ?
+                            "timeout" : "at_engine");
+                }
+                if ((result == SYS_AT_RESULT_OK) &&
+                    (strstr((const char *)atcommand, "AT+CGSN") != NULL) &&
+                    (nb_imei_is_ready() != BOOL_TRUE))
+                {
+                    send_AT_Command_machine_mark_failed("imei_invalid");
+                }
+                if ((nb_at_command_is_qccid() == BOOL_TRUE) &&
+                    (nb_iccid_is_ready() != BOOL_TRUE))
+                {
+                    if (iccid_fail_reason == NB_ICCID_FAIL_NONE)
+                    {
+                        iccid_fail_reason = NB_ICCID_FAIL_BAD_LENGTH;
+                    }
+                    nb_set_default_iccid();
+                    printf("[ICCID] failed reason=%s attempts=%u digits=%u use default invalid iccid=%s\n",
+                           nb_iccid_fail_reason_name(),
+                           (unsigned int)NB_ICCID_MAX_ATTEMPTS,
+                           (unsigned int)iccid_last_digit_count,
+                           NB_ICCID_DEFAULT);
+                }
+                sendcommad_state = SEND_COMMAND_STATE_RXING_COMPLETE;
+            }
+            break;
+
+        case SEND_COMMAND_STATE_RXING_COMPLETE:
+            break;
+
+        default:
+            sendcommad_state = SEND_COMMAND_STATE_IDLE;
+            break;
     }
-    
-    
 }
 
 
@@ -1633,47 +1597,45 @@ void _4G_configModule_machine(void)
                     break;
                 }
                 send_AT_Command_machine_idle();
-                sendCommand((uint8 *)nb_will_command, (uint16)strlen(nb_will_command));
-                nb_will_tick = Timer_GetTickCount();
+                send_AT_Command_machine_star(
+                    nb_will_command,
+                    (uint8)strlen(nb_will_command),
+                    ">",
+                    NB_AT_TIMEOUT_COUNT(5000UL),
+                    0);
                 connect_state = CONNECT_CONFIG_AT_WILL_PROMPT;
             }
             break;
 
         case CONNECT_CONFIG_AT_WILL_PROMPT:
-            if (nb_mqtt_publish_read_prompt() == BOOL_TRUE)
+            if (send_AT_Command_machine_finish() == BOOL_TRUE)
             {
-                usartSendData((uint8 *)nb_will_payload, nb_will_payload_length);
-                recvLength = 0;
-                nb_will_tick = Timer_GetTickCount();
+                if (send_AT_Command_machine_failed() == BOOL_TRUE)
+                {
+                    nb_request_reconnect("WILL_PROMPT");
+                    break;
+                }
+                send_AT_Command_machine_idle();
+                send_AT_Command_machine_star(
+                    nb_will_payload,
+                    (uint8)nb_will_payload_length,
+                    "OK",
+                    NB_AT_TIMEOUT_COUNT(5000UL),
+                    0);
                 connect_state = CONNECT_CONFIG_AT_WILL_RESULT;
-            }
-            else if (Timer_PassedDelay(nb_will_tick, 5000UL) == BOOL_TRUE)
-            {
-                nb_request_reconnect("WILL_PROMPT");
             }
             break;
 
         case CONNECT_CONFIG_AT_WILL_RESULT:
-            if (readLine(stringBuf, &recvLength, 0))
+            if (send_AT_Command_machine_finish() == BOOL_TRUE)
             {
-                if (strstr((const char *)stringBuf, "OK") != 0)
+                if (send_AT_Command_machine_failed() == BOOL_TRUE)
                 {
-                    recvLength = 0;
-                    nb_start_qmtopen();
-                }
-                else if (strstr((const char *)stringBuf, "ERROR") != 0)
-                {
-                    recvLength = 0;
                     nb_request_reconnect("WILL_RESULT");
+                    break;
                 }
-                else
-                {
-                    recvLength = 0;
-                }
-            }
-            else if (Timer_PassedDelay(nb_will_tick, 5000UL) == BOOL_TRUE)
-            {
-                nb_request_reconnect("WILL_TIMEOUT");
+                send_AT_Command_machine_idle();
+                nb_start_qmtopen();
             }
             break;
 
@@ -1851,7 +1813,6 @@ void nbEnterIDLE(void) {                                        //--------------
     recvLength = 0;
     sendCommandAndReceiveResponse("AT+QICLOSE=0\r\n", 14, "CLOSE OK", 20, 0);
     reconnectCount = 0;
-    flushQueue(&usartRecvQueue);
     state = NB_STATE_IDLE;
     idleTimer = Timer_GetTickCount();
 #ifdef NB_DEBUG_PRINT
@@ -1879,8 +1840,27 @@ static uint16 pub_msg_id=0;
 static u32 nb_mqtt_pub_success_count=0;
 static u32 nb_mqtt_pub_fail_count=0;
 static u32 nb_mqtt_pub_timeout_count=0;
+static u32 nb_stage3_publish_request_id=1U;
+static u32 nb_stage3_active_request_id=0U;
+static sys_resource_token_st nb_mqtt_modem_token;
+static boolean_en nb_mqtt_modem_token_valid=BOOL_FALSE;
+static boolean_en nb_mqtt_ack_seen=BOOL_FALSE;
+static boolean_en nb_mqtt_ack_success=BOOL_FALSE;
+static boolean_en nb_mqtt_ack_link_lost=BOOL_FALSE;
 //
 static  char sendStringBuf3[128];
+
+static void nb_mqtt_release_modem_resource(void)
+{
+    if (nb_mqtt_modem_token_valid == BOOL_TRUE)
+    {
+        nb_at_legacy_adapter_cancel(
+            (u16)SYS_RESOURCE_OWNER_LEGACY_MQTT);
+        (void)sys_resource_release(&nb_mqtt_modem_token);
+        memset(&nb_mqtt_modem_token, 0, sizeof(nb_mqtt_modem_token));
+        nb_mqtt_modem_token_valid = BOOL_FALSE;
+    }
+}
 
 static boolean_en nb_at_command_is_busy(void)
 {
@@ -1929,30 +1909,27 @@ static uint8 nb_mqtt_publish_prepare(const char *topic, const uint8 *payload, ui
     }
 
     memcpy(pubDataBuf, payload, length);
+    if (sys_resource_acquire(
+            SYS_RESOURCE_MODEM_EXCLUSIVE,
+            (u16)SYS_RESOURCE_OWNER_LEGACY_MQTT,
+            NB_QMTPUB_RESOURCE_LEASE_MS,
+            &nb_mqtt_modem_token) != BOOL_TRUE)
+    {
+        return NB_ERROR_SEND_FAIL;
+    }
+    nb_mqtt_modem_token_valid = BOOL_TRUE;
     pubData = pubDataBuf;
     publength = length;
     pub_en_flag = 0;
+    nb_mqtt_ack_seen = BOOL_FALSE;
+    nb_mqtt_ack_success = BOOL_FALSE;
+    nb_mqtt_ack_link_lost = BOOL_FALSE;
     pubsend_state = PUBSEDN_STATE_SEND_HEADER;
-    pub_timer = Timer_GetTickCount();
     printf("[MQTT] publish topic=%s len=%u pkt=%u\n",
            topic,
            (unsigned int)length,
            (unsigned int)pub_msg_id);
     return NB_ERROR_NONE;
-}
-
-static boolean_en nb_mqtt_publish_read_prompt(void)
-{
-    uint8 ch;
-
-    while (dequeue(&usartRecvQueue, &ch))
-    {
-        if (ch == '>')
-        {
-            return BOOL_TRUE;
-        }
-    }
-    return BOOL_FALSE;
 }
 
 static boolean_en nb_mqtt_parse_publish_ack(const uint8 *line, unsigned int *packet_id, int *result)
@@ -2026,6 +2003,7 @@ static void nb_mqtt_publish_fail(const char *reason, boolean_en timeout)
            nb_mqtt_pub_fail_count,
            nb_mqtt_pub_timeout_count);
     pub_en_flag = 0;
+    nb_mqtt_release_modem_resource();
     pubsend_state = PUBSEDN_STATE_FAIL;
 }
 
@@ -2037,11 +2015,12 @@ uint8 nbSendTcpData(uint8 *pData, uint16 length)
     {
         return NB_ERROR_SEND_FAIL;
     }
-    if (pData == 0 || length == 0 || length >= sizeof(pubDataBuf))
+    if (pData == 0 || length == 0 ||
+        length > NETWORK_MQTT_PAYLOAD_CAPACITY)
     {
         return NB_ERROR_SEND_FAIL;
     }
-    if (pubsend_is_busy() == BOOL_TRUE)
+    if (pubsend_state != PUBSEDN_STATE_IDLE)
     {
         return NB_ERROR_SEND_FAIL;
     }
@@ -2051,7 +2030,24 @@ uint8 nbSendTcpData(uint8 *pData, uint16 length)
     {
         return NB_ERROR_SEND_FAIL;
     }
-    return nb_mqtt_publish_prepare(topic, pData, length);
+    nb_stage3_active_request_id = nb_stage3_publish_request_id++;
+    if (nb_stage3_publish_request_id == 0U)
+    {
+        nb_stage3_publish_request_id = 1U;
+    }
+    if (sys_mqtt_publish(
+            topic,
+            pData,
+            length,
+            5U,
+            NETWORK_SOURCE_LEGACY_APP,
+            nb_stage3_active_request_id) != BOOL_TRUE)
+    {
+        nb_stage3_active_request_id = 0U;
+        return NB_ERROR_SEND_FAIL;
+    }
+    pubsend_state = PUBSEDN_STATE_SEND_HEADER;
+    return NB_ERROR_NONE;
 }
 uint8 g4Send_MQTT_Data(char *topic,char *pData)
 {
@@ -2083,16 +2079,33 @@ uint8 g4Send_MQTT_Data(char *topic,char *pData)
     }
 #endif
     length = (uint16)strlen(pData);
-    if (length == 0 || length >= sizeof(pubDataBuf))
+    if (length == 0 || length > NETWORK_MQTT_PAYLOAD_CAPACITY)
     {
         return NB_ERROR_SEND_FAIL;
     }
-    if (pubsend_is_busy() == BOOL_TRUE)
+    if (pubsend_state != PUBSEDN_STATE_IDLE)
     {
         return NB_ERROR_SEND_FAIL;
     }
 
-    return nb_mqtt_publish_prepare(pub_topic, (uint8 *)pData, length);
+    nb_stage3_active_request_id = nb_stage3_publish_request_id++;
+    if (nb_stage3_publish_request_id == 0U)
+    {
+        nb_stage3_publish_request_id = 1U;
+    }
+    if (sys_mqtt_publish(
+            pub_topic,
+            (const u8 *)pData,
+            length,
+            5U,
+            NETWORK_SOURCE_LEGACY_APP,
+            nb_stage3_active_request_id) != BOOL_TRUE)
+    {
+        nb_stage3_active_request_id = 0U;
+        return NB_ERROR_SEND_FAIL;
+    }
+    pubsend_state = PUBSEDN_STATE_SEND_HEADER;
+    return NB_ERROR_NONE;
 }
 
 boolean_en pubsend_state_finish()
@@ -2107,7 +2120,40 @@ boolean_en pubsend_state_finish()
 }
 boolean_en pubsend_state_idle()
 {
-    return (pubsend_is_busy() == BOOL_FALSE) ? BOOL_TRUE : BOOL_FALSE;
+    return (pubsend_state == PUBSEDN_STATE_IDLE) ?
+        BOOL_TRUE : BOOL_FALSE;
+}
+
+void nb_mqtt_stage3_process_result(
+    u16 source_id,
+    u32 request_id,
+    u16 packet_id,
+    u16 session_generation,
+    u8 result)
+{
+    (void)packet_id;
+    (void)session_generation;
+    if ((source_id != NETWORK_SOURCE_LEGACY_APP) ||
+        (request_id == 0U) ||
+        (request_id != nb_stage3_active_request_id))
+    {
+        return;
+    }
+    nb_stage3_active_request_id = 0U;
+    if (result == (u8)SYS_MQTT_RESULT_SUCCESS)
+    {
+        nb_mqtt_pub_success_count++;
+        pubsend_state = PUBSEDN_STATE_SENDFINISH;
+    }
+    else
+    {
+        nb_mqtt_pub_fail_count++;
+        if (result == (u8)SYS_MQTT_RESULT_TIMEOUT)
+        {
+            nb_mqtt_pub_timeout_count++;
+        }
+        pubsend_state = PUBSEDN_STATE_FAIL;
+    }
 }
 
 uint32 nb_mqtt_get_publish_success_count(void)
@@ -2129,26 +2175,47 @@ uint32 nb_mqtt_get_publish_timeout_count(void)
 void pubsend_state_set_idle(void)
 {
     pub_en_flag=0;
+    nb_stage3_active_request_id=0U;
+    nb_mqtt_release_modem_resource();
     pubsend_state=PUBSEDN_STATE_IDLE;
 }
 
 void nb_modem_lock_for_ota(void)
 {
-    if (nb_modem_ota_lock == 0U)
+    if (nb_modem_ota_lock != 0U)
     {
-        OTA_LOGI("modem ota lock on\r\n");
+        return;
     }
+
+    /*
+     * OTA handoff：先冻结新提交并同步取消活动事务，再申请独占 token。
+     * 申请失败时恢复正常三模块，调用方可在下一轮重试。
+     */
+    sys_connectivity_set_enabled(BOOL_FALSE);
+    sys_mqtt_set_enabled(BOOL_FALSE);
+    sys_cellular_set_enabled(BOOL_FALSE);
+    nb_mqtt_release_modem_resource();
+    nb_at_legacy_adapter_cancel((u16)SYS_RESOURCE_OWNER_LEGACY_AT);
+    if (nb_at_legacy_adapter_begin_exclusive(
+            (u16)SYS_RESOURCE_OWNER_OTA,
+            NB_OTA_MODEM_LEASE_MS) != BOOL_TRUE)
+    {
+        OTA_LOGE("modem ota exclusive acquire failed\r\n");
+        sys_cellular_set_enabled(BOOL_TRUE);
+        sys_mqtt_set_enabled(BOOL_TRUE);
+        sys_connectivity_set_enabled(BOOL_TRUE);
+        return;
+    }
+
+    OTA_LOGI("modem ota lock on owner=%u generation=%u\r\n",
+             (unsigned int)SYS_RESOURCE_OWNER_OTA,
+             (unsigned int)nb_at_legacy_adapter_exclusive_generation());
     nb_modem_ota_lock = 1U;
-    if (nb_at_command_allowed_during_ota(atcommand) == BOOL_FALSE)
-    {
-        atcommand = 0;
-        atresponse = 0;
-        atlength = 0;
-        atwaitCount = 0;
-        read_counter = 0;
-        resend_counter = 0;
-        sendcommad_state= SEND_COMMAND_STATE_RXING_COMPLETE;
-    }
+    atcommand = 0;
+    atresponse = 0;
+    atlength = 0;
+    atwaitCount = 0;
+    sendcommad_state= SEND_COMMAND_STATE_RXING_COMPLETE;
     pub_en_flag = 0U;
     pubsend_state = PUBSEDN_STATE_IDLE;
 }
@@ -2159,7 +2226,12 @@ void nb_modem_unlock_for_ota(void)
     {
         OTA_LOGI("modem ota lock off\r\n");
     }
+    nb_at_legacy_adapter_cancel((u16)SYS_RESOURCE_OWNER_OTA);
+    nb_at_legacy_adapter_end_exclusive();
     nb_modem_ota_lock = 0U;
+    sys_cellular_set_enabled(BOOL_TRUE);
+    sys_mqtt_set_enabled(BOOL_TRUE);
+    sys_connectivity_set_enabled(BOOL_TRUE);
 }
 
 boolean_en nb_modem_locked_by_ota(void)
@@ -2169,6 +2241,9 @@ boolean_en nb_modem_locked_by_ota(void)
 
 void nbSendTcpData_sm(void)
 {
+    sys_at_result_en at_result;
+    u16 response_length;
+
     if (nb_modem_ota_lock)
     {
         return;
@@ -2178,77 +2253,118 @@ void nbSendTcpData_sm(void)
         case PUBSEDN_STATE_IDLE:
              break;
         case PUBSEDN_STATE_SEND_HEADER:
-              sendCommand((uint8*)sendStringBuf3, strlen(sendStringBuf3));
-              recvLength = 0;
-              pub_timer = Timer_GetTickCount();
-              pubsend_state = PUBSEDN_STATE_WAIT_PROMPT;
+              if (nb_at_legacy_adapter_start(
+                      sendStringBuf3,
+                      (u16)strlen(sendStringBuf3),
+                      ">",
+                      NB_QMTPUB_PROMPT_TIMEOUT_MS,
+                      0U,
+                      (u16)SYS_RESOURCE_OWNER_LEGACY_MQTT,
+                      BOOL_TRUE) == BOOL_TRUE)
+              {
+                  pubsend_state = PUBSEDN_STATE_WAIT_PROMPT;
+              }
+              else
+              {
+                  nb_mqtt_publish_fail("prompt_submit", BOOL_FALSE);
+              }
                break;
         case PUBSEDN_STATE_WAIT_PROMPT:
-              if (nb_mqtt_publish_read_prompt() == BOOL_TRUE)
+              if (nb_at_legacy_adapter_take_result(&at_result) == BOOL_TRUE)
               {
-                  pubsend_state = PUBSEDN_STATE_SEND_PAYLOAD;
-              }
-              else if (Timer_PassedDelay(pub_timer, NB_QMTPUB_PROMPT_TIMEOUT_MS))
-              {
-                  nb_mqtt_publish_fail("prompt_timeout", BOOL_TRUE);
-                  if (zk_ota_is_busy() == BOOL_FALSE)
+                  if (at_result == SYS_AT_RESULT_OK)
                   {
-                      nb_request_reconnect("PUBLISH_PROMPT_TIMEOUT");
+                      pubsend_state = PUBSEDN_STATE_SEND_PAYLOAD;
+                  }
+                  else
+                  {
+                      nb_mqtt_publish_fail(
+                          "prompt_timeout",
+                          (at_result == SYS_AT_RESULT_TIMEOUT) ?
+                              BOOL_TRUE : BOOL_FALSE);
+                      if (zk_ota_is_busy() == BOOL_FALSE)
+                      {
+                          nb_request_reconnect("PUBLISH_PROMPT_TIMEOUT");
+                      }
                   }
               }
               break;
         case PUBSEDN_STATE_SEND_PAYLOAD:
               printf("[MQTT] publish payload len=%u\n", (unsigned int)publength);
-              usartSendData(pubData, publength);
-              recvLength = 0;
-              pub_timer = Timer_GetTickCount();
+              if (nb_at_legacy_adapter_send_raw(pubData, publength) !=
+                  (u8)HAL_OK)
+              {
+                  nb_mqtt_publish_fail("payload_tx", BOOL_FALSE);
+                  break;
+              }
+              if (nb_at_legacy_adapter_start(
+                      "",
+                      0U,
+                      "+QMTPUBEX:",
+                      NB_QMTPUB_ACK_TIMEOUT_MS,
+                      0U,
+                      (u16)SYS_RESOURCE_OWNER_LEGACY_MQTT,
+                      BOOL_FALSE) != BOOL_TRUE)
+              {
+                  nb_mqtt_publish_fail("ack_submit", BOOL_FALSE);
+                  break;
+              }
               pubsend_state = PUBSEDN_STATE_WAIT_ACK;
               break;
         case PUBSEDN_STATE_WAIT_ACK:
-              if (readLine(stringBuf, &recvLength, 0))
+              while (nb_at_legacy_adapter_read_response_line(
+                         stringBuf,
+                         sizeof(stringBuf),
+                         &response_length) == BOOL_TRUE)
               {
                   if (nb_mqtt_publish_ack_ok(stringBuf) == BOOL_TRUE)
+                  {
+                      nb_mqtt_ack_seen = BOOL_TRUE;
+                      nb_mqtt_ack_success = BOOL_TRUE;
+                  }
+                  else if (nb_mqtt_publish_ack_failed(stringBuf) == BOOL_TRUE)
+                  {
+                      nb_mqtt_ack_seen = BOOL_TRUE;
+                      nb_mqtt_ack_success = BOOL_FALSE;
+                      nb_mqtt_ack_link_lost =
+                          nb_is_link_lost_line(stringBuf);
+                  }
+              }
+              if (nb_at_legacy_adapter_take_result(&at_result) == BOOL_TRUE)
+              {
+                  if ((at_result == SYS_AT_RESULT_OK) &&
+                      (nb_mqtt_ack_seen == BOOL_TRUE) &&
+                      (nb_mqtt_ack_success == BOOL_TRUE))
                   {
                       nb_mqtt_pub_success_count++;
                       printf("[MQTT] publish ack pkt=%u ok=%lu\n",
                              (unsigned int)pub_msg_id,
                              nb_mqtt_pub_success_count);
-                      recvLength = 0;
                       pubsend_state=PUBSEDN_STATE_SENDFINISH;
-                  }
-                  else if (nb_mqtt_publish_ack_failed(stringBuf) == BOOL_TRUE)
-                  {
-                      boolean_en link_lost;
-
-                      link_lost = nb_is_link_lost_line(stringBuf);
-                      recvLength = 0;
-                      nb_mqtt_publish_fail("ack_error", BOOL_FALSE);
-                      if (zk_ota_is_busy() == BOOL_FALSE)
-                      {
-                          nb_request_reconnect((link_lost == BOOL_TRUE) ?
-                                               "PUBLISH_LINK_LOST" :
-                                               "PUBLISH_ACK_ERROR");
-                      }
                   }
                   else
                   {
-                      parseResult(stringBuf);
-                      recvLength = 0;
-                  }
-              }
-              else if (Timer_PassedDelay(pub_timer, NB_QMTPUB_ACK_TIMEOUT_MS))
-              {
-                  nb_mqtt_publish_fail("ack_timeout", BOOL_TRUE);
-                  if (zk_ota_is_busy() == BOOL_FALSE)
-                  {
-                      nb_request_reconnect("PUBLISH_ACK_TIMEOUT");
+                      nb_mqtt_publish_fail(
+                          (at_result == SYS_AT_RESULT_TIMEOUT) ?
+                              "ack_timeout" : "ack_error",
+                          (at_result == SYS_AT_RESULT_TIMEOUT) ?
+                              BOOL_TRUE : BOOL_FALSE);
+                      if (zk_ota_is_busy() == BOOL_FALSE)
+                      {
+                          nb_request_reconnect(
+                              (nb_mqtt_ack_link_lost == BOOL_TRUE) ?
+                                  "PUBLISH_LINK_LOST" :
+                                  "PUBLISH_ACK_ERROR");
+                      }
                   }
               }
               break;
         case  PUBSEDN_STATE_SENDFINISH:
+                 nb_mqtt_release_modem_resource();
                  pubsend_state=PUBSEDN_STATE_IDLE;//����ط�Ҫ�ص�
               break;
         case PUBSEDN_STATE_FAIL:
+              nb_mqtt_release_modem_resource();
               pubsend_state=PUBSEDN_STATE_IDLE;
               break;
         
@@ -2646,8 +2762,6 @@ static void parseResult(uint8 *buf)                //�������
                     //+QMTRECV: 0,0,"DL-WDJ","erewre"       "+QIURC: \"recv\""
                     //�յ��������·�����Ϣ
                   //  printf("NB:here3\r\n");
-                   //  delayMs(10);//�˴���ʱ�����ȴ���
-                    
                    if (readTcpData(stringBuf, &dataLength, buf) > 0)
                      {   //��ȡ�����MQTT�������ݵ� stringBuf  
                         
@@ -2701,6 +2815,11 @@ u8   OTA_ENABLE_state=0;
 void set_OTA_ENABLE(void)
 {
      nb_modem_lock_for_ota();
+     if (nb_modem_locked_by_ota() != BOOL_TRUE)
+     {
+         OTA_LOGE("ota start blocked: modem exclusive unavailable\r\n");
+         return;
+     }
      OTA_ENABLE_state=1;//�͸������ϱ��Ǳ�֪ͨ��־
     
      _4G_OTA_machine_contextid();//����ģ������,��������·��
@@ -2713,8 +2832,7 @@ void changea_to_MQTT_modle(void)
     OTA_ENABLE=0;//�ر�OTA���е�MQTT
     OTA_ENABLE_state=0;//�͸������ϱ��Ǳ�֪ͨ��־
     gateway_state=GATEWAY_STATE_CYCLIC_SCAN_AND_REAPORT_DRIVER_DATA;            
-    //����OTA����ǰ��MQTT����ָ��
-    _4G_configModule_machine_star();
+    /* 阶段3新链路已在 unlock 中恢复，禁止再次启动旧连接状态机。 */
 }
 boolean_en OTA_ENABLE_IS_SET(void)
 {

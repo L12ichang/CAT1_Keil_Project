@@ -1,16 +1,14 @@
-#ifndef SYS_TICK_H
-#define SYS_TICK_H
+#ifndef __SYS_TICK_H__
+#define __SYS_TICK_H__
 
 #include "common.h"
-#define SYS_TICK_CYCLE           72000 //hal库用了1ms中断一次 (72000-1)往下减
 
-#define SYS_TOTAL_TICK_PER_US    72    //1us需要经历72个系统节拍
-
-#define MODULE_TIMER_INTERVAL    ((u32)10000*SYS_TOTAL_TICK_PER_US)  //给各模块用的定时器 10ms调用一次
-
-#define DOWN_COUNT_TICK_24BIT       (SysTick->VAL)     // cortex m0 24位 倒计时 定时器         
-
-#define COUNT_TICK_24BIT       ((SYS_TICK_CYCLE-1)-SysTick->VAL)     // cortex m0 24位 倒计时 定时器         
+#define SYS_TICK_CYCLE           ((u32)72000U)
+#define SYS_TOTAL_TICK_PER_US    ((u32)72U)
+#define MODULE_TIMER_INTERVAL    \
+    ((u32)10000U * SYS_TOTAL_TICK_PER_US)
+#define DOWN_COUNT_TICK_24BIT    (SysTick->VAL)
+#define COUNT_TICK_24BIT         ((SYS_TICK_CYCLE - 1U) - SysTick->VAL)
 
 /************************************
 功能描述：读取系统节拍的值，每一步是 1/SYS_BASE_FREQUENCY_MHZ us
@@ -19,38 +17,47 @@
 *************************************/
 extern u32 sys_tick_get_tick(void);
 
-
+/************************************
+功能描述：读取第二路兼容高分辨率系统节拍
+输入参数：无
+输出返回：32位系统节拍值
+*************************************/
+extern u32 sys_tick_get_tick2(void);
 
 /************************************
-功能描述：主程序调用
-输入参数：     无
+功能描述：执行一次到期的旧 10ms 计时任务
+输入参数：无
 输出返回：无
 *************************************/
 extern void sys_tick_process(void);
 
+/************************************
+功能描述：读取 10ms 调度累计错过周期数
+输入参数：无
+输出返回：累计错过周期数
+*************************************/
 extern u32 sys_tick_get_lag_count(void);
+
+/************************************
+功能描述：读取 10ms 调度最大延迟的兼容节拍值
+输入参数：无
+输出返回：最大延迟系统节拍数
+*************************************/
 extern u32 sys_tick_get_max_lag_ticks(void);
-
-
 
 /************************************
 功能描述：初始化
-输入参数：     无
+输入参数：无
 输出返回：无
 *************************************/
 extern void sys_tick_init(void);
 
-
-
 /************************************
-功能描述：M0自带的24位定时器循环一周（0.699秒24M主频，0.35秒24M主频）中断一次, 
-          32位跑一圈是178.95697067秒（24M主频），89.478秒（48M主频）
+功能描述：按原顺序执行阶段 1 保留的 10ms 业务计时调用
 输入参数：无
 输出返回：无
 *************************************/
 extern void sys_tick_cycle_handle(void);
-
-
 
 /************************************
 功能描述：精准延时，注意延时的时间不应该超过看门狗的超时值。
@@ -59,6 +66,21 @@ extern void sys_tick_cycle_handle(void);
 *************************************/
 extern void sys_tick_delay(u32 time);
 
+/************************************
+功能描述：在 SysTick 中断中维持旧 Portable 毫秒时间基准
+输入参数：无
+输出返回：无
+*************************************/
+extern void sys_tick_legacy_timebase_isr(void);
+
+/************************************
+功能描述：同步新调度器的 10ms 任务延迟统计
+输入参数：missed_count 累计错过周期数，max_lag_ms 最大延迟毫秒数
+输出返回：无
+*************************************/
+extern void sys_tick_scheduler_stats_update(
+    u32 missed_count,
+    u32 max_lag_ms);
 
 #endif
 
