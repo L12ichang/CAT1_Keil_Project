@@ -106,6 +106,12 @@ void nb_modem_lock_for_ota(void);
 void nb_modem_unlock_for_ota(void);
 boolean_en nb_modem_locked_by_ota(void);
 void set_OTA_ENABLE(void);
+
+/* ===================== MQTT假在线分级自愈：4G恢复管理器 ===================== */
+void nb_mqtt_recovery_start(const char *reason);
+void nb_mqtt_recovery_mark_transport_success(void);
+boolean_en nb_mqtt_recovery_is_active(void);
+u8 nb_mqtt_recovery_get_attempt_count(void);
 void nbSendTcpData_sm(void);
  uint16 readLine(uint8 *buf, uint16 *len, uint8 syncMode) ;
  uint16 readLine_get_firmware(uint8 *buf, uint16 *len, uint16 *firmwarelenth);

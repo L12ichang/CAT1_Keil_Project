@@ -32,7 +32,6 @@ extern char firm_name_buffer[256];
 static zk_mqtt_config_t zk_mqtt_cfg;
 static zk_login_state_en zk_login_state = ZK_LOGIN_STATE_IDLE;
 static uint32 zk_login_tick = 0;
-static uint32 zk_heartbeat_tick = 0;
 static uint32 zk_report_tick = 0;
 static uint32 zk_time_request_tick = 0;
 static uint32 zk_json_message_counter = ZK_JSON_ID_FIRST_REPORT - 1;
@@ -57,7 +56,6 @@ static boolean_en zk_ota_progress_pending = BOOL_FALSE;
 static uint32 zk_ota_progress_value = 0;
 static boolean_en zk_ota_error_pending = BOOL_FALSE;
 static int zk_ota_error_code = 0;
-static u8 zk_send_busy_fail_count = 0;
 static boolean_en zk_reboot_pending = BOOL_FALSE;
 static uint32 zk_reboot_tick = 0;
 static boolean_en zk_login_time_sync_pending = BOOL_FALSE;
@@ -68,9 +66,44 @@ static uint32 zk_control_restore_tick = 0;
 static uint32 zk_control_restore_delay_ms = 0;
 static int zk_control_restore_brightness = 0;
 
+/* ===================== 心跳健康监督（QoS1 Broker发布闭环） ===================== */
+typedef enum
+{
+    ZK_HEARTBEAT_MONITOR_IDLE = 0,
+    ZK_HEARTBEAT_MONITOR_WAIT_SUBMIT,
+    ZK_HEARTBEAT_MONITOR_WAIT_ACK
+} zk_heartbeat_monitor_state_en;
+
+#define ZK_HEARTBEAT_MONITOR_PERIOD_MS       (60UL * 1000UL)
+#define ZK_HEARTBEAT_SUBMIT_GRACE_MS         (15UL * 1000UL)
+#define ZK_HEARTBEAT_ACK_WAIT_MS             (45UL * 1000UL)
+#define ZK_HEARTBEAT_FAIL_LIMIT              3U
+#define ZK_CYCLIC_REPORT_RETRY_DELAY_MS      (5UL * 1000UL)
+
+static zk_heartbeat_monitor_state_en zk_hb_monitor_state = ZK_HEARTBEAT_MONITOR_IDLE;
+static u8 zk_hb_consecutive_fail_count = 0;
+static u32 zk_hb_period_tick = 0;
+static u32 zk_hb_state_tick = 0;
+static u32 zk_hb_pub_success_snapshot = 0;
+static u32 zk_hb_pub_fail_snapshot = 0;
+static u32 zk_hb_pub_timeout_snapshot = 0;
+static u32 zk_last_broker_ack_tick = 0;
+static u32 zk_broker_ack_snapshot = 0;
+static u32 zk_hb_send_count = 0;
+static u32 zk_hb_success_count = 0;
+static u32 zk_hb_fail_count = 0;
+
+/* 周期上报失败重试控制：首次失败后进入短重试窗口，到点最多重试一次，
+   仍失败则放弃本次周期上报并清理TX池，推进周期计时，避免主循环每圈卡在此处饿死后续校时 */
+static boolean_en zk_cyclic_report_retry_pending = BOOL_FALSE;
+static uint32 zk_cyclic_report_retry_tick = 0;
+
+/* 校时请求失败重试控制：与周期上报对称，失败最多重试一次，仍失败则放弃并推进周期 */
+static boolean_en zk_time_request_retry_pending = BOOL_FALSE;
+static uint32 zk_time_request_retry_tick = 0;
+
 #define ZK_CNCTRL_SUPPORTED_CNS 1
 #define ZK_CNCTRL_LAST_MAX_SEC  (24UL * 60UL * 60UL)
-#define ZK_SEND_BUSY_CLEAR_THRESHOLD 3U
 #define ZK_CHANGE_REPORT_SETTLE_MS 3000UL
 #define ZK_RESPONSE_QUEUE_SIZE 2U
 #define ZK_LOGIN_ACK_RECONNECT_THRESHOLD 2U
@@ -984,7 +1017,10 @@ static void zk_sync_online_period_timers(uint32 now)
 {
     zk_report_tick = now;
     zk_time_request_tick = now;
-    zk_heartbeat_tick = now;
+    /* 心跳监督独立固定60s周期，登录成功/配置恢复时重新起算 */
+    zk_hb_monitor_state = ZK_HEARTBEAT_MONITOR_IDLE;
+    zk_hb_period_tick = now;
+    zk_broker_ack_snapshot = nb_mqtt_get_publish_success_count();
 }
 
 void zk_reset_config_period_timers(void)
@@ -1145,7 +1181,6 @@ void zk_mqtt_reset_session(void)
 {
     zk_login_state = ZK_LOGIN_STATE_IDLE;
     zk_login_tick = 0;
-    zk_heartbeat_tick = 0;
     zk_report_tick = 0;
     zk_time_request_tick = 0;
     zk_last_heartbeat_id[0] = '\0';
@@ -1163,8 +1198,21 @@ void zk_mqtt_reset_session(void)
     zk_login_wait_pub_timeout_count = 0;
     zk_ota_progress_pending = BOOL_FALSE;
     zk_ota_error_pending = BOOL_FALSE;
-    zk_send_busy_fail_count = 0;
     zk_reboot_pending = BOOL_FALSE;
+    /* 会话级复位心跳监督：重新从60s后开始第一次健康心跳 */
+    zk_hb_monitor_state = ZK_HEARTBEAT_MONITOR_IDLE;
+    zk_hb_period_tick = 0;
+    zk_hb_state_tick = 0;
+    zk_hb_pub_success_snapshot = 0;
+    zk_hb_pub_fail_snapshot = 0;
+    zk_hb_pub_timeout_snapshot = 0;
+    zk_hb_consecutive_fail_count = 0;
+    zk_last_broker_ack_tick = 0;
+    zk_broker_ack_snapshot = nb_mqtt_get_publish_success_count();
+    zk_cyclic_report_retry_pending = BOOL_FALSE;
+    zk_cyclic_report_retry_tick = 0;
+    zk_time_request_retry_pending = BOOL_FALSE;
+    zk_time_request_retry_tick = 0;
     zk_login_time_sync_pending = BOOL_FALSE;
     zk_startup_time_force_pending = BOOL_FALSE;
     zk_ota_ack_clear();
@@ -1324,22 +1372,10 @@ cJSON *zk_create_root_from_header(const zk_message_header_t *header, int with_er
 
 static void zk_note_send_payload_result(uint8 result)
 {
-    if (result == NB_ERROR_NONE)
-    {
-        zk_send_busy_fail_count = 0;
-        return;
-    }
-
-    if (zk_send_busy_fail_count < ZK_SEND_BUSY_CLEAR_THRESHOLD)
-    {
-        ++zk_send_busy_fail_count;
-    }
-    if (zk_send_busy_fail_count >= ZK_SEND_BUSY_CLEAR_THRESHOLD)
-    {
-        pubsend_state_set_idle();
-        zk_send_busy_fail_count = 0;
-        printf("ZK MQTT publish slot busy cleared\r\n");
-    }
+    /* 移除"连续Busy强制pubsend_state_set_idle"：底层WAIT_PROMPT(5s)/WAIT_ACK(30s)已有超时自动回IDLE，
+       发布状态机能自愈；强制清空会打断在途PUBACK事务，导致归属丢失与统计混乱。
+       恢复路径统一由心跳监督连续3次失败触发的完整4G重连处理。 */
+    (void)result;
 }
 
 static void zk_log_periodic_send_failure(const char *task_name)
@@ -1604,7 +1640,8 @@ int zk_publish_login_packet(void)
     zk_login_wait_pub_success_count = nb_mqtt_get_publish_success_count();
     zk_login_wait_pub_fail_count = nb_mqtt_get_publish_fail_count();
     zk_login_wait_pub_timeout_count = nb_mqtt_get_publish_timeout_count();
-    zk_login_ack_timeout_count = 0;
+    /* 不再每次发送清零业务ACK超时计数：仅新会话(zk_mqtt_reset_session)或业务登录成功
+       (zk_mqtt_accept_login_ack)时清零，否则业务ACK持续缺失时无法累积到重连阈值 */
     zk_login_state = ZK_LOGIN_STATE_WAIT_PUBLISH;
     zk_login_tick = Timer_GetTickCount();
     return 0;
@@ -1627,8 +1664,165 @@ int zk_publish_heartbeat_packet(void)
     {
         return -1;
     }
-    zk_heartbeat_tick = Timer_GetTickCount();
+    /* 提交成功只代表交给发布状态机，不代表Broker已确认；成功与否由心跳监督按PUBACK判定 */
     return 0;
+}
+
+/* ===================== 心跳健康监督（QoS1 Broker发布闭环） ===================== */
+
+static void zk_mqtt_start_modem_recovery(const char *reason)
+{
+    if (OTA_ENABLE_IS_SET() == BOOL_TRUE || nb_modem_locked_by_ota() == BOOL_TRUE)
+    {
+        return;
+    }
+    printf("[MQTT][RECOVERY] start reason=%s\r\n",
+           (reason != NULL) ? reason : "unknown");
+    zk_hb_monitor_state = ZK_HEARTBEAT_MONITOR_IDLE;
+    pubsend_state_set_idle();
+    onNBEvent(NB_EVENT_LOST_CONNECTION, 0, 0);
+    nb_mqtt_recovery_start(reason);
+}
+
+static void zk_heartbeat_mark_success(uint32 now)
+{
+    zk_hb_monitor_state = ZK_HEARTBEAT_MONITOR_IDLE;
+    zk_hb_consecutive_fail_count = 0;
+    zk_hb_period_tick = now;
+    zk_last_broker_ack_tick = now;
+    zk_broker_ack_snapshot = nb_mqtt_get_publish_success_count();
+    zk_hb_success_count++;
+    printf("[HBMON] ack success\r\n");
+}
+
+static void zk_heartbeat_mark_fail(uint32 now, const char *reason)
+{
+    zk_hb_monitor_state = ZK_HEARTBEAT_MONITOR_IDLE;
+    zk_hb_period_tick = now;
+    if (zk_hb_consecutive_fail_count < 0xFFU)
+    {
+        zk_hb_consecutive_fail_count++;
+    }
+    zk_hb_fail_count++;
+    printf("[HBMON][W] %s fail=%u/%u\r\n",
+           (reason != NULL) ? reason : "heartbeat",
+           (unsigned int)zk_hb_consecutive_fail_count,
+           (unsigned int)ZK_HEARTBEAT_FAIL_LIMIT);
+    if (zk_hb_consecutive_fail_count >= ZK_HEARTBEAT_FAIL_LIMIT)
+    {
+        zk_hb_consecutive_fail_count = 0;
+        printf("[HBMON][E] heartbeat failed %u times\r\n", (unsigned int)ZK_HEARTBEAT_FAIL_LIMIT);
+        zk_mqtt_start_modem_recovery("heartbeat_no_ack");
+    }
+}
+
+static void zk_heartbeat_submit(uint32 now)
+{
+    if (zk_publish_heartbeat_packet() == 0)
+    {
+        zk_hb_pub_success_snapshot = nb_mqtt_get_publish_success_count();
+        zk_hb_pub_fail_snapshot = nb_mqtt_get_publish_fail_count();
+        zk_hb_pub_timeout_snapshot = nb_mqtt_get_publish_timeout_count();
+        zk_hb_monitor_state = ZK_HEARTBEAT_MONITOR_WAIT_ACK;
+        zk_hb_state_tick = now;
+        zk_hb_send_count++;
+        printf("[HBMON] submit ok\r\n");
+    }
+    else
+    {
+        zk_heartbeat_mark_fail(now, "submit failed");
+    }
+}
+
+/* 心跳监督只在业务ONLINE阶段运行，OTA期间暂停，固定60s周期 */
+static void zk_heartbeat_monitor_process(uint32 now)
+{
+    if (zk_login_state != ZK_LOGIN_STATE_ONLINE)
+    {
+        return;
+    }
+    if (OTA_ENABLE_IS_SET() == BOOL_TRUE || nb_modem_locked_by_ota() == BOOL_TRUE)
+    {
+        return;
+    }
+    if (zk_hb_period_tick == 0)
+    {
+        zk_hb_period_tick = now;
+        return;
+    }
+
+    switch (zk_hb_monitor_state)
+    {
+        case ZK_HEARTBEAT_MONITOR_IDLE:
+            if (Timer_PassedDelay(zk_hb_period_tick, ZK_HEARTBEAT_MONITOR_PERIOD_MS) != BOOL_TRUE)
+            {
+                break;
+            }
+            if (pubsend_state_idle() == BOOL_TRUE)
+            {
+                zk_heartbeat_submit(now);
+            }
+            else
+            {
+                /* 发布器被正常事务占用，进入15s宽限等待，不强制打断当前事务 */
+                zk_hb_monitor_state = ZK_HEARTBEAT_MONITOR_WAIT_SUBMIT;
+                zk_hb_state_tick = now;
+                printf("[HBMON] wait submit\r\n");
+            }
+            break;
+
+        case ZK_HEARTBEAT_MONITOR_WAIT_SUBMIT:
+            if (pubsend_state_idle() == BOOL_TRUE)
+            {
+                zk_heartbeat_submit(now);
+            }
+            else if (Timer_PassedDelay(zk_hb_state_tick, ZK_HEARTBEAT_SUBMIT_GRACE_MS) == BOOL_TRUE)
+            {
+                zk_heartbeat_mark_fail(now, "submit busy timeout");
+            }
+            break;
+
+        case ZK_HEARTBEAT_MONITOR_WAIT_ACK:
+            if (nb_mqtt_get_publish_success_count() != zk_hb_pub_success_snapshot)
+            {
+                zk_heartbeat_mark_success(now);
+            }
+            else if (nb_mqtt_get_publish_fail_count() != zk_hb_pub_fail_snapshot ||
+                     nb_mqtt_get_publish_timeout_count() != zk_hb_pub_timeout_snapshot)
+            {
+                zk_heartbeat_mark_fail(now, "publish failed");
+            }
+            else if (Timer_PassedDelay(zk_hb_state_tick, ZK_HEARTBEAT_ACK_WAIT_MS) == BOOL_TRUE)
+            {
+                zk_heartbeat_mark_fail(now, "ack timeout");
+            }
+            break;
+
+        default:
+            break;
+    }
+}
+
+/* 任意其他QoS1消息成功到达Broker，证明公共发布链路正常，清连续失败计数 */
+static void zk_broker_ack_detect(uint32 now)
+{
+    uint32 success;
+
+    if (zk_login_state != ZK_LOGIN_STATE_ONLINE)
+    {
+        return;
+    }
+    success = nb_mqtt_get_publish_success_count();
+    if (success != zk_broker_ack_snapshot)
+    {
+        zk_broker_ack_snapshot = success;
+        zk_last_broker_ack_tick = now;
+        if (zk_hb_consecutive_fail_count != 0)
+        {
+            zk_hb_consecutive_fail_count = 0;
+            printf("[HBMON] other qos1 broker ack ok, fail reset\r\n");
+        }
+    }
 }
 
 int zk_publish_error_response(const zk_message_header_t *request, int err_code)
@@ -2282,7 +2476,6 @@ void zk_mqtt_session_process(void)
     uint32 now;
     uint32 report_period_ms;
     uint32 time_request_period_ms;
-    uint32 heartbeat_period_ms;
     const zk_device_config_t *dev_cfg;
 
     now = Timer_GetTickCount();
@@ -2294,7 +2487,6 @@ void zk_mqtt_session_process(void)
     zk_control_restore_process();
     report_period_ms = zk_get_effective_period_sec(dev_cfg->uPeriod, ZK_UPLOAD_INTERVAL_SEC) * 1000UL;
     time_request_period_ms = zk_get_effective_period_sec(dev_cfg->tPeriod, ZK_TIME_REQUEST_INTERVAL_SEC) * 1000UL;
-    heartbeat_period_ms = zk_get_effective_period_sec(dev_cfg->hPeriod, ZK_HEARTBEAT_INTERVAL_SEC) * 1000UL;
 
     if (zk_reboot_pending == BOOL_TRUE && Timer_PassedDelay(zk_reboot_tick, 500))
     {
@@ -2305,8 +2497,16 @@ void zk_mqtt_session_process(void)
     {
         if (nb_mqtt_get_publish_success_count() != zk_login_wait_pub_success_count)
         {
+            /* 登录消息取得Broker发布确认：若正处于4G恢复流程，则标记传输恢复成功
+               （业务登录ACK缺失不算传输失败，由login阶段轻量重连继续重试） */
+            if (nb_mqtt_recovery_is_active() == BOOL_TRUE)
+            {
+                nb_mqtt_recovery_mark_transport_success();
+                printf("[MQTT][LOGIN] publish broker ack ok, transport restored\r\n");
+            }
             zk_login_state = ZK_LOGIN_STATE_WAIT_ACK;
-            zk_login_ack_timeout_count = 0;
+            /* 业务ACK超时计数不在"发布成功"时清零，否则登录重发会让计数永远累积不到重连阈值；
+               仅新会话(zk_mqtt_reset_session)或业务登录成功(zk_mqtt_accept_login_ack)时清零 */
             zk_login_tick = now;
             return;
         }
@@ -2354,6 +2554,11 @@ void zk_mqtt_session_process(void)
 
     if (zk_login_state == ZK_LOGIN_STATE_ONLINE)
     {
+        /* 心跳监督优先执行，避免被下方告警/OTA/上报等提前return饿死；
+           固定60s周期，成功以Broker PUBACK为准，连续3次失败触发4G恢复 */
+        zk_broker_ack_detect(now);
+        zk_heartbeat_monitor_process(now);
+
         if (zk_alarm_process() == BOOL_TRUE)
         {
             return;
@@ -2444,6 +2649,24 @@ void zk_mqtt_session_process(void)
             return;
         }
 
+        /* 周期上报重试窗口：首次失败后5s到点最多重试一次；窗口期内不阻塞后续业务 */
+        if (zk_cyclic_report_retry_pending == BOOL_TRUE &&
+            Timer_PassedDelay(zk_cyclic_report_retry_tick, ZK_CYCLIC_REPORT_RETRY_DELAY_MS) == BOOL_TRUE)
+        {
+            zk_cyclic_report_retry_pending = BOOL_FALSE;
+            if (zk_publish_runtime_report(ZK_CT_CYCLIC) == 0)
+            {
+                zk_report_tick = now;
+            }
+            else
+            {
+                /* 重试仍失败：放弃本次周期上报，清理TX池残留，推进周期计时 */
+                zk_report_tick = now;
+                zk_cjson_prepare_tx();
+            }
+            return;
+        }
+
         if (Timer_PassedDelay(zk_report_tick, report_period_ms))
         {
             if (zk_publish_runtime_report(ZK_CT_CYCLIC) == 0)
@@ -2453,6 +2676,27 @@ void zk_mqtt_session_process(void)
             else
             {
                 zk_log_periodic_send_failure("cyclic report");
+                /* 最多重试一次：记录重试窗口，不再无限占用主循环 */
+                zk_cyclic_report_retry_pending = BOOL_TRUE;
+                zk_cyclic_report_retry_tick = now;
+            }
+            return;
+        }
+
+        /* 校时重试窗口：与周期上报对称，失败最多重试一次，仍失败则放弃并推进周期 */
+        if (zk_time_request_retry_pending == BOOL_TRUE &&
+            Timer_PassedDelay(zk_time_request_retry_tick, ZK_CYCLIC_REPORT_RETRY_DELAY_MS) == BOOL_TRUE)
+        {
+            zk_time_request_retry_pending = BOOL_FALSE;
+            if (zk_publish_time_request() == 0)
+            {
+                zk_time_request_tick = now;
+            }
+            else
+            {
+                /* 重试仍失败：放弃本次校时，清理TX池，推进周期计时 */
+                zk_time_request_tick = now;
+                zk_cjson_prepare_tx();
             }
             return;
         }
@@ -2466,15 +2710,9 @@ void zk_mqtt_session_process(void)
             else
             {
                 zk_log_periodic_send_failure("time request");
-            }
-            return;
-        }
-
-        if (Timer_PassedDelay(zk_heartbeat_tick, heartbeat_period_ms))
-        {
-            if (zk_publish_heartbeat_packet() != 0)
-            {
-                zk_log_periodic_send_failure("heartbeat");
+                /* 最多重试一次：记录重试窗口，不再无限占用主循环 */
+                zk_time_request_retry_pending = BOOL_TRUE;
+                zk_time_request_retry_tick = now;
             }
             return;
         }
@@ -2631,7 +2869,7 @@ boolean_en zk_mqtt_accept_heartbeat_ack(const zk_message_header_t *header)
     if (strcmp(header->ct, ZK_CT_HEARTBEAT) == 0 &&
         strcmp(header->sn, cfg->imei) == 0)
     {
-        zk_heartbeat_tick = Timer_GetTickCount();
+        /* 业务平台心跳ACK仅确认业务在线；Broker链路健康以QoS1发布确认为准（心跳监督），不在此更新周期 */
         return BOOL_TRUE;
     }
     return BOOL_FALSE;

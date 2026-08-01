@@ -965,6 +965,8 @@ static boolean_en nb_mqtt_publish_owns_uart(void)
 }
 
 
+static void nb_mqtt_recovery_process(void);
+
 void  _4G_configModule_machine_star(void)
 {
     clear_imei_data();
@@ -1059,6 +1061,8 @@ void _4G_configModule_machine(void)
     {
         return;
     }
+    /* MQTT恢复管理器：单轮180s超时检查（内部自带OTA保护，active时推进下一轮） */
+    nb_mqtt_recovery_process();
     nb_trace_state_change();
     switch(connect_state)
     {
@@ -1706,6 +1710,99 @@ void pubsend_state_set_idle(void)
     pubsend_state=PUBSEDN_STATE_IDLE;
 }
 
+/* ===================== MQTT假在线分级自愈：4G恢复管理器 ===================== */
+#define NB_MQTT_RECOVERY_MAX_ATTEMPTS        3U
+#define NB_MQTT_RECOVERY_ATTEMPT_TIMEOUT_MS  (180UL * 1000UL)
+
+static boolean_en nb_mqtt_recovery_active = BOOL_FALSE;
+static u8 nb_mqtt_recovery_attempt_count = 0;
+static u32 nb_mqtt_recovery_attempt_tick = 0;
+static u32 nb_mqtt_recovery_start_count = 0;
+static u32 nb_mqtt_recovery_success_count = 0;
+static u32 nb_mqtt_recovery_fail_count = 0;
+static u32 nb_mqtt_mcu_reset_count = 0;
+
+/* 单轮恢复超时检查：非阻塞，供_4G_configModule_machine周期调用 */
+static void nb_mqtt_recovery_process(void)
+{
+    if (nb_mqtt_recovery_active != BOOL_TRUE)
+    {
+        return;
+    }
+    /* OTA独占4G链路期间暂停恢复超时计时，避免把OTA耗时误算为恢复失败 */
+    if (nb_modem_locked_by_ota() == BOOL_TRUE || OTA_ENABLE_IS_SET() == BOOL_TRUE)
+    {
+        return;
+    }
+    if (Timer_PassedDelay(nb_mqtt_recovery_attempt_tick,
+                          NB_MQTT_RECOVERY_ATTEMPT_TIMEOUT_MS) != BOOL_TRUE)
+    {
+        return;
+    }
+    nb_mqtt_recovery_fail_count++;
+    printf("[MQTT][RECOVERY][E] attempt=%u timeout\r\n",
+           (unsigned int)nb_mqtt_recovery_attempt_count);
+    if (nb_mqtt_recovery_attempt_count >= NB_MQTT_RECOVERY_MAX_ATTEMPTS)
+    {
+        /* 已真实执行第3次4G硬件复位且第3轮仍未恢复，才软件复位MCU */
+        nb_mqtt_mcu_reset_count++;
+        printf("[MQTT][FATAL] modem recovery failed %u times, reset MCU\r\n",
+               (unsigned int)NB_MQTT_RECOVERY_MAX_ATTEMPTS);
+        NVIC_SystemReset();
+        return;
+    }
+    nb_mqtt_recovery_attempt_count++;
+    nb_mqtt_recovery_attempt_tick = Timer_GetTickCount();
+    printf("[MQTT][RECOVERY] attempt=%u/%u\r\n",
+           (unsigned int)nb_mqtt_recovery_attempt_count,
+           (unsigned int)NB_MQTT_RECOVERY_MAX_ATTEMPTS);
+    _4G_configModule_machine_star();
+}
+
+void nb_mqtt_recovery_start(const char *reason)
+{
+    (void)reason;
+    if (nb_modem_locked_by_ota() == BOOL_TRUE || OTA_ENABLE_IS_SET() == BOOL_TRUE)
+    {
+        return;
+    }
+    if (nb_mqtt_recovery_active == BOOL_TRUE)
+    {
+        return;  /* 已有恢复任务进行中，禁止并发/重复启动 */
+    }
+    nb_mqtt_recovery_active = BOOL_TRUE;
+    nb_mqtt_recovery_attempt_count = 1;
+    nb_mqtt_recovery_attempt_tick = Timer_GetTickCount();
+    nb_mqtt_recovery_start_count++;
+    printf("[MQTT][RECOVERY] attempt=%u/%u\r\n",
+           (unsigned int)nb_mqtt_recovery_attempt_count,
+           (unsigned int)NB_MQTT_RECOVERY_MAX_ATTEMPTS);
+    _4G_configModule_machine_star();
+}
+
+void nb_mqtt_recovery_mark_transport_success(void)
+{
+    if (nb_mqtt_recovery_active != BOOL_TRUE)
+    {
+        return;
+    }
+    nb_mqtt_recovery_active = BOOL_FALSE;
+    nb_mqtt_recovery_attempt_count = 0;
+    nb_mqtt_recovery_attempt_tick = 0;
+    nb_mqtt_recovery_success_count++;
+    printf("[MQTT][RECOVERY] transport restored\r\n");
+}
+
+boolean_en nb_mqtt_recovery_is_active(void)
+{
+    return nb_mqtt_recovery_active;
+}
+
+u8 nb_mqtt_recovery_get_attempt_count(void)
+{
+    return nb_mqtt_recovery_attempt_count;
+}
+
 void nb_modem_lock_for_ota(void)
 {
     if (nb_modem_ota_lock == 0U)
@@ -2179,6 +2276,10 @@ static void parseResult(uint8 *buf)                //�������
                 extern void resetTcpState(void);
                 onNBEvent(NB_EVENT_LOST_CONNECTION, 0, 0);
                 resetTcpState();
+                /* 明确断线URC(+QMTSTAT/pdpdeact)：触发4G恢复管理器。
+                   否则login_state被置IDLE后，心跳监督与recovery均不运行(非ONLINE)，
+                   tcpConnectState=NOT_CONNECTED又切断session_process，设备将永久假离线。 */
+                nb_mqtt_recovery_start("urc_link_lost");
             }
             else if (strstr((const char *) buf,"+QMTRECV:"))
             {
