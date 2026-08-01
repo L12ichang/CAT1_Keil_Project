@@ -21,7 +21,6 @@
 #define PONG_PERIOD_S 3*60    //360s
 static  uint32  timer = 0;//1s��ʱ��
 static  uint8 tcpConnectState = STATUS_NOT_CONNECTED;//0��δ���ӣ�1��tcp�����ӣ�2���ѵ�¼
-static  uint8 module_signal_level = 0;//�ź�ǿ��
 
 #if APP_LOG_ENABLE
 static const char *tcp_connect_state_name(uint8 value)
@@ -39,15 +38,6 @@ static const char *tcp_connect_state_name(uint8 value)
 extern u1t _HexToBcd(u1t hex);
 extern u8 online;
 void SET_NB_STAT_EPOWER_DOWN(void);
-/**
-*@brief   ��ȡ�ź�ǿ��
-*@return  �ź�ǿ�ȣ�0���ź�����1���ź��У�2���ź�ǿ
-*/
-uint8 getSignal(void)
-{
-    return module_signal_level;
-}
-
 static boolean_en tcp_payload_is_json(uint8 *pData, uint16 length)
 {
     uint16 i;

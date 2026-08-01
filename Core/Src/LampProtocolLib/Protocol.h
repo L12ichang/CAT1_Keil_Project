@@ -59,7 +59,6 @@
 #define DATA_POINT_ID_SET_LOWTEMP_PROTECT   0x19 //设定低温保护使能开关（数据0失能1使能 BOOL类型）
 #define DATA_POINT_ID_SET_FA_TEST           0x1A //产测测试开启通知1，关闭通知0
 //终端上报数据点id
-#define DATA_POINT_ID_SIGNAL 0x81//信号强度
 #define DATA_POINT_ID_BRIGHTNESS 0x82//调光亮度
 #define DATA_POINT_ID_INPUT_VOLTAGE 0x83//输入电压
 #define DATA_POINT_ID_OUTPUT_VOLTAGE 0x84//输出电压
@@ -169,7 +168,6 @@ typedef struct
 {
     uint32 driveradress;//调光ID
     uint32 newdriveradress;//新调光ID
-    uint32 signal;//信号强度
     uint32 brightness;//调光亮度
     uint32 inputVoltage;//输入电压
     uint32 outputVoltage;//输出电压

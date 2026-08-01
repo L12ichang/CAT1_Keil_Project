@@ -101,6 +101,9 @@ boolean_en  send_AT_Command_machine_finish(void);
 void  send_AT_Command_machine_idle(void);
 void  send_AT_Command_machine_star(char *command,uint8 length, char *response, uint32 waitCount, uint8 throwAwayTail) ;
 boolean_en nb_get_rsrp_dbm10(s32 *rsrp_dbm10);
+boolean_en nb_uart_is_available_for_at(void);
+boolean_en nb_at_command_is_failed(void);
+boolean_en nb_qeng_trigger_runtime(void);
 boolean_en OTA_ENABLE_IS_SET(void);
 void nb_modem_lock_for_ota(void);
 void nb_modem_unlock_for_ota(void);
@@ -160,11 +163,6 @@ uint8 nbSendTcpData(uint8 *pData, uint16 length);
 uint8 getSimCardIMSI(uint8 *simCardIMSILength, uint8 *simCardIMSI);
 
 
-/**
-*@brief   获取信号强度
-*@return  0：信号弱；1：信号中；2：信号强
-*/
-uint8 getSignalQuality(void);
 /**
 *@brief   获取当前日期时间
 *@param	  sTime：时间

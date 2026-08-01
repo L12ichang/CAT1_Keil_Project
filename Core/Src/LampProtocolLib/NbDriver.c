@@ -818,6 +818,51 @@ static boolean_en nb_mqtt_publish_owns_uart(void)
     }
 }
 
+/**
+*@brief   检查 UART 是否可用于发送新的 AT 命令
+*@return  1：可用；0：AT 机忙或 MQTT 发布占用
+*@note    同时满足 AT 命令机空闲 且 MQTT 发布未占用 UART
+*/
+boolean_en nb_uart_is_available_for_at(void)
+{
+    if (sendcommad_state != SEND_COMMAND_STATE_IDLE)
+    {
+        return BOOL_FALSE;
+    }
+    if (nb_mqtt_publish_owns_uart() == BOOL_TRUE)
+    {
+        return BOOL_FALSE;
+    }
+    return BOOL_TRUE;
+}
+
+/**
+*@brief   检查上一条 AT 命令是否失败(超时/重试耗尽)
+*@return  1：失败；0：未失败
+*/
+boolean_en nb_at_command_is_failed(void)
+{
+    return sendcommand_failed;
+}
+
+/**
+*@brief   运行期触发 QENG 查询,用于周期/按需刷新信号
+*@return  1：已发送 QENG；0：UART 繁忙,未发送
+*@note    不复用连接配置状态机；RSRP 由 capture_rsrp_from_qeng_line()
+*         在 AT 命令机 RXING 阶段自动解析更新
+*/
+boolean_en nb_qeng_trigger_runtime(void)
+{
+    if (nb_uart_is_available_for_at() == BOOL_FALSE)
+    {
+        return BOOL_FALSE;
+    }
+    send_AT_Command_machine_star("at+qeng=\"servingcell\"\r\n",
+                                  strlen("at+qeng=\"servingcell\"\r\n"),
+                                  "OK", 20, 0);
+    printf("[SIG] runtime qeng triggered\r\n");
+    return BOOL_TRUE;
+}
 
 /**
 *@brief   �첽��ʽִ��AT����
@@ -1955,46 +2000,6 @@ uint8 geteSimCardICCID(uint8 *simCardICCIDLength, uint8 *simCardICCID)
     return 1;
 }
 
-/**
-*@brief   ��ȡ�ź�ǿ��
-*@return  0���ź�����1���ź��У�2���ź�ǿ
-*/
-/*
-uint8 getSignalQuality(void) {
-     uint8 rsrq = 0, rsrp = 0;
-     uint8 *p = sendCommandAndReceiveResponse("AT+CESQ\r\n", 9, "+CESQ", 100, 1);
-    if (p == 0) {
-        nbEnterIDLE();
-        return 0;
-    }
-
-    while (*p != '\r')p++;//��λ�����һ������
-    while (*p != ',')p--;//�˻ص����һ��','
-    p--;
-    while (*p != ',')p--;//�˻ص������ڶ���','
-    p++;
-
-    while (*p != ',') {
-        rsrq = rsrq * 10 + *p - '0';
-        p++;
-    }
-    p++;
-    while (*p != '\r') {
-        rsrp = rsrp * 10 + *p - '0';
-        p++;
-    }
-
-#ifdef NB_DEBUG_PRINT
-    printf("nb:signal:%d,%d\r\n", rsrq, rsrp);
-#endif
-    if (rsrq >= 26 && rsrp >= 41) {
-        return 2;
-    } else if (rsrq >= 18 && rsrp >= 31) {
-        return 1;
-    }
-    return 0;
-}
-*/
 /**
 *@brief   ���num�Ƿ�Ϊ�����ַ�
 *@param	  num���ַ�����

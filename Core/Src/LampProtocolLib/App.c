@@ -346,8 +346,6 @@ void uploadAllDataPoint(void) {
     runningStatus.faultList.list[5] = 0x06;
     runningStatus.faultList.list[6] = 0x07;
     runningStatus.faultList.list[7] = 0x08;
-    runningStatus.signal = getSignal();    
-    addIntTypeDataPoint(DATA_POINT_ID_SIGNAL, runningStatus.signal);
     addIntTypeDataPoint(DATA_POINT_ID_BRIGHTNESS, runningStatus.brightness);
     addIntTypeDataPoint(DATA_POINT_ID_INPUT_VOLTAGE, runningStatus.inputVoltage);
     addIntTypeDataPoint(DATA_POINT_ID_OUTPUT_VOLTAGE, runningStatus.outputVoltage);  

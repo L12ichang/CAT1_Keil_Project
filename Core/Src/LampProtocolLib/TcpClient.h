@@ -24,12 +24,6 @@ void onPongMsg(void);
 void onNBEvent(uint8 subEvent, uint8 *pData, uint16 length);
 
 /**
-*@brief   获取信号强度
-*@return  信号强度：0：信号弱；1：信号中；2：信号强
-*/
-uint8 getSignal(void);
-
-/**
 *@brief   处理tcp客户端任务
 *@return  无
 */

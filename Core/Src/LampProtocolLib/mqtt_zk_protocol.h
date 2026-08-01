@@ -64,6 +64,10 @@
 #endif
 #define ZK_FLASH_SAVE_ERROR     99
 
+/* 信号强度查询(AT+QENG)错误码 */
+#define ZK_SIGNAL_ERR_BUSY      12   /* UART忙/查询进行中,无法立即处理 */
+#define ZK_SIGNAL_ERR_QENG_FAIL 13   /* QENG AT命令失败(超时/错误) */
+
 typedef enum
 {
     ZK_LOGIN_STATE_IDLE = 0,

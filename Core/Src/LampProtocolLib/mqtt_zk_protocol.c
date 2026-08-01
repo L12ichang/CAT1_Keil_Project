@@ -58,6 +58,19 @@ static boolean_en zk_ota_error_pending = BOOL_FALSE;
 static int zk_ota_error_code = 0;
 static boolean_en zk_reboot_pending = BOOL_FALSE;
 static uint32 zk_reboot_tick = 0;
+
+/* ===================== 信号强度查询(AT+QENG运行时刷新) ===================== */
+typedef enum
+{
+    ZK_SIGNAL_QUERY_IDLE = 0,        /* 空闲,等待周期或命令触发 */
+    ZK_SIGNAL_QUERY_WAIT_FINISH,     /* QENG已发送,等待AT命令机完成 */
+} zk_signal_query_state_en;
+
+static zk_signal_query_state_en zk_signal_query_state = ZK_SIGNAL_QUERY_IDLE;
+static uint32 zk_signal_query_tick = 0;
+/* 按需 SignalQuery 命令的延迟响应(保存请求头深拷贝) */
+static boolean_en zk_signal_query_cmd_pending = BOOL_FALSE;
+static zk_message_header_t zk_signal_query_cmd_header;
 static boolean_en zk_login_time_sync_pending = BOOL_FALSE;
 static boolean_en zk_startup_time_force_pending = BOOL_FALSE;
 static boolean_en zk_startup_time_sync_done = BOOL_FALSE;
@@ -1017,6 +1030,10 @@ static void zk_sync_online_period_timers(uint32 now)
 {
     zk_report_tick = now;
     zk_time_request_tick = now;
+    /* 信号查询与上报周期对齐:同一基准起算,保证每次上报前信号已刷新 */
+    zk_signal_query_tick = now;
+    zk_signal_query_state = ZK_SIGNAL_QUERY_IDLE;
+    zk_signal_query_cmd_pending = BOOL_FALSE;
     /* 心跳监督独立固定60s周期，登录成功/配置恢复时重新起算 */
     zk_hb_monitor_state = ZK_HEARTBEAT_MONITOR_IDLE;
     zk_hb_period_tick = now;
@@ -1217,6 +1234,10 @@ void zk_mqtt_reset_session(void)
     zk_startup_time_force_pending = BOOL_FALSE;
     zk_ota_ack_clear();
     zk_alarm_reset_states();
+    /* 会话级复位信号查询:丢弃进行中的查询与延迟响应 */
+    zk_signal_query_state = ZK_SIGNAL_QUERY_IDLE;
+    zk_signal_query_cmd_pending = BOOL_FALSE;
+    zk_signal_query_tick = 0;
 }
 
 const zk_mqtt_config_t *zk_mqtt_get_config(void)
@@ -1914,11 +1935,115 @@ boolean_en zk_dispatch_message(cJSON *root, const zk_message_header_t *header)
 }
 
 
+/**
+*@brief   构建并发送信号查询的延迟响应(在 QENG 完成后调用)
+*@param   request：保存的请求消息头
+*@return  0：发送成功；-1：发送失败
+*@note    复用 zk_add_signal_group 构建 Signal 数据组
+*/
+static int zk_publish_signal_query_response(const zk_message_header_t *request)
+{
+    cJSON *root;
+    cJSON *dt;
+
+    root = zk_create_root_from_header(request, 1, 0);
+    if (root == NULL)
+    {
+        return -1;
+    }
+
+    dt = zk_cjson_create_tx_object("DT");
+    if (dt == NULL)
+    {
+        cJSON_Delete(root);
+        return -1;
+    }
+    cJSON_AddItemToObject(root, "DT", dt);
+    zk_add_signal_group(dt);
+
+    if (zk_send_json_root(root, NULL) != 0)
+    {
+        cJSON_Delete(root);
+        return -1;
+    }
+    cJSON_Delete(root);
+    return 0;
+}
+
+/**
+*@brief   信号强度查询状态机(周期刷新 + 命令延迟响应)
+*@param   now：当前系统tick
+*@return  1：已消费本tick(阻塞后续业务)；0：未触发
+*@note    周期与上报周期(dev_cfg->uPeriod)对齐；UART忙时不推进周期,下个tick重试；
+*         QENG失败不重试,直接推进周期等待下个周期
+*/
 static boolean_en zk_signal_query_process(uint32 now)
 {
-    (void)now;
-    /* Runtime QENG shares the modem UART with MQTT publish and can break ACK timing. */
-    return BOOL_FALSE;
+    const zk_device_config_t *dev_cfg;
+    uint32 period_ms;
+
+    switch (zk_signal_query_state)
+    {
+    case ZK_SIGNAL_QUERY_IDLE:
+        dev_cfg = zk_device_config_get();
+        if (dev_cfg == NULL)
+        {
+            return BOOL_FALSE;
+        }
+        period_ms = zk_get_effective_period_sec(dev_cfg->uPeriod,
+                                                 ZK_UPLOAD_INTERVAL_SEC) * 1000UL;
+        if (Timer_PassedDelay(zk_signal_query_tick, period_ms) == BOOL_FALSE)
+        {
+            return BOOL_FALSE;   /* 周期未到 */
+        }
+        if (nb_qeng_trigger_runtime() == BOOL_FALSE)
+        {
+            return BOOL_FALSE;   /* UART忙,下个tick重试,不推进周期 */
+        }
+        zk_signal_query_state = ZK_SIGNAL_QUERY_WAIT_FINISH;
+        printf("[SIG] periodic query started\r\n");
+        return BOOL_TRUE;
+
+    case ZK_SIGNAL_QUERY_WAIT_FINISH:
+        if (send_AT_Command_machine_finish() == BOOL_FALSE)
+        {
+            return BOOL_TRUE;    /* 仍在等待 QENG 完成 */
+        }
+
+        /* QENG 完成 — 无论成功失败都重置 AT 机并推进周期 */
+        send_AT_Command_machine_idle();
+        zk_signal_query_tick = now;
+        zk_signal_query_state = ZK_SIGNAL_QUERY_IDLE;
+
+        if (nb_at_command_is_failed() == BOOL_TRUE)
+        {
+            printf("[SIG] qeng at command failed\r\n");
+        }
+        else
+        {
+            printf("[SIG] qeng ok\r\n");
+        }
+
+        /* 命令触发的查询:发送延迟响应 */
+        if (zk_signal_query_cmd_pending == BOOL_TRUE)
+        {
+            zk_signal_query_cmd_pending = BOOL_FALSE;
+            if (nb_at_command_is_failed() == BOOL_TRUE)
+            {
+                zk_publish_simple_response(&zk_signal_query_cmd_header,
+                                           ZK_SIGNAL_ERR_QENG_FAIL);
+            }
+            else
+            {
+                (void)zk_publish_signal_query_response(&zk_signal_query_cmd_header);
+            }
+        }
+        return BOOL_TRUE;
+
+    default:
+        zk_signal_query_state = ZK_SIGNAL_QUERY_IDLE;
+        return BOOL_FALSE;
+    }
 }
 
 /** 添加运行时统计时间组到DT（调用前确保 zk_runtime_counter_process 已周期性执行） */
@@ -3155,6 +3280,27 @@ boolean_en zk_handle_control_message(cJSON *root, const zk_message_header_t *hea
             zk_publish_simple_response(header, 0);
             zk_reboot_pending = BOOL_TRUE;
             zk_reboot_tick = Timer_GetTickCount();
+            return BOOL_TRUE;
+        }
+        if (strcmp(do_node->valuestring, "SignalQuery") == 0)
+        {
+            /* 检查信号查询状态机是否空闲(避免与周期刷新冲突) */
+            if (zk_signal_query_state != ZK_SIGNAL_QUERY_IDLE)
+            {
+                zk_publish_simple_response(header, ZK_SIGNAL_ERR_BUSY);
+                return BOOL_TRUE;
+            }
+            /* 尝试发送 QENG,若 UART 忙则立即返回失败 */
+            if (nb_qeng_trigger_runtime() == BOOL_FALSE)
+            {
+                zk_publish_simple_response(header, ZK_SIGNAL_ERR_BUSY);
+                return BOOL_TRUE;
+            }
+            /* 保存请求头,QENG 完成后由 zk_signal_query_process 延迟响应 */
+            memcpy(&zk_signal_query_cmd_header, header, sizeof(zk_message_header_t));
+            zk_signal_query_cmd_pending = BOOL_TRUE;
+            zk_signal_query_state = ZK_SIGNAL_QUERY_WAIT_FINISH;
+            printf("[SIG] cmd query triggered by server\r\n");
             return BOOL_TRUE;
         }
         zk_publish_simple_response(header, 1);
