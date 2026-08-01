@@ -1783,7 +1783,6 @@ static u32 nb_mqtt_recovery_attempt_tick = 0;
 static u32 nb_mqtt_recovery_start_count = 0;
 static u32 nb_mqtt_recovery_success_count = 0;
 static u32 nb_mqtt_recovery_fail_count = 0;
-static u32 nb_mqtt_mcu_reset_count = 0;
 
 /* 单轮恢复超时检查：非阻塞，供_4G_configModule_machine周期调用 */
 static void nb_mqtt_recovery_process(void)
@@ -1807,14 +1806,15 @@ static void nb_mqtt_recovery_process(void)
            (unsigned int)nb_mqtt_recovery_attempt_count);
     if (nb_mqtt_recovery_attempt_count >= NB_MQTT_RECOVERY_MAX_ATTEMPTS)
     {
-        /* 已真实执行第3次4G硬件复位且第3轮仍未恢复，才软件复位MCU */
-        nb_mqtt_mcu_reset_count++;
-        printf("[MQTT][FATAL] modem recovery failed %u times, reset MCU\r\n",
+        /* 网络故障不再复位MCU，避免打断PWM等本地业务；重新进入一轮4G恢复 */
+        printf("[MQTT][RECOVERY][W] modem recovery failed %u times, continue retrying\r\n",
                (unsigned int)NB_MQTT_RECOVERY_MAX_ATTEMPTS);
-        NVIC_SystemReset();
-        return;
+        nb_mqtt_recovery_attempt_count = 1;
     }
-    nb_mqtt_recovery_attempt_count++;
+    else
+    {
+        nb_mqtt_recovery_attempt_count++;
+    }
     nb_mqtt_recovery_attempt_tick = Timer_GetTickCount();
     printf("[MQTT][RECOVERY] attempt=%u/%u\r\n",
            (unsigned int)nb_mqtt_recovery_attempt_count,
