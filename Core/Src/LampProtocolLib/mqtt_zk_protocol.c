@@ -2971,6 +2971,10 @@ boolean_en zk_mqtt_accept_login_ack(const zk_message_header_t *header)
         (header->id[0] == '\0' || strcmp(header->id, ZK_LOGIN_REQUEST_ID) == 0))
     {
         now = Timer_GetTickCount();
+        if (nb_mqtt_recovery_is_active() == BOOL_TRUE)
+        {
+            nb_mqtt_recovery_mark_transport_success();
+        }
         zk_login_state = ZK_LOGIN_STATE_ONLINE;
         zk_login_ack_timeout_count = 0;
         zk_sync_online_period_timers(now);
