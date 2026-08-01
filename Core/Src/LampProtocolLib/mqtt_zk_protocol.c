@@ -100,7 +100,6 @@ static u32 zk_hb_state_tick = 0;
 static u32 zk_hb_pub_success_snapshot = 0;
 static u32 zk_hb_pub_fail_snapshot = 0;
 static u32 zk_hb_pub_timeout_snapshot = 0;
-static u32 zk_last_broker_ack_tick = 0;
 static u32 zk_broker_ack_snapshot = 0;
 static u32 zk_hb_send_count = 0;
 static u32 zk_hb_success_count = 0;
@@ -1224,7 +1223,6 @@ void zk_mqtt_reset_session(void)
     zk_hb_pub_fail_snapshot = 0;
     zk_hb_pub_timeout_snapshot = 0;
     zk_hb_consecutive_fail_count = 0;
-    zk_last_broker_ack_tick = 0;
     zk_broker_ack_snapshot = nb_mqtt_get_publish_success_count();
     zk_cyclic_report_retry_pending = BOOL_FALSE;
     zk_cyclic_report_retry_tick = 0;
@@ -1710,7 +1708,6 @@ static void zk_heartbeat_mark_success(uint32 now)
     zk_hb_monitor_state = ZK_HEARTBEAT_MONITOR_IDLE;
     zk_hb_consecutive_fail_count = 0;
     zk_hb_period_tick = now;
-    zk_last_broker_ack_tick = now;
     zk_broker_ack_snapshot = nb_mqtt_get_publish_success_count();
     zk_hb_success_count++;
     printf("[HBMON] ack success\r\n");
@@ -1837,7 +1834,6 @@ static void zk_broker_ack_detect(uint32 now)
     if (success != zk_broker_ack_snapshot)
     {
         zk_broker_ack_snapshot = success;
-        zk_last_broker_ack_tick = now;
         if (zk_hb_consecutive_fail_count != 0)
         {
             zk_hb_consecutive_fail_count = 0;
@@ -2018,8 +2014,10 @@ static boolean_en zk_signal_query_process(uint32 now)
 
         /* 成功 = AT命令执行成功 且 本次解析到有效RSRP，二者缺一不可；
            仅收到OK但无新RSRP(SEARCH/格式异常)按失败处理，避免用陈旧值回成功 */
-        qeng_ok = (nb_at_command_is_failed() == BOOL_FALSE) &&
-                  (nb_qeng_last_capture_valid() == BOOL_TRUE);
+        qeng_ok = ((nb_at_command_is_failed() == BOOL_FALSE) &&
+                   (nb_qeng_last_capture_valid() == BOOL_TRUE))
+                      ? BOOL_TRUE
+                      : BOOL_FALSE;
 
         if (qeng_ok == BOOL_FALSE)
         {
