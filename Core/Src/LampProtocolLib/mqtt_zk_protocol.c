@@ -1981,6 +1981,7 @@ static boolean_en zk_signal_query_process(uint32 now)
 {
     const zk_device_config_t *dev_cfg;
     uint32 period_ms;
+    boolean_en qeng_ok;
 
     switch (zk_signal_query_state)
     {
@@ -2015,9 +2016,14 @@ static boolean_en zk_signal_query_process(uint32 now)
         zk_signal_query_tick = now;
         zk_signal_query_state = ZK_SIGNAL_QUERY_IDLE;
 
-        if (nb_at_command_is_failed() == BOOL_TRUE)
+        /* 成功 = AT命令执行成功 且 本次解析到有效RSRP，二者缺一不可；
+           仅收到OK但无新RSRP(SEARCH/格式异常)按失败处理，避免用陈旧值回成功 */
+        qeng_ok = (nb_at_command_is_failed() == BOOL_FALSE) &&
+                  (nb_qeng_last_capture_valid() == BOOL_TRUE);
+
+        if (qeng_ok == BOOL_FALSE)
         {
-            printf("[SIG] qeng at command failed\r\n");
+            printf("[SIG] qeng failed or no valid rsrp\r\n");
         }
         else
         {
@@ -2028,7 +2034,7 @@ static boolean_en zk_signal_query_process(uint32 now)
         if (zk_signal_query_cmd_pending == BOOL_TRUE)
         {
             zk_signal_query_cmd_pending = BOOL_FALSE;
-            if (nb_at_command_is_failed() == BOOL_TRUE)
+            if (qeng_ok == BOOL_FALSE)
             {
                 zk_publish_simple_response(&zk_signal_query_cmd_header,
                                            ZK_SIGNAL_ERR_QENG_FAIL);
@@ -2774,6 +2780,14 @@ void zk_mqtt_session_process(void)
             return;
         }
 
+        /* QENG信号刷新:先于周期上报,保证上报使用刚解析的RSRP;
+           查询进行中(WAIT_FINISH)或刚完成时返回TRUE,阻塞本tick后续上报/校时,
+           上报顺延到QENG完成后一tick,携带最新信号值 */
+        if (zk_signal_query_process(now) == BOOL_TRUE)
+        {
+            return;
+        }
+
         /* 周期上报重试窗口：首次失败后5s到点最多重试一次；窗口期内不阻塞后续业务 */
         if (zk_cyclic_report_retry_pending == BOOL_TRUE &&
             Timer_PassedDelay(zk_cyclic_report_retry_tick, ZK_CYCLIC_REPORT_RETRY_DELAY_MS) == BOOL_TRUE)
@@ -2841,8 +2855,6 @@ void zk_mqtt_session_process(void)
             }
             return;
         }
-
-        (void)zk_signal_query_process(now);
     }
 }
 

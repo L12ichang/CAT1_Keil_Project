@@ -103,6 +103,7 @@ void  send_AT_Command_machine_star(char *command,uint8 length, char *response, u
 boolean_en nb_get_rsrp_dbm10(s32 *rsrp_dbm10);
 boolean_en nb_uart_is_available_for_at(void);
 boolean_en nb_at_command_is_failed(void);
+boolean_en nb_qeng_last_capture_valid(void);
 boolean_en nb_qeng_trigger_runtime(void);
 boolean_en OTA_ENABLE_IS_SET(void);
 void nb_modem_lock_for_ota(void);

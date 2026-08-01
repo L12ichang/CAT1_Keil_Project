@@ -57,6 +57,8 @@ static boolean_en imei_ready = BOOL_FALSE;
 static boolean_en iccid_ready = BOOL_FALSE;
 static boolean_en rsrp_ready = BOOL_FALSE;
 static s32 nb_rsrp_dbm10 = 0;
+/* 本次QENG查询是否解析到有效RSRP；与rsrp_ready区分:后者为历史最近一次有效值,可保留上报 */
+static boolean_en qeng_capture_valid = BOOL_FALSE;
 static char nb_net_reg_status[16] = "";
 static boolean_en nb_net_reg_ready = BOOL_FALSE;
 static u8 nb_net_reg_wait_count = 0;
@@ -551,6 +553,12 @@ boolean_en nb_get_rsrp_dbm10(s32 *rsrp_dbm10)
     return BOOL_TRUE;
 }
 
+/** 本次QENG是否真正解析到有效RSRP；须与nb_at_command_is_failed()同时判断 */
+boolean_en nb_qeng_last_capture_valid(void)
+{
+    return qeng_capture_valid;
+}
+
 u64 char_to_digita(u8* buf,u8 len)
 { 
     u8*  recvURC;  
@@ -762,6 +770,7 @@ static boolean_en capture_rsrp_from_qeng_line(const u8 *line)
         {
             nb_rsrp_dbm10 = value * 10;
             rsrp_ready = BOOL_TRUE;
+            qeng_capture_valid = BOOL_TRUE;
             printf("[QENG] rsrp=%ld.%lddBm\n",
                    (long)(nb_rsrp_dbm10 / 10),
                    (long)((nb_rsrp_dbm10 < 0) ? -(nb_rsrp_dbm10 % 10) : (nb_rsrp_dbm10 % 10)));
@@ -857,6 +866,15 @@ boolean_en nb_qeng_trigger_runtime(void)
     {
         return BOOL_FALSE;
     }
+    /* OTA加锁/OTA使能期间禁止插入QENG，避免send_AT_Command_machine_star静默拒绝
+       后仍返回TRUE、上层状态机进入WAIT_FINISH却无实际事务 */
+    if (nb_modem_locked_by_ota() == BOOL_TRUE ||
+        OTA_ENABLE_IS_SET() == BOOL_TRUE)
+    {
+        return BOOL_FALSE;
+    }
+    /* 每次新查询清零"本次捕获有效"标志，完成时据此区分AT成功与真正取得新RSRP */
+    qeng_capture_valid = BOOL_FALSE;
     send_AT_Command_machine_star("at+qeng=\"servingcell\"\r\n",
                                   strlen("at+qeng=\"servingcell\"\r\n"),
                                   "OK", 20, 0);
