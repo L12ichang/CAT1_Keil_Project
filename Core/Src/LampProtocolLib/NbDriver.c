@@ -1426,6 +1426,7 @@ void _4G_configModule_machine(void)
               {
                   break;
               }
+              send_AT_Command_machine_idle();
               connect_state=CONNECT_CONFIG__COMPLETE;
               state = NB_STATE_CONNECTED;
               onNBEvent(NB_EVENT_CONNECTED, 0, 0);
