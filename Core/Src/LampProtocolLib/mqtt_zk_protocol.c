@@ -3239,7 +3239,10 @@ static void zk_apply_brightness(int brightness)
     }
     dim_level = (u32)brightness;
     dim_ready();
-    zk_notify_state_changed();
+    /*
+     * 平台会在调光/开关灯后下发巡检，巡检的 CT:C 已包含相同的
+     * RunSts。此处不再排队 CT:B，避免同一状态重复上报。
+     */
 }
 
 void zk_apply_plan_brightness(int brightness)
