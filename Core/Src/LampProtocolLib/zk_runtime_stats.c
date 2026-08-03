@@ -247,7 +247,9 @@ void zk_runtime_counter_process(void)
 boolean_en zk_runtime_stats_clear(void)
 {
     uint32 old_boot_run;
+    uint32 old_boot_light;
     uint32 old_total_run_base;
+    uint32 old_total_light_base;
     uint32 now;
 
     if (zk_runtime_loaded != BOOL_TRUE)
@@ -257,15 +259,21 @@ boolean_en zk_runtime_stats_clear(void)
 
     zk_runtime_counter_process();
     old_boot_run = zk_boot_run_seconds;
+    old_boot_light = zk_boot_light_seconds;
     old_total_run_base = zk_total_run_base_seconds;
+    old_total_light_base = zk_total_light_base_seconds;
 
     zk_boot_run_seconds = 0U;
+    zk_boot_light_seconds = 0U;
     zk_total_run_base_seconds = 0U;
+    zk_total_light_base_seconds = 0U;
 
     if (zk_runtime_flash_store_current() != BOOL_TRUE)
     {
         zk_boot_run_seconds = old_boot_run;
+        zk_boot_light_seconds = old_boot_light;
         zk_total_run_base_seconds = old_total_run_base;
+        zk_total_light_base_seconds = old_total_light_base;
         return BOOL_FALSE;
     }
 

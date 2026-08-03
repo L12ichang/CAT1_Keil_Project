@@ -10,7 +10,7 @@ void zk_runtime_stats_init(void);
 /* 运行时统计：非阻塞周期处理（秒级累加），需在main loop中周期性调用 */
 void zk_runtime_counter_process(void);
 
-/* Clear RunTm.rTime and RunTm.tTime, then persist zero. */
+/* Clear RunTm and LightTm counters, then persist zero. */
 boolean_en zk_runtime_stats_clear(void);
 
 /* 以下访问函数供协议层构建JSON上报时使用 */
