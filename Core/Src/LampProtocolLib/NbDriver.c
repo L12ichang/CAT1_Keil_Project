@@ -970,6 +970,18 @@ boolean_en nb_qeng_trigger_runtime(void)
                {
                    if (readLine(stringBuf, &recvLength, 0))
                     {
+                        if (nb_is_link_lost_line(stringBuf) == BOOL_TRUE ||
+                            strstr((const char *)stringBuf, "+QMTRECV:") != 0)
+                        {
+                            /* 异步URC由当前AT消费者分发，不能参与当前命令判定 */
+                            parseResult(stringBuf);
+                            recvLength = 0;
+                            if (sendcommad_state == SEND_COMMAND_STATE_RXING)
+                            {
+                                send_AT_Command_machine_wait_or_retry();
+                            }
+                            break;
+                        }
                         capture_identity_line(stringBuf);
                         if (nb_at_command_is_qccid() == BOOL_TRUE &&
                             strstr((const char *)stringBuf, "ERROR") != 0)
@@ -2486,7 +2498,9 @@ void nbModuleProcess(void)
                             {
                                 break;
                             }
-                            while (readLine(stringBuf, &recvLength, 0)) 
+                            while (nb_at_command_is_busy() == BOOL_FALSE &&
+                                   nb_mqtt_publish_owns_uart() == BOOL_FALSE &&
+                                   readLine(stringBuf, &recvLength, 0))
                             {
 //                                printf("stringBuf\n");
 //                                printf("stringBuf=%s\n",stringBuf);

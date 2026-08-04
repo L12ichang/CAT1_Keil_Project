@@ -6,17 +6,17 @@
 
 ## 当前镜像身份
 
-| Item | Value |
-|---|---|
-| APP image | `output/release_minsize_final_cat1.bin` |
-| OTA package | `tools/ota_test/out/release_minsize_ota_20260710_025602.bin` |
-| Size | `71648` bytes |
-| Header raw size | `0x000117E0` |
-| Header checksum | `0x0070A0EE` |
-| Calculated checksum | `0x0070A0EE` |
-| Device type | `0x0003` |
-| Max APP/OTA size | `0x1C000` bytes |
-| SHA256 | `B2A289F9E6215F099A92A1F9F3D3FFA4F1BA694A8BBD3B5DEDBBB4EC6AEE132B` |
+| Item                | Value                                                                |
+| ------------------- | -------------------------------------------------------------------- |
+| APP image           | `output/release_minsize_final_cat1.bin`                            |
+| OTA package         | `tools/ota_test/out/release_minsize_ota_20260710_025602.bin`       |
+| Size                | `71648` bytes                                                      |
+| Header raw size     | `0x000117E0`                                                       |
+| Header checksum     | `0x0070A0EE`                                                       |
+| Calculated checksum | `0x0070A0EE`                                                       |
+| Device type         | `0x0003`                                                           |
+| Max APP/OTA size    | `0x1C000` bytes                                                    |
+| SHA256              | `B2A289F9E6215F099A92A1F9F3D3FFA4F1BA694A8BBD3B5DEDBBB4EC6AEE132B` |
 
 Header inspection command:
 
@@ -104,6 +104,7 @@ live OTA 后新增只读 verify helper：
 ## BL0942 带载复测命令
 
 接入电子负载后已运行带范围约束的遥测检查。当前协议上报使用原始缩放值，实测命令为：
+
 
 ```powershell
 python tools\ota_test\mqtt_bl0942_telemetry_check.py `
