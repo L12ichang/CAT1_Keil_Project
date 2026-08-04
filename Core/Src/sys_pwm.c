@@ -14,6 +14,7 @@
 #include "hw_tim1_pwm2.h"
 #include "sys_Vo_Io.h"
 #include "factory_user_data.h"
+#include "sys_calibration_snapshot.h"
 #define TIMEOUT_MAX      200
 #define PWM_OUT_MAX      1000
 #define PWM_OFFSET   (u16)(OP_PWM_OFFSET)  //由于光耦的延迟问题增加3%输出
@@ -50,6 +51,7 @@ u8  fa_test_EN;
 {
      u16 pwm;
      u32 pwm_value;
+     u8 requested_percent = persent;
 #if APP_PWM_DEBUG_ENABLE
      u8 init_persent = persent;
 #endif
@@ -137,6 +139,7 @@ u8  fa_test_EN;
             ((pwm_value * 1000U) / PWM_OUT_MAX) % 10U);
     PWM_DBG("======================\r\n");
 
+    sys_calibration_snapshot_prepare_pwm((u16)requested_percent, (u16)persent);
     hw_set_pwm((u16)pwm_value);
 }
 
@@ -266,5 +269,4 @@ void sys_pwm_process(void)
     }
     
 }
-
 

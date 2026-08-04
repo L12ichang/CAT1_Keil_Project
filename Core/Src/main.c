@@ -43,6 +43,8 @@
 #include "hw_4g_io.h"
 #include "sys_data.h"
 #include "sys_pwm.h"
+#include "sys_calibration_snapshot.h"
+#include "sys_calibration_service.h"
 #include "sys_temp_over_protect.h"
 #include "aip1302.h"
 #include "sys_aip1302.h"
@@ -216,6 +218,8 @@ int main(void)
     hw_tim1_pwm2_init();
     printf("%s,%s\n",DataStr,TimeStr);
     oco_init();
+    sys_calibration_snapshot_init();
+    sys_calibration_service_init();
     hw_tim1_pwm2_set_PWM_OUT(0);//�ȵ����ٽ��п���������,CCO�����Ǹߵ�ƽ
     portableInit();
     sys_data_load();

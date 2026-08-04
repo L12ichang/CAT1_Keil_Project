@@ -1605,6 +1605,21 @@
               <FilePath>..\Core\Src\sys_bl0942.c</FilePath>
             </File>
             <File>
+              <FileName>sys_calibration_snapshot.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_snapshot.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_service.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_service.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_bl0942_frame.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_bl0942_frame.c</FilePath>
+            </File>
+            <File>
               <FileName>sys_data.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\sys_data.c</FilePath>
@@ -3456,6 +3471,21 @@
               <FileName>sys_bl0942.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\sys_bl0942.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_snapshot.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_snapshot.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_service.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_service.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_bl0942_frame.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_bl0942_frame.c</FilePath>
             </File>
             <File>
               <FileName>sys_data.c</FileName>

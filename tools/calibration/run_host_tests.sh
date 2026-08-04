@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+BUILD_DIR="$(mktemp -d "${TMPDIR:-/tmp}/cat1-calibration-tests.XXXXXX")"
+trap 'rm -rf "${BUILD_DIR}"' EXIT
+
+cc \
+  -std=c11 \
+  -Wall \
+  -Wextra \
+  -Werror \
+  -I"${ROOT_DIR}/Core/Src" \
+  "${ROOT_DIR}/Core/Src/sys_calibration_snapshot.c" \
+  "${ROOT_DIR}/Core/Src/sys_calibration_service.c" \
+  "${ROOT_DIR}/Core/Src/sys_bl0942_frame.c" \
+  "${ROOT_DIR}/tools/calibration/test_snapshot.c" \
+  -o "${BUILD_DIR}/test_snapshot"
+
+"${BUILD_DIR}/test_snapshot"

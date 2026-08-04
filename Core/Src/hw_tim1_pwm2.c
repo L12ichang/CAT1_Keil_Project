@@ -9,6 +9,7 @@
 #include "hw_tim1_pwm2.h"
 #include "oco.h"
 #include "factory_user_data.h"
+#include "sys_calibration_snapshot.h"
 TIM_HandleTypeDef htim1;
 
 u8 pwm_on;
@@ -52,7 +53,12 @@ void hw_tim1_pwm2_set_PWM_OUT(u16 pwm)//pwm输出
     printf("pwm=%d\r\n",pwm);
 #endif
    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, pwm+PWM_OFFSET);  //负逻辑
-      
+   sys_calibration_snapshot_publish_pwm(HAL_GetTick(),
+                                        pwm,
+                                        (u16)(pwm + PWM_OFFSET),
+                                        pwm_on ? 1U : 0U,
+                                        SYS_CALIBRATION_PWM_SAMPLE_VALID);
+
 }
 
 void hw_tim1_pwm2_init(void)
