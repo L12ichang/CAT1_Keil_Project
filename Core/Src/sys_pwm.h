@@ -15,5 +15,6 @@ void sys_pwm_output_for_temp_protect(u8 persent);
 void sys_pwm_output_on_fade(u8 persent);
 void sys_pwm_process(void);
 void sys_pwm_reload(void);
+void sys_pwm_force_safe_off(void);
 
 #endif

@@ -11,6 +11,9 @@
 #include "adc.h"
 #include "sys_pwm.h"
 #include "factory_user_data.h"
+#include "sys_calibration_curve.h"
+#include "sys_calibration_safety.h"
+#include "sys_calibration_service.h"
 
 
      
@@ -532,6 +535,16 @@ void error_report_process(void)
                    }
                 }*/
                Po_value = ((u32)Vo_value*Io_value)/1000U;   //单位0.1W
+
+               /* 50W固件的额定功率和绝对过流均为锁存式fail-off门禁。 */
+               if (MID == SYS_CALIBRATION_50W_MID &&
+                   (Po_value > SYS_CALIBRATION_50W_POWER_LIMIT_01W ||
+                    sys_calibration_safety_is_absolute_overcurrent(Io_value) ==
+                        BOOL_TRUE))
+               {
+                   Error_1_OL = 1U;
+                   sys_calibration_service_force_fault();
+               }
         
 //             printf(" ADC_Value4=%d\n",ADC_Value4);
 //             printf(" Vo_value=%dV\n",Vo_value/10);

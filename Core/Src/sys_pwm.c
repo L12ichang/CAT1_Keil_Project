@@ -15,6 +15,8 @@
 #include "sys_Vo_Io.h"
 #include "factory_user_data.h"
 #include "sys_calibration_snapshot.h"
+#include "sys_calibration_curve.h"
+#include "sys_calibration_safety.h"
 #define TIMEOUT_MAX      200
 #define PWM_OUT_MAX      1000
 #define PWM_OFFSET   (u16)(OP_PWM_OFFSET)  //由于光耦的延迟问题增加3%输出
@@ -94,6 +96,29 @@ u8  fa_test_EN;
 
             }
         }
+
+      /* 50W产品的正常路径和产测直通路径都受同一软件限幅约束。 */
+      if (MID == SYS_CALIBRATION_50W_MID)
+      {
+          u8 safe_percent;
+
+          if (Error_1_OL != 0U || Error_Out_LV != 0U ||
+              Error_3_OV != 0U || Error_4_LV != 0U)
+          {
+              persent = 0U;
+          }
+          else if (persent > 0U &&
+                   sys_calibration_safety_limit_percent(
+                       persent, (u16)Vo_value, (u16)SET_OUTCUR,
+                       &safe_percent) == BOOL_TRUE)
+          {
+              persent = safe_percent;
+          }
+          else if (persent > 0U)
+          {
+              persent = 0U;
+          }
+      }
 
       if(fa_test_EN==0)
       {
@@ -273,4 +298,20 @@ void sys_pwm_process(void)
       sys_pwm_output( set_percent );
     }
     
+}
+
+void sys_pwm_force_safe_off(void)
+{
+    _fade = BOOL_FALSE;
+    power_old = 0U;
+    power_new = 0U;
+    power_current = 0U;
+    set_percent = 0U;
+    sys_calibration_snapshot_prepare_pwm(0U, 0U);
+    hw_tim1_pwm2_set_PWM_OUT(0U);
+    sys_calibration_snapshot_publish_pwm(HAL_GetTick(),
+                                         hw_tim1_pwm2_get_logical_pwm(),
+                                         hw_tim1_pwm2_get_ccr(),
+                                         hw_tim1_pwm2_get_oco_on(),
+                                         SYS_CALIBRATION_PWM_SAMPLE_VALID);
 }

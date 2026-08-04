@@ -162,6 +162,7 @@ static u8 _timer;
 u16 crc16;
 u16 upload_timer=0;
 u8 softstar=1;
+static sys_calibration_service_status_st calibration_service_status;
 
 void main_timer(void)
 { 
@@ -220,6 +221,7 @@ int main(void)
     oco_init();
     sys_calibration_snapshot_init();
     sys_calibration_service_init();
+    sys_calibration_service_bind_safe_off(sys_pwm_force_safe_off);
     sys_calibration_snapshot_prepare_pwm(0U, 0U);
     hw_tim1_pwm2_set_PWM_OUT(0);//�ȵ����ٽ��п���������,CCO�����Ǹߵ�ƽ
     sys_calibration_snapshot_publish_pwm(HAL_GetTick(),
@@ -256,13 +258,15 @@ int main(void)
     if(softstar) //����������
     {
         softstar=0;
-        dim_level = 100;                    /* 同步调光状态，确保RunSts上报亮灯+100%亮度 */
-        sys_pwm_fade_output(0, 100);        /* 上电默认满功率输出（不走zk_apply_brightness避免误触发变化上报） *///������������
+        dim_level = 0;                      /* 复位后保持关断，等待正常调光仲裁 */
+        sys_pwm_force_safe_off();          /* 禁止复位路径0->100渐升 */
     }
 #if APP_LOG_ENABLE || APP_OTA_LOG_ENABLE
     hw_uart3_process();
 #endif
     sys_tick_process();
+    (void)sys_calibration_service_timer(HAL_GetTick(),
+                                        &calibration_service_status);
     zk_runtime_counter_process();
   
     hw_gateway_process();           
