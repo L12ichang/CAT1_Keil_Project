@@ -8,8 +8,7 @@
 *************************************************************/
 #include "net_dim.h"
 #include "sys_Vo_Io.h"
-#include "hw_tim1_pwm2.h"   
-#include "oco.h"
+#include "hw_tim1_pwm2.h"
 #include "sys_pwm.h"
 #include "factory_user_data.h"
 #include "json_protocol.h"
@@ -41,20 +40,17 @@ void uart_diam_process(void)
            {   
                if(pwm<5)
                {
-                 pwm=0;  
-                oco_off(); 
+                 pwm=0;
                }
                else
-               {  
-                 oco_on(); 
+               {
                  printf("dim_level=%d\n",dim_level);
                }
             }
             else
             {
-             printf("dim_level=%d\n",dim_level); 
-             oco_off();  
-             pwm=0;   
+             printf("dim_level=%d\n",dim_level);
+             pwm=0;
             }
 
             dim_bak_to_low_acin=pwm;

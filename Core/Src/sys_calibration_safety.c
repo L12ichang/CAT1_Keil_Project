@@ -98,3 +98,33 @@ boolean_en sys_calibration_safety_is_absolute_overcurrent(u32 current_ma)
     return (current_ma >= SYS_CALIBRATION_ABSOLUTE_FAIL_CURRENT_MA) ?
            BOOL_TRUE : BOOL_FALSE;
 }
+
+u16 sys_calibration_safety_arbitrate_pwm(
+    u16 requested_pwm,
+    sys_calibration_output_source_en source,
+    boolean_en boot_inhibited,
+    boolean_en emergency_stop,
+    boolean_en feedback_fresh)
+{
+    if (requested_pwm == 0U || boot_inhibited == BOOL_TRUE ||
+        emergency_stop == BOOL_TRUE)
+    {
+        return 0U;
+    }
+
+    if (source != SYS_CALIBRATION_OUTPUT_SOURCE_NORMAL &&
+        source != SYS_CALIBRATION_OUTPUT_SOURCE_OFFLINE_PLAN &&
+        source != SYS_CALIBRATION_OUTPUT_SOURCE_FACTORY_DIRECT)
+    {
+        return 0U;
+    }
+
+    if (source == SYS_CALIBRATION_OUTPUT_SOURCE_FACTORY_DIRECT &&
+        (SYS_CALIBRATION_FACTORY_DIRECT_PWM_ENABLED == 0U ||
+         feedback_fresh != BOOL_TRUE))
+    {
+        return 0U;
+    }
+
+    return (requested_pwm > 1000U) ? 1000U : requested_pwm;
+}

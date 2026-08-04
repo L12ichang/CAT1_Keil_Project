@@ -17,6 +17,7 @@
 #include "sys_calibration_snapshot.h"
 #include "sys_calibration_curve.h"
 #include "sys_calibration_safety.h"
+#include "sys_calibration_service.h"
 #define TIMEOUT_MAX      200
 #define PWM_OUT_MAX      1000
 #define PWM_OFFSET   (u16)(OP_PWM_OFFSET)  //由于光耦的延迟问题增加3%输出
@@ -120,6 +121,13 @@ u8  fa_test_EN;
           }
       }
 
+      /* 直驱没有最坏映射和新鲜反馈证明，非零请求在量纲换算前失败关闭。 */
+      if (fa_test_EN != 0U && persent > 0U &&
+          SYS_CALIBRATION_FACTORY_DIRECT_PWM_ENABLED == 0U)
+      {
+          persent = 0U;
+      }
+
       if(fa_test_EN==0)
       {
          if(HWMAX_OUTCUR == 0)
@@ -134,9 +142,27 @@ u8  fa_test_EN;
       }
       else   //产测模式
       {
-        pwm_value = ((u32)persent * (u32)PWM_USEFUL_RANGE) / 100U;
-        PWM_DBG("[PWM] fac_test mode -> pwm_value=%lu\r\n", pwm_value);
+        if (SYS_CALIBRATION_FACTORY_DIRECT_PWM_ENABLED != 0U)
+        {
+            /* 未来开启前必须补齐最坏映射、渐升和反馈新鲜度门禁。 */
+            pwm_value = ((u32)persent * (u32)PWM_USEFUL_RANGE) / 100U;
+            PWM_DBG("[PWM] fac_test mode -> pwm_value=%lu\r\n", pwm_value);
+        }
+        else
+        {
+            pwm_value = 0U;
+            PWM_DBG("[PWM] fac_test nonzero output is safety-gated\r\n");
+        }
       }
+
+    pwm_value = sys_calibration_safety_arbitrate_pwm(
+        (u16)pwm_value,
+        (fa_test_EN != 0U) ? SYS_CALIBRATION_OUTPUT_SOURCE_FACTORY_DIRECT :
+                             SYS_CALIBRATION_OUTPUT_SOURCE_NORMAL,
+        sys_calibration_service_is_boot_inhibited(),
+        (Error_1_OL != 0U || Error_Out_LV != 0U ||
+         Error_3_OV != 0U || Error_4_LV != 0U) ? BOOL_TRUE : BOOL_FALSE,
+        BOOL_FALSE);
 
     /* PWM 调试日志：可观察完整计算过程与电子负载对比 */
     PWM_DBG("====== PWM Calc ======\r\n");

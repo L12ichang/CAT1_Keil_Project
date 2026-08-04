@@ -57,13 +57,18 @@ boolean_en sys_calibration_dc5200_build_comprehensive_query(
     u16 capacity,
     u16 *length)
 {
-    u16 crc;
-
     if (frame == NULL || length == NULL ||
         capacity < SYS_CALIBRATION_DC5200_QUERY_FRAME_LENGTH)
     {
         return BOOL_FALSE;
     }
+#if SYS_CALIBRATION_DC5200_QUERY_ENABLED == 0U
+    /* 资料存在 00 3C D2 3A 与 00 3A B2 FC 两个候选，未经实机抓包不选边。 */
+    *length = 0U;
+    return BOOL_FALSE;
+#else
+    u16 crc;
+
     frame[0] = SYS_CALIBRATION_DC5200_REPLY_START_0;
     frame[1] = SYS_CALIBRATION_DC5200_REPLY_START_1;
     frame[2] = SYS_CALIBRATION_DC5200_REPLY_START_2;
@@ -83,6 +88,7 @@ boolean_en sys_calibration_dc5200_build_comprehensive_query(
     frame[15] = SYS_CALIBRATION_DC5200_REQUEST_START_3;
     *length = SYS_CALIBRATION_DC5200_QUERY_FRAME_LENGTH;
     return BOOL_TRUE;
+#endif
 }
 
 boolean_en sys_calibration_dc5200_validate_comprehensive_reply(

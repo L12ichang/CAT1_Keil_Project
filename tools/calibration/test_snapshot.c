@@ -4,6 +4,7 @@
 #include "sys_calibration_snapshot.h"
 #include "sys_calibration_service.h"
 #include "sys_calibration_driver_protocol.h"
+#include "sys_calibration_safety.h"
 #include "sys_bl0942_frame.h"
 
 static unsigned int safe_off_calls;
@@ -135,6 +136,20 @@ int main(void)
                                 service_status.commit_available == BOOL_FALSE &&
                                 service_status.nonzero_output_allowed == BOOL_FALSE,
                             "service codec is available but output gates are closed");
+    failures += expect_true(
+        sys_calibration_safety_arbitrate_pwm(
+            1000U, SYS_CALIBRATION_OUTPUT_SOURCE_NORMAL,
+            service_status.boot_inhibit_active, BOOL_FALSE, BOOL_TRUE) == 0U &&
+        sys_calibration_safety_arbitrate_pwm(
+            1000U, SYS_CALIBRATION_OUTPUT_SOURCE_OFFLINE_PLAN,
+            service_status.boot_inhibit_active, BOOL_FALSE, BOOL_TRUE) == 0U &&
+        sys_calibration_safety_arbitrate_pwm(
+            1000U, SYS_CALIBRATION_OUTPUT_SOURCE_FACTORY_DIRECT,
+            service_status.boot_inhibit_active, BOOL_FALSE, BOOL_TRUE) == 0U &&
+        sys_calibration_safety_arbitrate_pwm(
+            0U, SYS_CALIBRATION_OUTPUT_SOURCE_NORMAL,
+            service_status.boot_inhibit_active, BOOL_FALSE, BOOL_FALSE) == 0U,
+        "boot inhibit blocks normal/offline/direct nonzero and preserves zero");
     failures += expect_true(sys_calibration_service_begin(1U, 0U, 1000U, &service_status) ==
                                 SYS_CALIBRATION_RESULT_SAFETY_NOT_READY,
                             "begin is blocked without safety proof");
@@ -179,6 +194,25 @@ int main(void)
                                     SYS_CALIBRATION_RESULT_OK &&
                                     service_status.current_level == 0U,
                                 "zero safe setpoint is allowed");
+        {
+            unsigned int safe_off_before_replay = safe_off_calls;
+            failures += expect_true(sys_calibration_service_begin_seq(
+                                        42U, 101U, 1000U, 1U, &service_status) ==
+                                        SYS_CALIBRATION_RESULT_DUPLICATE &&
+                                        safe_off_calls == safe_off_before_replay,
+                                    "old seq is rejected without replaying begin side effect");
+            failures += expect_true(
+                sys_calibration_safety_arbitrate_pwm(
+                    1000U, SYS_CALIBRATION_OUTPUT_SOURCE_NORMAL,
+                    service_status.boot_inhibit_active, BOOL_FALSE, BOOL_TRUE) == 0U &&
+                sys_calibration_safety_arbitrate_pwm(
+                    1000U, SYS_CALIBRATION_OUTPUT_SOURCE_OFFLINE_PLAN,
+                    service_status.boot_inhibit_active, BOOL_FALSE, BOOL_TRUE) == 0U &&
+                sys_calibration_safety_arbitrate_pwm(
+                    1000U, SYS_CALIBRATION_OUTPUT_SOURCE_FACTORY_DIRECT,
+                    service_status.boot_inhibit_active, BOOL_FALSE, BOOL_TRUE) == 0U,
+                "active calibration boot inhibit blocks all nonzero sources");
+        }
         failures += expect_true(sys_calibration_service_raw_seq(
                                     42U, 102U, 9U, raw_query, sizeof(raw_query),
                                     SYS_CALIBRATION_RAW_QUERY, &service_status) ==
@@ -190,17 +224,17 @@ int main(void)
                                     SYS_CALIBRATION_RESULT_PROTOCOL_ERROR,
                                 "raw direction mismatch is rejected");
         failures += expect_true(sys_calibration_service_stage_config_seq(
-                                    42U, 200U, 2U, staged_payload,
+                                    42U, 200U, 11U, staged_payload,
                                     sizeof(staged_payload), &service_status) ==
                                     SYS_CALIBRATION_RESULT_OK,
                                 "table payload stages without output");
         failures += expect_true(sys_calibration_service_stage_config_seq(
-                                    42U, 200U, 2U, staged_payload,
+                                    42U, 200U, 11U, staged_payload,
                                     sizeof(staged_payload), &service_status) ==
                                     SYS_CALIBRATION_RESULT_OK,
                                 "duplicate stage returns cached result");
         failures += expect_true(sys_calibration_service_readback_seq(
-                                    42U, 201U, 3U, &service_status) ==
+                                    42U, 201U, 12U, &service_status) ==
                                     SYS_CALIBRATION_RESULT_OK &&
                                     sys_calibration_service_get_staged_payload(
                                         readback_payload, sizeof(readback_payload),
@@ -210,32 +244,82 @@ int main(void)
                                            sizeof(staged_payload)) == 0,
                                 "staged payload has exact readback");
         failures += expect_true(sys_calibration_service_apply_seq(
-                                    42U, 202U, 4U, &service_status) ==
+                                    42U, 202U, 13U, &service_status) ==
                                     SYS_CALIBRATION_RESULT_SAFETY_NOT_READY,
                                 "apply remains blocked by nonzero gate");
         failures += expect_true(sys_calibration_service_commit_seq(
-                                    42U, 203U, 5U, &service_status) ==
+                                    42U, 203U, 14U, &service_status) ==
                                     SYS_CALIBRATION_RESULT_FLASH_GATED,
                                 "commit remains shared-page gated");
         failures += expect_true(sys_calibration_service_heartbeat_seq(
-                                    42U, 204U, 1000U, 6U, &service_status) ==
+                                    42U, 204U, 1000U, 15U, &service_status) ==
                                     SYS_CALIBRATION_RESULT_OK,
                                 "heartbeat renews lease");
         failures += expect_true(sys_calibration_service_timer(1204U, &service_status) ==
                                     BOOL_TRUE &&
                                     service_status.state == SYS_CALIBRATION_STATE_FAULT &&
-                                    safe_off_calls > 0U,
-                                "lease expiry fail-offs and inhibits");
+                                    service_status.boot_inhibit_active == BOOL_TRUE &&
+                                    safe_off_calls > 0U &&
+                                    sys_calibration_safety_arbitrate_pwm(
+                                        1000U, SYS_CALIBRATION_OUTPUT_SOURCE_NORMAL,
+                                        service_status.boot_inhibit_active, BOOL_FALSE,
+                                        BOOL_TRUE) == 0U &&
+                                    sys_calibration_safety_arbitrate_pwm(
+                                        1000U, SYS_CALIBRATION_OUTPUT_SOURCE_OFFLINE_PLAN,
+                                        service_status.boot_inhibit_active, BOOL_FALSE,
+                                        BOOL_TRUE) == 0U &&
+                                    sys_calibration_safety_arbitrate_pwm(
+                                        1000U, SYS_CALIBRATION_OUTPUT_SOURCE_FACTORY_DIRECT,
+                                        service_status.boot_inhibit_active, BOOL_FALSE,
+                                        BOOL_TRUE) == 0U,
+                                "lease expiry fail-offs and inhibits all nonzero sources");
         failures += expect_true(sys_calibration_service_abort(42U, &service_status) ==
                                     BOOL_TRUE &&
-                                    service_status.state == SYS_CALIBRATION_STATE_ABORTED,
-                                "abort after timeout stays safe");
+                                    service_status.state == SYS_CALIBRATION_STATE_ABORTED &&
+                                    service_status.boot_inhibit_active == BOOL_TRUE &&
+                                    sys_calibration_safety_arbitrate_pwm(
+                                        1000U, SYS_CALIBRATION_OUTPUT_SOURCE_NORMAL,
+                                        service_status.boot_inhibit_active, BOOL_FALSE,
+                                        BOOL_TRUE) == 0U &&
+                                    sys_calibration_safety_arbitrate_pwm(
+                                        1000U, SYS_CALIBRATION_OUTPUT_SOURCE_OFFLINE_PLAN,
+                                        service_status.boot_inhibit_active, BOOL_FALSE,
+                                        BOOL_TRUE) == 0U &&
+                                    sys_calibration_safety_arbitrate_pwm(
+                                        1000U, SYS_CALIBRATION_OUTPUT_SOURCE_FACTORY_DIRECT,
+                                        service_status.boot_inhibit_active, BOOL_FALSE,
+                                        BOOL_TRUE) == 0U,
+                                "abort after timeout stays safe for all nonzero sources");
         failures += expect_true(sys_calibration_service_release_seq(
-                                    42U, 1300U, 8U, &service_status) ==
+                                    42U, 1300U, 17U, &service_status) ==
                                     SYS_CALIBRATION_RESULT_FLASH_GATED &&
                                     service_status.boot_inhibit_active == BOOL_TRUE,
                                 "release remains persistently gated");
     }
+
+    sys_calibration_service_init();
+    sys_calibration_service_set_safety_ready(BOOL_FALSE);
+    sys_calibration_service_set_safety_ready(BOOL_TRUE);
+    failures += expect_true(sys_calibration_service_begin_seq(
+                                77U, 0U, 1000U, 1U, &service_status) ==
+                                SYS_CALIBRATION_RESULT_OK,
+                            "force fault test begins a lease");
+    sys_calibration_service_force_fault();
+    failures += expect_true(
+        sys_calibration_service_get_status(&service_status) == BOOL_TRUE &&
+        service_status.state == SYS_CALIBRATION_STATE_FAULT &&
+        service_status.boot_inhibit_active == BOOL_TRUE &&
+        sys_calibration_safety_arbitrate_pwm(
+            1000U, SYS_CALIBRATION_OUTPUT_SOURCE_NORMAL,
+            service_status.boot_inhibit_active, BOOL_FALSE, BOOL_TRUE) == 0U,
+        "force fault latches boot inhibit against normal nonzero output");
+    sys_calibration_service_set_safety_ready(BOOL_FALSE);
+    sys_calibration_service_set_safety_ready(BOOL_TRUE);
+    failures += expect_true(
+        sys_calibration_service_get_status(&service_status) == BOOL_TRUE &&
+        service_status.state == SYS_CALIBRATION_STATE_FAULT &&
+        service_status.boot_inhibit_active == BOOL_TRUE,
+        "fault cannot be unlocked by repeated ready injection");
 
     memset(frame, 0, sizeof(frame));
     frame[0] = SYS_BL0942_READ_RESPONSE_HEADER;

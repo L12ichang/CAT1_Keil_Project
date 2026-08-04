@@ -83,18 +83,31 @@ int main(void)
     u16 pwm[SYS_CALIBRATION_CURVE_POINT_COUNT] =
         {0U, 100U, 200U, 300U, 400U, 500U, 600U, 700U, 800U, 900U, 1000U};
     u16 interpolated;
+    u16 encoded_length;
+    u8 safe_percent;
     int failures = 0;
+
+    static const u8 dc_query_candidate_3c[SYS_CALIBRATION_DC5200_QUERY_FRAME_LENGTH] =
+        {0xAA, 0xBB, 0xCC, 0x01, 0x01, 0x01, 0x00, 0x02,
+         0x00, 0x3C, 0xD2, 0x3A, 0xAA, 0xBB, 0xCC, 0x01};
+    static const u8 dc_query_candidate_3a[SYS_CALIBRATION_DC5200_QUERY_FRAME_LENGTH] =
+        {0xAA, 0xBB, 0xCC, 0x01, 0x01, 0x01, 0x00, 0x02,
+         0x00, 0x3A, 0xB2, 0xFC, 0xAA, 0xBB, 0xCC, 0x01};
 
     failures += expect_true(sys_calibration_storage_crc32(
                                 (const u8 *)"123456789", 9U) == 0xCBF43926UL,
                             "CRC32 version vector");
+    dc_length = 0U;
     failures += expect_true(sys_calibration_dc5200_build_comprehensive_query(
-                                dc_query, sizeof(dc_query), &dc_length) == BOOL_TRUE &&
-                                dc_length == sizeof(dc_query) &&
-                                dc_query[0] == 0xAAU && dc_query[3] == 0x01U &&
-                                dc_query[9] == 0x3CU && dc_query[10] == 0xD2U &&
-                                dc_query[11] == 0x3AU && dc_query[15] == 0x01U,
-                            "DC5200 query golden envelope");
+                                dc_query, sizeof(dc_query), &dc_length) == BOOL_FALSE &&
+                                dc_length == 0U,
+                            "DC5200 query remains gated pending HIL capture");
+    failures += expect_true(
+        sys_calibration_dc5200_crc16_ccitt(dc_query_candidate_3c, 10U) == 0xD23AU &&
+        dc_query_candidate_3c[10] == 0xD2U && dc_query_candidate_3c[11] == 0x3AU &&
+        sys_calibration_dc5200_crc16_ccitt(dc_query_candidate_3a, 10U) == 0xB2FCU &&
+        dc_query_candidate_3a[10] == 0xB2U && dc_query_candidate_3a[11] == 0xFCU,
+        "DC5200 conflicting candidates are retained without selection");
     failures += expect_true(sizeof(golden_dc5200_reply) == 74U &&
                                 sys_calibration_dc5200_validate_comprehensive_reply(
                                     golden_dc5200_reply,
@@ -143,7 +156,7 @@ int main(void)
     failures += expect_true(sys_calibration_driver_encode(
                                 message.command, message.offset, message.data,
                                 message.length, encoded, sizeof(encoded),
-                                (u16 *)&interpolated) == BOOL_TRUE,
+                                &encoded_length) == BOOL_TRUE,
                             "golden table envelope encodes");
     failures += expect_true(memcmp(encoded, golden_table_frame,
                                    sizeof(golden_table_frame)) == 0,
@@ -243,16 +256,39 @@ int main(void)
                                 sys_calibration_safety_limit_current_ma(360U) == 1388U &&
                                 sys_calibration_safety_limit_current_ma(560U) == 892U &&
                                 sys_calibration_safety_limit_current_ma(249U) == 0U,
-                            "50W current and power cap");
+                            "50W 25/36/56V current and power cap");
     failures += expect_true(sys_calibration_safety_limit_percent(
-                                100U, 400U, 1400U, (u8 *)&interpolated) == BOOL_TRUE &&
-                                interpolated == 89U,
+                                100U, 400U, 1400U, &safe_percent) == BOOL_TRUE &&
+                                safe_percent == 89U,
                             "50W percent cap");
     failures += expect_true(sys_calibration_safety_is_absolute_overcurrent(1680U) ==
                                 BOOL_TRUE &&
                                 sys_calibration_safety_is_absolute_overcurrent(1679U) ==
                                 BOOL_FALSE,
-                            "absolute current fail-off threshold");
+                            "1.68A absolute current fail-off threshold");
+    failures += expect_true(
+        sys_calibration_safety_arbitrate_pwm(
+            1000U, SYS_CALIBRATION_OUTPUT_SOURCE_NORMAL, BOOL_FALSE,
+            BOOL_FALSE, BOOL_TRUE) == 1000U &&
+        sys_calibration_safety_arbitrate_pwm(
+            1000U, SYS_CALIBRATION_OUTPUT_SOURCE_OFFLINE_PLAN, BOOL_TRUE,
+            BOOL_FALSE, BOOL_TRUE) == 0U &&
+        sys_calibration_safety_arbitrate_pwm(
+            1000U, SYS_CALIBRATION_OUTPUT_SOURCE_FACTORY_DIRECT, BOOL_FALSE,
+            BOOL_FALSE, BOOL_TRUE) == 0U &&
+        sys_calibration_safety_arbitrate_pwm(
+            1000U, SYS_CALIBRATION_OUTPUT_SOURCE_FACTORY_DIRECT, BOOL_FALSE,
+            BOOL_FALSE, BOOL_FALSE) == 0U &&
+        sys_calibration_safety_arbitrate_pwm(
+            1000U, SYS_CALIBRATION_OUTPUT_SOURCE_NORMAL, BOOL_FALSE,
+            BOOL_TRUE, BOOL_TRUE) == 0U &&
+        sys_calibration_safety_arbitrate_pwm(
+            1000U, (sys_calibration_output_source_en)99U, BOOL_FALSE,
+            BOOL_FALSE, BOOL_TRUE) == 0U &&
+        sys_calibration_safety_arbitrate_pwm(
+            0U, SYS_CALIBRATION_OUTPUT_SOURCE_FACTORY_DIRECT, BOOL_TRUE,
+            BOOL_TRUE, BOOL_FALSE) == 0U,
+        "normal/offline/direct inhibit, emergency, invalid and stale feedback gates");
 
     failures += expect_true(sys_calibration_storage_record_build(
                                 &first_record, 1U, SYS_CALIBRATION_50W_MID,
@@ -301,6 +337,14 @@ int main(void)
                                 &inhibit_first, &inhibit_second, &inhibit_state) == BOOL_TRUE &&
                                 inhibit_state == SYS_CALIBRATION_BOOT_INHIBIT_ACTIVE,
                             "invalid boot-inhibit slot is ignored");
+    memset(&inhibit_first, 0xFF, sizeof(inhibit_first));
+    memset(&inhibit_second, 0xFF, sizeof(inhibit_second));
+    inhibit_state = SYS_CALIBRATION_BOOT_INHIBIT_ACTIVE;
+    failures += expect_true(
+        sys_calibration_boot_inhibit_select_newest(
+            &inhibit_first, &inhibit_second, &inhibit_state) == BOOL_FALSE &&
+        inhibit_state == SYS_CALIBRATION_BOOT_INHIBIT_UNKNOWN,
+        "pristine boot-inhibit slots fail closed without unlock");
 
     if (failures != 0)
     {

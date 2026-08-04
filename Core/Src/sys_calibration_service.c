@@ -79,12 +79,63 @@ static void sys_calibration_service_cache_result(
     sys_calibration_operation_en operation,
     sys_calibration_result_en result)
 {
+    /* 兼容旧调用点的seq=0没有可证明的请求身份，不参与重试缓存。 */
+    if (seq == 0U)
+    {
+        return;
+    }
     _service.cache_session_id = session_id;
     _service.cache_seq = seq;
     _service.cache_operation = (u8)operation;
     _service.cache_result = result;
     _service.cache_valid = BOOL_TRUE;
     _service.status.last_request_seq = seq;
+}
+
+static boolean_en sys_calibration_service_get_cached_result(
+    u32 session_id,
+    u32 seq,
+    sys_calibration_operation_en operation,
+    sys_calibration_result_en *result,
+    sys_calibration_service_status_st *status);
+
+static boolean_en sys_calibration_service_check_replay(
+    u32 session_id,
+    u32 seq,
+    sys_calibration_operation_en operation,
+    sys_calibration_result_en *result,
+    sys_calibration_service_status_st *status)
+{
+    sys_calibration_result_en cached_result;
+
+    if (seq == 0U)
+    {
+        return BOOL_FALSE;
+    }
+    if (sys_calibration_service_get_cached_result(
+            session_id, seq, operation, &cached_result, status) == BOOL_TRUE)
+    {
+        if (result != NULL)
+        {
+            *result = cached_result;
+        }
+        return BOOL_TRUE;
+    }
+
+    /* 单槽缓存被新请求覆盖后，旧seq只能拒绝，不能再次执行副作用。 */
+    if (_service.status.session_id == session_id && session_id != 0U &&
+        _service.status.last_request_seq != 0U &&
+        seq <= _service.status.last_request_seq)
+    {
+        sys_calibration_service_set_result(SYS_CALIBRATION_RESULT_DUPLICATE);
+        (void)sys_calibration_service_copy_status(status);
+        if (result != NULL)
+        {
+            *result = SYS_CALIBRATION_RESULT_DUPLICATE;
+        }
+        return BOOL_TRUE;
+    }
+    return BOOL_FALSE;
 }
 
 static boolean_en sys_calibration_service_get_cached_result(
@@ -134,13 +185,12 @@ static sys_calibration_result_en sys_calibration_service_require_session(
     u32 seq,
     sys_calibration_service_status_st *status)
 {
-    sys_calibration_result_en cached_result;
+    sys_calibration_result_en replay_result;
 
-    if (sys_calibration_service_get_cached_result(session_id, seq, operation,
-                                                   &cached_result, status) ==
-        BOOL_TRUE)
+    if (sys_calibration_service_check_replay(
+            session_id, seq, operation, &replay_result, status) == BOOL_TRUE)
     {
-        return cached_result;
+        return replay_result;
     }
     if (_service.status.state != SYS_CALIBRATION_STATE_ACTIVE &&
         _service.status.state != SYS_CALIBRATION_STATE_STAGED &&
@@ -162,6 +212,7 @@ static sys_calibration_result_en sys_calibration_service_require_session(
     {
         sys_calibration_service_safe_off();
         _service.status.state = SYS_CALIBRATION_STATE_FAULT;
+        _service.safety_ready = BOOL_FALSE;
         _service.boot_inhibit_active = BOOL_TRUE;
         sys_calibration_service_finish(session_id, seq, operation,
                                        SYS_CALIBRATION_RESULT_LEASE_EXPIRED,
@@ -201,13 +252,28 @@ void sys_calibration_service_set_safety_ready(boolean_en ready)
     _service.safety_ready = ready;
     if (ready == BOOL_TRUE)
     {
-        _service.boot_inhibit_active = BOOL_FALSE;
-        _service.status.state = SYS_CALIBRATION_STATE_IDLE;
+        if (_service.status.state == SYS_CALIBRATION_STATE_DISABLED)
+        {
+            _service.safety_ready = BOOL_TRUE;
+            /* 只有初始化后的明确安全前置检查才能解锁；故障/ABORT不可自解锁。 */
+            _service.boot_inhibit_active = BOOL_FALSE;
+            _service.status.state = SYS_CALIBRATION_STATE_IDLE;
+        }
+        else
+        {
+            _service.safety_ready = BOOL_FALSE;
+            /* 运行中、ABORT和FAULT均保持锁存，不因重复ready调用而点亮。 */
+            _service.boot_inhibit_active = BOOL_TRUE;
+        }
     }
     else
     {
         _service.boot_inhibit_active = BOOL_TRUE;
-        _service.status.state = SYS_CALIBRATION_STATE_DISABLED;
+        if (_service.status.state != SYS_CALIBRATION_STATE_FAULT &&
+            _service.status.state != SYS_CALIBRATION_STATE_ABORTED)
+        {
+            _service.status.state = SYS_CALIBRATION_STATE_DISABLED;
+        }
         sys_calibration_service_safe_off();
     }
 }
@@ -246,14 +312,13 @@ sys_calibration_result_en sys_calibration_service_begin_seq(
     u32 seq,
     sys_calibration_service_status_st *status)
 {
-    sys_calibration_result_en cached_result;
+    sys_calibration_result_en replay_result;
 
-    if (sys_calibration_service_get_cached_result(session_id, seq,
-                                                   SYS_CALIBRATION_OP_BEGIN,
-                                                   &cached_result, status) ==
-        BOOL_TRUE)
+    if (sys_calibration_service_check_replay(
+            session_id, seq, SYS_CALIBRATION_OP_BEGIN, &replay_result,
+            status) == BOOL_TRUE)
     {
-        return cached_result;
+        return replay_result;
     }
     if (session_id == 0U ||
         sys_calibration_service_validate_lease(lease_ms) != BOOL_TRUE)
@@ -278,6 +343,12 @@ sys_calibration_result_en sys_calibration_service_begin_seq(
                                        status);
         return SYS_CALIBRATION_RESULT_SAFETY_NOT_READY;
     }
+    if (_service.status.session_id != session_id ||
+        _service.status.state != SYS_CALIBRATION_STATE_ACTIVE)
+    {
+        _service.cache_valid = BOOL_FALSE;
+        _service.status.last_request_seq = 0U;
+    }
     sys_calibration_service_safe_off();
     _service.status.session_id = session_id;
     _service.status.lease_deadline_ms = now_ms + lease_ms;
@@ -299,6 +370,13 @@ sys_calibration_result_en sys_calibration_service_heartbeat_seq(
     sys_calibration_service_status_st *status)
 {
     sys_calibration_result_en result;
+
+    if (sys_calibration_service_check_replay(
+            session_id, seq, SYS_CALIBRATION_OP_HEARTBEAT, &result,
+            status) == BOOL_TRUE)
+    {
+        return result;
+    }
 
     if (sys_calibration_service_validate_lease(lease_ms) != BOOL_TRUE)
     {
@@ -329,6 +407,13 @@ sys_calibration_result_en sys_calibration_service_set_point_seq(
     sys_calibration_service_status_st *status)
 {
     sys_calibration_result_en result;
+
+    if (sys_calibration_service_check_replay(
+            session_id, seq, SYS_CALIBRATION_OP_SET_POINT, &result,
+            status) == BOOL_TRUE)
+    {
+        return result;
+    }
 
     if (sys_calibration_curve_validate_level(level) != BOOL_TRUE)
     {
@@ -378,6 +463,13 @@ sys_calibration_result_en sys_calibration_service_raw_seq(
     sys_calibration_driver_message_st message;
     sys_calibration_result_en result;
 
+    if (sys_calibration_service_check_replay(
+            session_id, seq, SYS_CALIBRATION_OP_RAW, &result, status) ==
+        BOOL_TRUE)
+    {
+        return result;
+    }
+
     if ((direction != SYS_CALIBRATION_RAW_QUERY &&
          direction != SYS_CALIBRATION_RAW_SET) || frame == NULL ||
         sys_calibration_driver_decode(frame, frame_length, &message) != BOOL_TRUE ||
@@ -414,6 +506,13 @@ sys_calibration_result_en sys_calibration_service_stage_config_seq(
 {
     sys_calibration_driver_table_st table;
     sys_calibration_result_en result;
+
+    if (sys_calibration_service_check_replay(
+            session_id, seq, SYS_CALIBRATION_OP_STAGE, &result, status) ==
+        BOOL_TRUE)
+    {
+        return result;
+    }
 
     if (payload == NULL || length != SYS_CALIBRATION_STAGE_LENGTH ||
         sys_calibration_driver_table_decode(payload, length, &table) != BOOL_TRUE)
@@ -545,14 +644,13 @@ sys_calibration_result_en sys_calibration_service_abort_seq(
     u32 seq,
     sys_calibration_service_status_st *status)
 {
-    sys_calibration_result_en cached_result;
+    sys_calibration_result_en replay_result;
 
-    if (sys_calibration_service_get_cached_result(session_id, seq,
-                                                   SYS_CALIBRATION_OP_ABORT,
-                                                   &cached_result, status) ==
-        BOOL_TRUE)
+    if (sys_calibration_service_check_replay(
+            session_id, seq, SYS_CALIBRATION_OP_ABORT, &replay_result,
+            status) == BOOL_TRUE)
     {
-        return cached_result;
+        return replay_result;
     }
     (void)now_ms;
     if (session_id == 0U && _service.status.state != SYS_CALIBRATION_STATE_DISABLED)
@@ -589,14 +687,13 @@ sys_calibration_result_en sys_calibration_service_release_seq(
     u32 seq,
     sys_calibration_service_status_st *status)
 {
-    sys_calibration_result_en cached_result;
+    sys_calibration_result_en replay_result;
 
-    if (sys_calibration_service_get_cached_result(session_id, seq,
-                                                   SYS_CALIBRATION_OP_RELEASE,
-                                                   &cached_result, status) ==
-        BOOL_TRUE)
+    if (sys_calibration_service_check_replay(
+            session_id, seq, SYS_CALIBRATION_OP_RELEASE, &replay_result,
+            status) == BOOL_TRUE)
     {
-        return cached_result;
+        return replay_result;
     }
     (void)now_ms;
     if (session_id == 0U || _service.status.session_id != session_id)
@@ -634,6 +731,7 @@ void sys_calibration_service_force_fault(void)
     _service.status.state = SYS_CALIBRATION_STATE_FAULT;
     _service.status.last_result = SYS_CALIBRATION_RESULT_HARDWARE_FAULT;
     ++_service.status.result_seq;
+    _service.safety_ready = BOOL_FALSE;
     _service.boot_inhibit_active = BOOL_TRUE;
     _service.cache_valid = BOOL_FALSE;
 }
@@ -702,6 +800,7 @@ boolean_en sys_calibration_service_timer(
         _service.status.state = SYS_CALIBRATION_STATE_FAULT;
         _service.status.last_result = SYS_CALIBRATION_RESULT_LEASE_EXPIRED;
         ++_service.status.result_seq;
+        _service.safety_ready = BOOL_FALSE;
         _service.boot_inhibit_active = BOOL_TRUE;
         _service.cache_valid = BOOL_FALSE;
     }

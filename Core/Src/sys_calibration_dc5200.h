@@ -15,6 +15,9 @@
 #define SYS_CALIBRATION_DC5200_QUERY_FRAME_LENGTH 16U
 #define SYS_CALIBRATION_DC5200_COMPREHENSIVE_FRAME_LENGTH 74U
 
+/* 两份资料对综合页查询字段/CRC给出不同黄金向量，实机抓包前禁止发送。 */
+#define SYS_CALIBRATION_DC5200_QUERY_ENABLED 0U
+
 typedef struct
 {
     u32 input_voltage_001v;

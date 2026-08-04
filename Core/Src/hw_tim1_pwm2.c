@@ -9,6 +9,7 @@
 #include "hw_tim1_pwm2.h"
 #include "oco.h"
 #include "factory_user_data.h"
+#include "sys_calibration_service.h"
 TIM_HandleTypeDef htim1;
 
 u8 pwm_on;
@@ -34,6 +35,11 @@ void hw_tim1_pwm2_set_off(void)
 
 void hw_tim1_pwm2_set_PWM_OUT(u16 pwm)//pwm输出
 {
+    /* 最后一道硬件出口门禁：先归零，再决定是否允许OCO导通。 */
+    if (pwm > 0U && sys_calibration_service_is_boot_inhibited() == BOOL_TRUE)
+    {
+        pwm = 0U;
+    }
     if(pwm>1000)
     {
      pwm=1000;
