@@ -3,7 +3,15 @@
 
 #include "sys_calibration_snapshot.h"
 #include "sys_calibration_service.h"
+#include "sys_calibration_driver_protocol.h"
 #include "sys_bl0942_frame.h"
+
+static unsigned int safe_off_calls;
+
+static void test_safe_off(void)
+{
+    ++safe_off_calls;
+}
 
 static int expect_true(int condition, const char *name)
 {
@@ -123,22 +131,111 @@ int main(void)
     failures += expect_true(sys_calibration_service_get_status(&service_status) == BOOL_TRUE,
                             "service status read");
     failures += expect_true(service_status.state == SYS_CALIBRATION_STATE_DISABLED &&
-                                service_status.codec_available == BOOL_FALSE &&
+                                service_status.codec_available == BOOL_TRUE &&
                                 service_status.commit_available == BOOL_FALSE &&
                                 service_status.nonzero_output_allowed == BOOL_FALSE,
-                            "service safety gates are disabled");
+                            "service codec is available but output gates are closed");
     failures += expect_true(sys_calibration_service_begin(1U, 0U, 1000U, &service_status) ==
-                                SYS_CALIBRATION_RESULT_NOT_AVAILABLE,
-                            "begin is blocked without frozen protocol");
+                                SYS_CALIBRATION_RESULT_SAFETY_NOT_READY,
+                            "begin is blocked without safety proof");
     failures += expect_true(sys_calibration_service_set_point(1U, 1U, 100U, &service_status) ==
-                                SYS_CALIBRATION_RESULT_NOT_AVAILABLE,
-                            "set point is blocked without safety proof");
+                                SYS_CALIBRATION_RESULT_INVALID_STATE,
+                            "set point requires an active lease");
     failures += expect_true(sys_calibration_service_commit(1U, &service_status) ==
-                                SYS_CALIBRATION_RESULT_NOT_AVAILABLE,
-                            "commit is blocked without Flash contract");
+                                SYS_CALIBRATION_RESULT_INVALID_STATE,
+                            "commit requires an active lease");
     failures += expect_true(sys_calibration_service_abort(1U, &service_status) == BOOL_TRUE &&
                                 service_status.state == SYS_CALIBRATION_STATE_ABORTED,
                             "abort enters safe terminal state");
+
+    {
+        unsigned char staged_payload[SYS_CALIBRATION_DRIVER_TABLE_PAYLOAD_LENGTH];
+        unsigned char readback_payload[SYS_CALIBRATION_DRIVER_TABLE_PAYLOAD_LENGTH];
+        const unsigned char raw_query[7U] =
+            {0x3AU, 0x26U, 0x08U, 0x00U, 0x2EU, 0x0DU, 0x0AU};
+        unsigned short readback_length;
+        unsigned int index;
+
+        memset(staged_payload, 0, sizeof(staged_payload));
+        for (index = 0U; index < SYS_CALIBRATION_DRIVER_POINT_COUNT; ++index)
+        {
+            staged_payload[index * 18U] = (unsigned char)(index * 20U);
+            staged_payload[index * 18U + 1U] = 100U;
+        }
+        sys_calibration_service_init();
+        safe_off_calls = 0U;
+        sys_calibration_service_bind_safe_off(test_safe_off);
+        sys_calibration_service_set_safety_ready(BOOL_TRUE);
+        failures += expect_true(sys_calibration_service_begin_seq(
+                                    42U, 100U, 1000U, 1U, &service_status) ==
+                                    SYS_CALIBRATION_RESULT_OK,
+                                "test safety hook opens a lease");
+        failures += expect_true(sys_calibration_service_begin_seq(
+                                    42U, 100U, 1000U, 1U, &service_status) ==
+                                    SYS_CALIBRATION_RESULT_OK,
+                                "duplicate begin returns cached result");
+        failures += expect_true(sys_calibration_service_set_point_seq(
+                                    42U, 101U, 7U, 0U, &service_status) ==
+                                    SYS_CALIBRATION_RESULT_OK &&
+                                    service_status.current_level == 0U,
+                                "zero safe setpoint is allowed");
+        failures += expect_true(sys_calibration_service_raw_seq(
+                                    42U, 102U, 9U, raw_query, sizeof(raw_query),
+                                    SYS_CALIBRATION_RAW_QUERY, &service_status) ==
+                                    SYS_CALIBRATION_RESULT_NOT_AVAILABLE,
+                                "raw query is codec-checked then transport-gated");
+        failures += expect_true(sys_calibration_service_raw_seq(
+                                    42U, 103U, 10U, raw_query, sizeof(raw_query),
+                                    SYS_CALIBRATION_RAW_SET, &service_status) ==
+                                    SYS_CALIBRATION_RESULT_PROTOCOL_ERROR,
+                                "raw direction mismatch is rejected");
+        failures += expect_true(sys_calibration_service_stage_config_seq(
+                                    42U, 200U, 2U, staged_payload,
+                                    sizeof(staged_payload), &service_status) ==
+                                    SYS_CALIBRATION_RESULT_OK,
+                                "table payload stages without output");
+        failures += expect_true(sys_calibration_service_stage_config_seq(
+                                    42U, 200U, 2U, staged_payload,
+                                    sizeof(staged_payload), &service_status) ==
+                                    SYS_CALIBRATION_RESULT_OK,
+                                "duplicate stage returns cached result");
+        failures += expect_true(sys_calibration_service_readback_seq(
+                                    42U, 201U, 3U, &service_status) ==
+                                    SYS_CALIBRATION_RESULT_OK &&
+                                    sys_calibration_service_get_staged_payload(
+                                        readback_payload, sizeof(readback_payload),
+                                        &readback_length) == BOOL_TRUE &&
+                                    readback_length == sizeof(staged_payload) &&
+                                    memcmp(readback_payload, staged_payload,
+                                           sizeof(staged_payload)) == 0,
+                                "staged payload has exact readback");
+        failures += expect_true(sys_calibration_service_apply_seq(
+                                    42U, 202U, 4U, &service_status) ==
+                                    SYS_CALIBRATION_RESULT_SAFETY_NOT_READY,
+                                "apply remains blocked by nonzero gate");
+        failures += expect_true(sys_calibration_service_commit_seq(
+                                    42U, 203U, 5U, &service_status) ==
+                                    SYS_CALIBRATION_RESULT_FLASH_GATED,
+                                "commit remains shared-page gated");
+        failures += expect_true(sys_calibration_service_heartbeat_seq(
+                                    42U, 204U, 1000U, 6U, &service_status) ==
+                                    SYS_CALIBRATION_RESULT_OK,
+                                "heartbeat renews lease");
+        failures += expect_true(sys_calibration_service_timer(1204U, &service_status) ==
+                                    BOOL_TRUE &&
+                                    service_status.state == SYS_CALIBRATION_STATE_FAULT &&
+                                    safe_off_calls > 0U,
+                                "lease expiry fail-offs and inhibits");
+        failures += expect_true(sys_calibration_service_abort(42U, &service_status) ==
+                                    BOOL_TRUE &&
+                                    service_status.state == SYS_CALIBRATION_STATE_ABORTED,
+                                "abort after timeout stays safe");
+        failures += expect_true(sys_calibration_service_release_seq(
+                                    42U, 1300U, 8U, &service_status) ==
+                                    SYS_CALIBRATION_RESULT_FLASH_GATED &&
+                                    service_status.boot_inhibit_active == BOOL_TRUE,
+                                "release remains persistently gated");
+    }
 
     memset(frame, 0, sizeof(frame));
     frame[0] = SYS_BL0942_READ_RESPONSE_HEADER;

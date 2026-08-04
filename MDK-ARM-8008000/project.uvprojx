@@ -1615,6 +1615,36 @@
               <FilePath>..\Core\Src\sys_calibration_service.c</FilePath>
             </File>
             <File>
+              <FileName>sys_calibration_driver_protocol.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_driver_protocol.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_dc5200.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_dc5200.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_curve.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_curve.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_safety.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_safety.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_storage.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_storage.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_boot_inhibit.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_boot_inhibit.c</FilePath>
+            </File>
+            <File>
               <FileName>sys_bl0942_frame.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\sys_bl0942_frame.c</FilePath>
@@ -1846,6 +1876,11 @@
               <FileName>mqtt_zk_protocol.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\LampProtocolLib\mqtt_zk_protocol.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_mqtt.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_mqtt.c</FilePath>
             </File>
             <File>
               <FileName>zk_alarm.c</FileName>
@@ -3488,6 +3523,36 @@
               <FilePath>..\Core\Src\sys_calibration_service.c</FilePath>
             </File>
             <File>
+              <FileName>sys_calibration_driver_protocol.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_driver_protocol.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_dc5200.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_dc5200.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_curve.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_curve.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_safety.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_safety.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_storage.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_storage.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_boot_inhibit.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_boot_inhibit.c</FilePath>
+            </File>
+            <File>
               <FileName>sys_bl0942_frame.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\sys_bl0942_frame.c</FilePath>
@@ -3719,6 +3784,11 @@
               <FileName>mqtt_zk_protocol.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\LampProtocolLib\mqtt_zk_protocol.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_mqtt.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_mqtt.c</FilePath>
             </File>
             <File>
               <FileName>zk_alarm.c</FileName>

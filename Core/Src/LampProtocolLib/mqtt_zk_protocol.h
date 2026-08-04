@@ -20,6 +20,7 @@
 #define ZK_SV_OTA               "ota"
 #define ZK_SV_PLAN              "plan"
 #define ZK_SV_ALAM             "alam"
+#define ZK_SV_CAL              "cal"
 #define ZK_CT_LOGIN             "L"
 #define ZK_CT_HEARTBEAT         "H"
 #define ZK_CT_WRITE             "W"
@@ -185,6 +186,7 @@ boolean_en zk_mqtt_accept_heartbeat_ack(const zk_message_header_t *header);
 int zk_parse_login_response(const char *json_str, zk_login_response_t *response);
 void zk_apply_server_time_from_header(const zk_message_header_t *header);
 boolean_en zk_dispatch_message(cJSON *root, const zk_message_header_t *header);
+boolean_en sys_calibration_mqtt_handle(cJSON *root, const zk_message_header_t *header);
 boolean_en zk_handle_property_read(cJSON *root, const zk_message_header_t *header);
 boolean_en zk_handle_property_write(cJSON *root, const zk_message_header_t *header);
 boolean_en zk_handle_control_message(cJSON *root, const zk_message_header_t *header);

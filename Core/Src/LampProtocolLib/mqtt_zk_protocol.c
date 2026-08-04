@@ -21,6 +21,7 @@
 #include "flash_address_assignment.h"
 #include "ntc.h"
 #include "main.h"
+#include "sys_calibration_mqtt.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -1893,6 +1894,10 @@ boolean_en zk_dispatch_message(cJSON *root, const zk_message_header_t *header)
     if (root == NULL || header == NULL)
     {
         return BOOL_FALSE;
+    }
+    if (strcmp(header->sv, ZK_SV_CAL) == 0)
+    {
+        return sys_calibration_mqtt_handle(root, header);
     }
     zk_apply_server_time_from_header(header);
     if (zk_handle_property_read(root, header))

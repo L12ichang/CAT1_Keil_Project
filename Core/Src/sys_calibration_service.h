@@ -3,17 +3,21 @@
 
 #include "type.h"
 
-/* These gates stay zero until the external contract and safety evidence exist. */
-#define SYS_CALIBRATION_PROTOCOL_FROZEN        0U
-#define SYS_CALIBRATION_CODEC_AVAILABLE        0U
+#define SYS_CALIBRATION_PROTOCOL_FROZEN        1U
+#define SYS_CALIBRATION_CODEC_AVAILABLE        1U
 #define SYS_CALIBRATION_FLASH_COMMIT_ENABLED   0U
 #define SYS_CALIBRATION_NONZERO_OUTPUT_ENABLED 0U
+
+#define SYS_CALIBRATION_LEASE_MIN_MS 1000UL
+#define SYS_CALIBRATION_LEASE_MAX_MS 600000UL
 
 typedef enum
 {
     SYS_CALIBRATION_STATE_DISABLED = 0,
     SYS_CALIBRATION_STATE_IDLE,
     SYS_CALIBRATION_STATE_ACTIVE,
+    SYS_CALIBRATION_STATE_STAGED,
+    SYS_CALIBRATION_STATE_APPLIED,
     SYS_CALIBRATION_STATE_FAULT,
     SYS_CALIBRATION_STATE_ABORTED
 } sys_calibration_state_en;
@@ -24,8 +28,16 @@ typedef enum
     SYS_CALIBRATION_RESULT_NOT_AVAILABLE,
     SYS_CALIBRATION_RESULT_INVALID_STATE,
     SYS_CALIBRATION_RESULT_INVALID_ARGUMENT,
-    SYS_CALIBRATION_RESULT_LEASE_EXPIRED
+    SYS_CALIBRATION_RESULT_LEASE_EXPIRED,
+    SYS_CALIBRATION_RESULT_BUSY,
+    SYS_CALIBRATION_RESULT_PROTOCOL_ERROR,
+    SYS_CALIBRATION_RESULT_SAFETY_NOT_READY,
+    SYS_CALIBRATION_RESULT_DUPLICATE,
+    SYS_CALIBRATION_RESULT_FLASH_GATED,
+    SYS_CALIBRATION_RESULT_HARDWARE_FAULT
 } sys_calibration_result_en;
+
+typedef void (*sys_calibration_safe_off_fn)(void);
 
 typedef struct
 {
@@ -34,83 +46,117 @@ typedef struct
     u32 session_id;
     u32 lease_deadline_ms;
     u32 result_seq;
+    u32 last_request_seq;
+    u32 staged_crc32;
+    u16 current_level;
+    u16 staged_length;
     boolean_en codec_available;
     boolean_en commit_available;
     boolean_en nonzero_output_allowed;
+    boolean_en safety_ready;
+    boolean_en boot_inhibit_active;
+    boolean_en staged_valid;
 } sys_calibration_service_status_st;
 
-/************************************
-功能描述：初始化校准服务为安全不可用状态
-输入参数：无
-输出返回：无
-************************************/
-extern void sys_calibration_service_init(void);
+typedef enum
+{
+    SYS_CALIBRATION_RAW_QUERY = 0,
+    SYS_CALIBRATION_RAW_SET = 1
+} sys_calibration_raw_direction_en;
 
-/************************************
-功能描述：读取校准服务状态和能力门禁
-输入参数：status 输出状态
-输出返回：读取成功 BOOL_TRUE，否则 BOOL_FALSE
-************************************/
+extern void sys_calibration_service_init(void);
+extern void sys_calibration_service_bind_safe_off(sys_calibration_safe_off_fn safe_off);
+extern void sys_calibration_service_set_safety_ready(boolean_en ready);
 extern boolean_en sys_calibration_service_get_status(
     sys_calibration_service_status_st *status);
+extern boolean_en sys_calibration_service_get_staged_payload(
+    u8 *payload,
+    u16 capacity,
+    u16 *length);
+extern boolean_en sys_calibration_service_is_boot_inhibited(void);
+extern void sys_calibration_service_force_fault(void);
 
-/************************************
-功能描述：尝试开始校准租约
-输入参数：session_id 会话标识；now_ms 当前毫秒节拍；lease_ms 租约时长；status 输出状态
-输出返回：本分支固定返回 NOT_AVAILABLE，非零输出不会开放
-************************************/
+extern sys_calibration_result_en sys_calibration_service_begin_seq(
+    u32 session_id,
+    u32 now_ms,
+    u32 lease_ms,
+    u32 seq,
+    sys_calibration_service_status_st *status);
+extern sys_calibration_result_en sys_calibration_service_heartbeat_seq(
+    u32 session_id,
+    u32 now_ms,
+    u32 lease_ms,
+    u32 seq,
+    sys_calibration_service_status_st *status);
+extern sys_calibration_result_en sys_calibration_service_set_point_seq(
+    u32 session_id,
+    u32 now_ms,
+    u32 seq,
+    u16 level,
+    sys_calibration_service_status_st *status);
+extern sys_calibration_result_en sys_calibration_service_raw_seq(
+    u32 session_id,
+    u32 now_ms,
+    u32 seq,
+    const u8 *frame,
+    u16 frame_length,
+    sys_calibration_raw_direction_en direction,
+    sys_calibration_service_status_st *status);
+extern sys_calibration_result_en sys_calibration_service_stage_config_seq(
+    u32 session_id,
+    u32 now_ms,
+    u32 seq,
+    const u8 *payload,
+    u16 length,
+    sys_calibration_service_status_st *status);
+extern sys_calibration_result_en sys_calibration_service_apply_seq(
+    u32 session_id,
+    u32 now_ms,
+    u32 seq,
+    sys_calibration_service_status_st *status);
+extern sys_calibration_result_en sys_calibration_service_readback_seq(
+    u32 session_id,
+    u32 now_ms,
+    u32 seq,
+    sys_calibration_service_status_st *status);
+extern sys_calibration_result_en sys_calibration_service_commit_seq(
+    u32 session_id,
+    u32 now_ms,
+    u32 seq,
+    sys_calibration_service_status_st *status);
+extern sys_calibration_result_en sys_calibration_service_abort_seq(
+    u32 session_id,
+    u32 now_ms,
+    u32 seq,
+    sys_calibration_service_status_st *status);
+extern sys_calibration_result_en sys_calibration_service_release_seq(
+    u32 session_id,
+    u32 now_ms,
+    u32 seq,
+    sys_calibration_service_status_st *status);
+
+/* 兼容原有调用点；新MQTT路径使用带seq接口。 */
 extern sys_calibration_result_en sys_calibration_service_begin(
     u32 session_id,
     u32 now_ms,
     u32 lease_ms,
     sys_calibration_service_status_st *status);
-
-/************************************
-功能描述：尝试临时设置校准点
-输入参数：session_id 会话标识；now_ms 当前毫秒节拍；level 协议等级；status 输出状态
-输出返回：本分支固定返回 NOT_AVAILABLE，不执行 PWM 写入
-************************************/
 extern sys_calibration_result_en sys_calibration_service_set_point(
     u32 session_id,
     u32 now_ms,
     u16 level,
     sys_calibration_service_status_st *status);
-
-/************************************
-功能描述：尝试暂存不透明配置载荷
-输入参数：session_id 会话标识；payload/length 外部载荷；status 输出状态
-输出返回：本分支固定返回 NOT_AVAILABLE，不解析、不持久化载荷
-************************************/
 extern sys_calibration_result_en sys_calibration_service_stage_config(
     u32 session_id,
     const u8 *payload,
     u32 length,
     sys_calibration_service_status_st *status);
-
-/************************************
-功能描述：尝试提交校准配置
-输入参数：session_id 会话标识；status 输出状态
-输出返回：本分支固定返回 NOT_AVAILABLE，不擦写 Flash
-************************************/
 extern sys_calibration_result_en sys_calibration_service_commit(
     u32 session_id,
     sys_calibration_service_status_st *status);
-
-/************************************
-功能描述：让校准服务进入安全中止状态
-输入参数：session_id 会话标识；status 输出状态
-输出返回：中止状态更新成功 BOOL_TRUE，否则 BOOL_FALSE
-注意：该框架不直接操作 PWM；真实 ABORT 必须由集成后的最高优先级安全关断路径执行。
-************************************/
 extern boolean_en sys_calibration_service_abort(
     u32 session_id,
     sys_calibration_service_status_st *status);
-
-/************************************
-功能描述：检查租约状态，不执行任何输出动作
-输入参数：now_ms 当前毫秒节拍；status 输出状态
-输出返回：状态读取成功 BOOL_TRUE，否则 BOOL_FALSE
-************************************/
 extern boolean_en sys_calibration_service_timer(
     u32 now_ms,
     sys_calibration_service_status_st *status);

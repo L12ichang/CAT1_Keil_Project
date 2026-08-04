@@ -17,6 +17,13 @@ if [[ "$#" -eq 0 ]]; then
     "${ROOT_DIR}/Core/Src/LampProtocolLib/zk_property.c" \
     "${ROOT_DIR}/Core/Src/sys_calibration_snapshot.c" \
     "${ROOT_DIR}/Core/Src/sys_calibration_service.c" \
+    "${ROOT_DIR}/Core/Src/sys_calibration_driver_protocol.c" \
+    "${ROOT_DIR}/Core/Src/sys_calibration_dc5200.c" \
+    "${ROOT_DIR}/Core/Src/sys_calibration_curve.c" \
+    "${ROOT_DIR}/Core/Src/sys_calibration_safety.c" \
+    "${ROOT_DIR}/Core/Src/sys_calibration_storage.c" \
+    "${ROOT_DIR}/Core/Src/sys_calibration_boot_inhibit.c" \
+    "${ROOT_DIR}/Core/Src/sys_calibration_mqtt.c" \
     "${ROOT_DIR}/Core/Src/sys_bl0942_frame.c" \
     "${ROOT_DIR}/Core/Src/hw_flash_page_writer.c" \
     "${ROOT_DIR}/Core/Src/hw_flash.c" \
