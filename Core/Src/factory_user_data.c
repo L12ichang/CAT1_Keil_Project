@@ -22,41 +22,41 @@ void fac_128_data_default(void)
 
     if( MID==0xff||MID==0x00)
     {
-        MID=4;//默认150W     //1: 60W   2: 75W   3:100W   4:150W  5: 200W  6: 240W
+        MID=FACTORY_DEFAULT_MID;
     }
     if( OUTPUT_CUR_SENSOR==0xffff||OUTPUT_CUR_SENSOR==0x00)
     {
-      OUTPUT_CUR_SENSOR=30;//默认30毫欧
+      OUTPUT_CUR_SENSOR=FACTORY_DEFAULT_OUTPUT_CUR_SENSOR_MOHM;
     }
     if(OP_PWM_OFFSET==0xffff||OP_PWM_OFFSET==0x00)
     {
     
-      OP_PWM_OFFSET=0x00;
+      OP_PWM_OFFSET=FACTORY_DEFAULT_PWM_OFFSET_PERMILLE;
     
     }
       if(SET_OUTCUR==0xffff||SET_OUTCUR==0x00||SET_OUTCUR>FACTORY_OUTCUR_MAX_MA)
     {
     
-      SET_OUTCUR=2700;
+      SET_OUTCUR=FACTORY_DEFAULT_SET_OUTCUR_MA;
     
     }
       if(HWMAX_OUTCUR==0xffff||HWMAX_OUTCUR==0x00||HWMAX_OUTCUR>FACTORY_OUTCUR_MAX_MA)
     {
     
-      HWMAX_OUTCUR=4700;
+      HWMAX_OUTCUR=FACTORY_DEFAULT_HWMAX_OUTCUR_MA;
     
     }
     if( INNRE_TEMP_PRO_EN==0xff)
     {
-      INNRE_TEMP_PRO_EN =1; //默认使能
+      INNRE_TEMP_PRO_EN =FACTORY_DEFAULT_TEMP_PROTECT_ENABLE;
     }
     if( INNRE_TEMP_PRO==-1)
     {
-      INNRE_TEMP_PRO =85; //默认85度
+      INNRE_TEMP_PRO =FACTORY_DEFAULT_TEMP_PROTECT_C;
     }
      if(CX==0xff||CX==0x00 ) 
     {
-        CX=0x44; //默认0.68uf  放大100倍
+        CX=FACTORY_DEFAULT_CX_CENTI_UF;
     }
     if(SCHEDULE_SIZE>7)
     {

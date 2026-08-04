@@ -33,23 +33,6 @@ void uart_diam_process(void)
                      pwm=dim_level;
           
           
-  //调整10%处的电流过大-------------------------------------------------        
-             
-
-          
-                if(MID==4) //150W 
-                {
-                     if( dim_level>9&&dim_level<27)//调光百分比
-                     {
-                        pwm= dim_level-3;
-                     }              
-                     else if( dim_level>=23&&dim_level<27)
-                     {
-                        pwm= dim_level-3;
-                     }
-                }         
-   //调整电流-------------------------------------------------       
-
      extern u8 net_dim_to_protect;
              net_dim_to_protect=dim_level;
 
