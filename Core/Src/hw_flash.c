@@ -7,6 +7,7 @@
 编辑日期：2024.7.1
 *************************************************************/
 #include "hw_flash.h"
+#include "hw_flash_page_writer.h"
 #include "flash_allocation.h"
 #include "stm32f1xx_hal.h"
 u8 temp_buf_byte[FLASH_PAGE_SIZE] __attribute__ ((aligned(4)));
@@ -162,6 +163,57 @@ HAL_StatusTypeDef hw_flash_write(u32 address, u32 *data, u32 length)
 #endif
 extern void FLASH_PageErase(uint32_t PageAddress);
 
+static boolean_en hw_flash_page_read(u32 page_addr, u8 *page_buffer, u32 page_size)
+{
+    hw_flash_read_bytes(page_addr, page_buffer, page_size);
+    return BOOL_TRUE;
+}
+
+static boolean_en hw_flash_page_erase(u32 page_addr)
+{
+    FLASH_EraseInitTypeDef erase_init;
+    u32 page_error = 0U;
+
+    erase_init.TypeErase = FLASH_TYPEERASE_PAGES;
+    erase_init.PageAddress = page_addr;
+    erase_init.NbPages = 1U;
+    return (HAL_FLASHEx_Erase(&erase_init, &page_error) == HAL_OK) ?
+           BOOL_TRUE : BOOL_FALSE;
+}
+
+static boolean_en hw_flash_page_program(u32 page_addr,
+                                        const u8 *page_buffer,
+                                        u32 page_size)
+{
+    u32 i;
+
+    if ((page_size % 4U) != 0U)
+    {
+        return BOOL_FALSE;
+    }
+    for (i = 0U; i < page_size; i += 4U)
+    {
+        if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD,
+                              page_addr + i,
+                              *((const u32 *)(page_buffer + i))) != HAL_OK)
+        {
+            return BOOL_FALSE;
+        }
+    }
+    return BOOL_TRUE;
+}
+
+static boolean_en hw_flash_range_check(u32 flash_addr,
+                                       const u8 *buffer,
+                                       u32 length)
+{
+    if (length > 0xFFFFU)
+    {
+        return BOOL_FALSE;
+    }
+    return user_flash_check(flash_addr, (u8 *)buffer, (u16)length);
+}
+
 /*
 功能描述：按页更新 Flash 并逐步返回擦除/编程错误
 输入参数：flash_addr 起始地址；buffer 数据指针；length 字节数
@@ -170,90 +222,23 @@ extern void FLASH_PageErase(uint32_t PageAddress);
 */
 boolean_en hw_flash_write_bytes_checked(uint32_t flash_addr, const u8 *buffer, uint32_t length)
 {
-    uint32_t start_sector = flash_addr / FLASH_PAGE_SIZE;
-    uint32_t end_sector;
-    uint32_t sector;
-    FLASH_EraseInitTypeDef erase_init;
-    u32 page_error = 0;
-    uint32_t sector_addr;
-    uint32_t sector_offset;
-    uint32_t write_length;
-    uint32_t remaining;
-    const u8 *write_buffer;
+    hw_flash_page_writer_context_st context;
+    boolean_en result;
 
-    if (length == 0U)
-    {
-        return BOOL_TRUE;
-    }
-    if (buffer == NULL || flash_addr > (0xFFFFFFFFUL - (length - 1U)))
+    context.page_size = FLASH_PAGE_SIZE;
+    context.page_buffer = temp_buf_byte;
+    context.read_page = hw_flash_page_read;
+    context.erase_page = hw_flash_page_erase;
+    context.program_page = hw_flash_page_program;
+    context.check_range = hw_flash_range_check;
+
+    if (HAL_FLASH_Unlock() != HAL_OK)
     {
         return BOOL_FALSE;
     }
-
-    end_sector = (flash_addr + length - 1U) / FLASH_PAGE_SIZE;
-    remaining = length;
-    write_buffer = buffer;
-
-    HAL_FLASH_Unlock();
-
-    for (sector = start_sector; sector <= end_sector; sector++)
-    {
-        sector_addr = sector * FLASH_PAGE_SIZE;    //所在的扇区号
-        sector_offset = flash_addr - sector_addr;  //扇区内的偏移地址
-        write_length = FLASH_PAGE_SIZE - sector_offset; //需要数据更新的长度，字节为单位
-
-        if (remaining < write_length )
-        {
-            write_length = remaining;
-        }
-        // Read the sector data into the temp_buf
-        //memcpy(temp_buf, (void *)sector_addr, FLASH_PAGE_SIZE);
-        if(!(sector_offset==0 && write_length==FLASH_PAGE_SIZE))
-        {
-            hw_flash_read_bytes(sector_addr, temp_buf_byte, FLASH_PAGE_SIZE);
-        }
-        // Update the temp_buf with the data to be written
-        memcpy_u8(temp_buf_byte + sector_offset, buffer, write_length);
-        // Erase the sector
-        //FLASH_PageErase(sector_addr);
-
-        // 擦除扇区
-        erase_init.TypeErase = FLASH_TYPEERASE_PAGES;
-        erase_init.PageAddress = sector_addr;
-        erase_init.NbPages = 1;
-        
-
-        if (HAL_FLASHEx_Erase(&erase_init, &page_error) != HAL_OK)
-        {
-            HAL_FLASH_Lock();
-            return BOOL_FALSE;
-        }
-        // Write the updated temp_buf data back to the sector
-        for (uint32_t i = 0; i < FLASH_PAGE_SIZE; i+=4)
-        {
-            if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD,
-                                  sector_addr + i,
-                                  *((u32*)(temp_buf_byte+i))) != HAL_OK)
-            {
-                HAL_FLASH_Lock();
-                return BOOL_FALSE;
-            }
-        }
-
-        if (user_flash_check(flash_addr, (u8 *)write_buffer, (u16)write_length) != BOOL_TRUE)
-        {
-            HAL_FLASH_Lock();
-            return BOOL_FALSE;
-        }
-
-        // Update the buffer pointer and remaining length
-        write_buffer += write_length;
-        remaining -= write_length;
-        flash_addr += write_length;
-    }
-
+    result = hw_flash_write_bytes_paged(flash_addr, buffer, length, &context);
     HAL_FLASH_Lock();
-    return BOOL_TRUE;
+    return result;
 }
 
 /*

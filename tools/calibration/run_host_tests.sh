@@ -18,3 +18,15 @@ cc \
   -o "${BUILD_DIR}/test_snapshot"
 
 "${BUILD_DIR}/test_snapshot"
+
+cc \
+  -std=c11 \
+  -Wall \
+  -Wextra \
+  -Werror \
+  -I"${ROOT_DIR}/Core/Src" \
+  "${ROOT_DIR}/Core/Src/hw_flash_page_writer.c" \
+  "${ROOT_DIR}/tools/calibration/test_hw_flash_paging.c" \
+  -o "${BUILD_DIR}/test_hw_flash_paging"
+
+"${BUILD_DIR}/test_hw_flash_paging"

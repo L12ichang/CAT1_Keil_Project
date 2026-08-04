@@ -1700,6 +1700,11 @@
               <FilePath>..\Core\Src\hw_flash.c</FilePath>
             </File>
             <File>
+              <FileName>hw_flash_page_writer.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\hw_flash_page_writer.c</FilePath>
+            </File>
+            <File>
               <FileName>charge.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\charge.c</FilePath>
@@ -3566,6 +3571,11 @@
               <FileName>hw_flash.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\hw_flash.c</FilePath>
+            </File>
+            <File>
+              <FileName>hw_flash_page_writer.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\hw_flash_page_writer.c</FilePath>
             </File>
             <File>
               <FileName>charge.c</FileName>
