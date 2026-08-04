@@ -3,6 +3,7 @@
 
 #include "type.h"
 
+#define SYS_CALIBRATION_METER_RAW_FRAME_LENGTH    23U
 #define SYS_CALIBRATION_SNAPSHOT_READ_RETRIES       3U
 #define SYS_CALIBRATION_SNAPSHOT_AGE_INVALID        0xFFFFFFFFUL
 
@@ -29,6 +30,7 @@ typedef struct
     u32 cf_cnt_raw;
     u16 freq_raw;
     u8 status_raw;
+    u8 raw_frame[SYS_CALIBRATION_METER_RAW_FRAME_LENGTH];
     u16 valid_flags;
     u32 frame_error_count;
 } sys_calibration_meter_snapshot_st;
@@ -89,6 +91,7 @@ extern void sys_calibration_snapshot_publish_meter(u32 tick_ms,
                                                     u32 cf_cnt_raw,
                                                     u16 freq_raw,
                                                     u8 status_raw,
+                                                    const u8 *raw_frame,
                                                     u16 valid_flags,
                                                     u32 frame_error_count);
 

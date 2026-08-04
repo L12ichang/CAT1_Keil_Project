@@ -46,6 +46,7 @@ int main(void)
                                            0x0A0B0CU,
                                            500U,
                                            0x80U,
+                                           NULL,
                                            SYS_CALIBRATION_METER_FRAME_VALID |
                                                SYS_CALIBRATION_METER_HEAD_VALID |
                                                SYS_CALIBRATION_METER_CHECKSUM_VALID,
@@ -106,6 +107,7 @@ int main(void)
                                            0U,
                                            0U,
                                            0U,
+                                           NULL,
                                            SYS_CALIBRATION_METER_FRAME_VALID,
                                            0U);
     failures += expect_true(sys_calibration_snapshot_read_aggregate(5U, &aggregate) == BOOL_TRUE,
@@ -148,7 +150,9 @@ int main(void)
     frame[16] = 0x34U;
     frame[17] = 0x12U;
     frame[19] = 0x80U;
-    frame[22] = sys_bl0942_frame_calculate_checksum(frame);
+    frame[22] = 0x42U;
+    failures += expect_true(sys_bl0942_frame_calculate_checksum(frame) == 0x42U,
+                            "BL0942 fixed golden checksum");
     failures += expect_true(sys_bl0942_frame_validate(frame, sizeof(frame)) == BOOL_TRUE,
                             "BL0942 golden frame validates");
     failures += expect_true(sys_bl0942_frame_decode(frame, sizeof(frame), &decoded_frame) == BOOL_TRUE,
@@ -159,6 +163,24 @@ int main(void)
                                 decoded_frame.freq_raw == 0x1234U &&
                                 decoded_frame.status_raw == 0x80U,
                             "BL0942 decoded fields");
+    sys_calibration_snapshot_publish_meter(200U,
+                                           decoded_frame.i_rms_raw,
+                                           decoded_frame.v_rms_raw,
+                                           decoded_frame.i_fast_rms_raw,
+                                           decoded_frame.watt_raw,
+                                           decoded_frame.cf_cnt_raw,
+                                           decoded_frame.freq_raw,
+                                           decoded_frame.status_raw,
+                                           frame,
+                                           SYS_CALIBRATION_METER_FRAME_VALID |
+                                               SYS_CALIBRATION_METER_HEAD_VALID |
+                                               SYS_CALIBRATION_METER_CHECKSUM_VALID |
+                                               SYS_CALIBRATION_METER_RESERVED_VALID,
+                                           0U);
+    failures += expect_true(sys_calibration_snapshot_read_meter(&meter) == BOOL_TRUE &&
+                                meter.raw_frame[0] == SYS_BL0942_READ_RESPONSE_HEADER &&
+                                meter.raw_frame[22] == 0x42U,
+                            "BL0942 raw frame is retained");
     {
         unsigned char original_checksum = frame[22];
         frame[21] = 1U;

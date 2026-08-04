@@ -220,7 +220,13 @@ int main(void)
     oco_init();
     sys_calibration_snapshot_init();
     sys_calibration_service_init();
+    sys_calibration_snapshot_prepare_pwm(0U, 0U);
     hw_tim1_pwm2_set_PWM_OUT(0);//�ȵ����ٽ��п���������,CCO�����Ǹߵ�ƽ
+    sys_calibration_snapshot_publish_pwm(HAL_GetTick(),
+                                         hw_tim1_pwm2_get_logical_pwm(),
+                                         hw_tim1_pwm2_get_ccr(),
+                                         hw_tim1_pwm2_get_oco_on(),
+                                         SYS_CALIBRATION_PWM_SAMPLE_VALID);
     portableInit();
     sys_data_load();
     zk_work_plan_init();

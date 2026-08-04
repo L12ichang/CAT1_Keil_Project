@@ -9,10 +9,10 @@
 #include "hw_tim1_pwm2.h"
 #include "oco.h"
 #include "factory_user_data.h"
-#include "sys_calibration_snapshot.h"
 TIM_HandleTypeDef htim1;
 
 u8 pwm_on;
+static u16 _pwm_logical_output;
 
 #define TIM1_PWM2_CYCLE     3600
 
@@ -48,17 +48,29 @@ void hw_tim1_pwm2_set_PWM_OUT(u16 pwm)//pwm输出
      oco_off();
           pwm_on = 0;
     }
+
+   _pwm_logical_output = pwm;
     
 #if APP_PWM_DEBUG_ENABLE
-    printf("pwm=%d\r\n",pwm);
+   printf("pwm=%d\r\n",pwm);
 #endif
    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, pwm+PWM_OFFSET);  //负逻辑
-   sys_calibration_snapshot_publish_pwm(HAL_GetTick(),
-                                        pwm,
-                                        (u16)(pwm + PWM_OFFSET),
-                                        pwm_on ? 1U : 0U,
-                                        SYS_CALIBRATION_PWM_SAMPLE_VALID);
 
+}
+
+u16 hw_tim1_pwm2_get_logical_pwm(void)
+{
+    return _pwm_logical_output;
+}
+
+u16 hw_tim1_pwm2_get_ccr(void)
+{
+    return (u16)__HAL_TIM_GET_COMPARE(&htim1, TIM_CHANNEL_1);
+}
+
+u8 hw_tim1_pwm2_get_oco_on(void)
+{
+    return (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == GPIO_PIN_SET) ? 1U : 0U;
 }
 
 void hw_tim1_pwm2_init(void)

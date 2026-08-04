@@ -21,6 +21,7 @@ if [[ "$#" -eq 0 ]]; then
     "${ROOT_DIR}/Core/Src/adc.c" \
     "${ROOT_DIR}/Core/Src/sys_pwm.c" \
     "${ROOT_DIR}/Core/Src/hw_tim1_pwm2.c" \
+    "${ROOT_DIR}/Core/Src/hw_uart2.c" \
     "${ROOT_DIR}/Core/Src/main.c"
 fi
 

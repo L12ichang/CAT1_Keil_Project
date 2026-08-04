@@ -62,9 +62,11 @@ void sys_calibration_snapshot_publish_meter(u32 tick_ms,
                                             u32 cf_cnt_raw,
                                             u16 freq_raw,
                                             u8 status_raw,
+                                            const u8 *raw_frame,
                                             u16 valid_flags,
                                             u32 frame_error_count)
 {
+    u8 index;
     ++_meter_write_seq;
     _meter_snapshot.seq++;
     _meter_snapshot.tick_ms = tick_ms;
@@ -75,6 +77,10 @@ void sys_calibration_snapshot_publish_meter(u32 tick_ms,
     _meter_snapshot.cf_cnt_raw = cf_cnt_raw;
     _meter_snapshot.freq_raw = freq_raw;
     _meter_snapshot.status_raw = status_raw;
+    for (index = 0U; index < SYS_CALIBRATION_METER_RAW_FRAME_LENGTH; ++index)
+    {
+        _meter_snapshot.raw_frame[index] = (raw_frame == NULL) ? 0U : raw_frame[index];
+    }
     _meter_snapshot.valid_flags = valid_flags;
     _meter_snapshot.frame_error_count = frame_error_count;
     ++_meter_write_seq;
@@ -148,6 +154,7 @@ boolean_en sys_calibration_snapshot_read_meter(sys_calibration_meter_snapshot_st
     u32 before;
     u32 after;
     u8 retry;
+    u8 index;
 
     if (snapshot == NULL)
     {
@@ -169,6 +176,10 @@ boolean_en sys_calibration_snapshot_read_meter(sys_calibration_meter_snapshot_st
         snapshot->cf_cnt_raw = _meter_snapshot.cf_cnt_raw;
         snapshot->freq_raw = _meter_snapshot.freq_raw;
         snapshot->status_raw = _meter_snapshot.status_raw;
+        for (index = 0U; index < SYS_CALIBRATION_METER_RAW_FRAME_LENGTH; ++index)
+        {
+            snapshot->raw_frame[index] = _meter_snapshot.raw_frame[index];
+        }
         snapshot->valid_flags = _meter_snapshot.valid_flags;
         snapshot->frame_error_count = _meter_snapshot.frame_error_count;
         after = _meter_write_seq;

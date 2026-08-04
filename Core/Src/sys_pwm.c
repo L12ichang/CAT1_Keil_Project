@@ -141,6 +141,11 @@ u8  fa_test_EN;
 
     sys_calibration_snapshot_prepare_pwm((u16)requested_percent, (u16)persent);
     hw_set_pwm((u16)pwm_value);
+    sys_calibration_snapshot_publish_pwm(HAL_GetTick(),
+                                         hw_tim1_pwm2_get_logical_pwm(),
+                                         hw_tim1_pwm2_get_ccr(),
+                                         hw_tim1_pwm2_get_oco_on(),
+                                         SYS_CALIBRATION_PWM_SAMPLE_VALID);
 }
 
 void sys_pwm_timer(void)
@@ -269,4 +274,3 @@ void sys_pwm_process(void)
     }
     
 }
-

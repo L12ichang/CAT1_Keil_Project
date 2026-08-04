@@ -427,6 +427,7 @@ void sys_bl0942_process(void)
     u32 meter_cf_cnt_raw;
     u16 meter_freq_raw;
     u8 meter_status_raw;
+    u32 meter_tick_ms;
     u16 meter_valid_flags;
     sys_bl0942_check_uart_error();
     switch(sys_bl0942_state)
@@ -509,6 +510,7 @@ void sys_bl0942_process(void)
         {
             if(hw_bl0942_get_state() == BL0942_STATE_READ_READY)
             {
+                meter_tick_ms = HAL_GetTick();
                 if (sys_bl0942_frame_decode(_tx_buffer,
                                              READ_PACKET_MAX_LENGTH,
                                              &meter_frame) == BOOL_TRUE)
@@ -752,7 +754,7 @@ void sys_bl0942_process(void)
 
                 //计量数据更新完一次
                  bl0942data_ready=1;
-                 sys_calibration_snapshot_publish_meter(HAL_GetTick(),
+                 sys_calibration_snapshot_publish_meter(meter_tick_ms,
                                                         meter_i_rms_raw,
                                                         meter_v_rms_raw,
                                                         meter_i_fast_rms_raw,
@@ -760,6 +762,7 @@ void sys_bl0942_process(void)
                                                         meter_cf_cnt_raw,
                                                         meter_freq_raw,
                                                         meter_status_raw,
+                                                        _tx_buffer,
                                                         meter_valid_flags,
                                                         bl0942_checksum_error_count);
                 }

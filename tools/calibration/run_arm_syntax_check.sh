@@ -36,4 +36,5 @@ clang \
   -I"${ROOT_DIR}/Drivers/CMSIS/Include" \
   -isystem "${SDK_PATH}/usr/include" \
   "${ROOT_DIR}/Core/Src/sys_bl0942_frame.c" \
-  "${ROOT_DIR}/Core/Src/sys_bl0942.c"
+  "${ROOT_DIR}/Core/Src/sys_bl0942.c" \
+  "${ROOT_DIR}/Core/Src/hw_uart2.c"
