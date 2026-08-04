@@ -7,6 +7,7 @@
 #include "sys_data.h"
 #include "sys_pwm.h"
 #include "hw_flash.h"
+#include "flash_address_assignment.h"
 #include <string.h>
 
 extern uint8 simCardICCID[22];
@@ -15,8 +16,8 @@ static zk_device_config_t zk_dev_cfg;
 
 #define ZK_PROPERTY_FLASH_MAGIC 0x5A4B5052UL
 #define ZK_PROPERTY_FLASH_VERSION 1U
-#define ZK_PROPERTY_FLASH_MAIN_ADDR (DATAROM_STARTADDR + FLASH_PAGE_SIZE)
-#define ZK_PROPERTY_FLASH_BACKUP_ADDR (BAKDATAROM_STARTADDR + FLASH_PAGE_SIZE)
+#define ZK_PROPERTY_FLASH_MAIN_ADDR CAT1_FLASH_PROPERTY_MAIN_START
+#define ZK_PROPERTY_FLASH_BACKUP_ADDR CAT1_FLASH_PROPERTY_BACKUP_START
 #define ZK_RUNTIME_FLASH_OFFSET 0x200UL
 
 #define ZK_STATIC_ASSERT_CONCAT_(a, b) a##b

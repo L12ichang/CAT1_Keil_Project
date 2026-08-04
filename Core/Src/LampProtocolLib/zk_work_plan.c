@@ -3,12 +3,13 @@
 #include "zk_sunriset.h"
 #endif
 #include "hw_flash.h"
+#include "flash_address_assignment.h"
 #include "sys_aip1302.h"
 #include <stdio.h>
 #include <string.h>
 
-#define ZK_PLAN_FLASH_MAIN_ADDR     ((u32)0x08006000)
-#define ZK_PLAN_FLASH_BACKUP_ADDR   ((u32)0x08007800)
+#define ZK_PLAN_FLASH_MAIN_ADDR     CAT1_FLASH_PLAN_MAIN_START
+#define ZK_PLAN_FLASH_BACKUP_ADDR   CAT1_FLASH_PLAN_BACKUP_START
 #define ZK_PLAN_FLASH_MAGIC         ((u32)0x5a4b504c)
 #define ZK_PLAN_FLASH_VERSION       2
 
