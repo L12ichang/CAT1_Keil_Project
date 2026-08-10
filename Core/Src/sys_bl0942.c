@@ -11,6 +11,9 @@
 #include "u32_q.h"
 //#include "sys_data.h"
 #include "hw_uart2.h"
+#if BL0942_REPRO_TEST_ENABLE
+#include "Portable.h"
+#endif
 //#include "hw_bl0942.h"
 //#include "sys_rn8209c.h"
 #include "sys_data.h"
@@ -95,6 +98,13 @@ u32 total_power_this_time=0;
 u32 bl0942_checksum_error_count = 0;
 u32 bl0942_timeout_count = 0;
 u32 bl0942_uart_error_count = 0;
+
+#if BL0942_REPRO_TEST_ENABLE
+volatile u32 g_bl0942_repro_read_start_count = 0;
+volatile u32 g_bl0942_repro_frame_ok_count = 0;
+volatile u32 g_bl0942_repro_frame_bad_count = 0;
+volatile u32 g_bl0942_repro_last_ok_tick = 0;
+#endif
 
 sys_bl0942_state_en  sys_bl0942_state = SYS_BL0942_STATE_IDLE;
 sys_bl0942_init_en  sys_bl0942_init1 =  SYS_BL0942_INIT_IDLE;
@@ -438,6 +448,17 @@ void sys_bl0942_write_disable(void)
 void sys_bl0942_process(void)
 {
     u32 tmp;
+
+#if BL0942_REPRO_TEST_ENABLE
+    if(g_bl0942_repro_force_recover != 0U)
+    {
+        g_bl0942_repro_force_recover = 0U;
+        hw_bl0942_repro_force_recover();
+        sys_bl0942_state = SYS_BL0942_STATE_READ;
+        _timer_for_read = 10U;
+    }
+#endif
+
     sys_bl0942_check_uart_error();
     switch(sys_bl0942_state)
     {
@@ -508,7 +529,11 @@ void sys_bl0942_process(void)
                 _timer_for_read = 100;
                 _tx_buffer[0] = READ_HEADER;
                 _tx_buffer[1] = READ_ALL_HEAD;
-                  
+
+#if BL0942_REPRO_TEST_ENABLE
+                g_bl0942_repro_read_start_count++;
+#endif
+
                 hw_bl0942_uart_read(_tx_buffer, READ_PACKET_MAX_LENGTH);
                 
                 sys_bl0942_state = SYS_BL0942_STATE_WAIT_READ_READY;
@@ -521,6 +546,11 @@ void sys_bl0942_process(void)
             {
                 if(checksum(READ_HEADER, READ_ALL_BACK_HEAD,_tx_buffer+1, 21))
                 {
+#if BL0942_REPRO_TEST_ENABLE
+                    g_bl0942_repro_frame_ok_count++;
+                    g_bl0942_repro_last_ok_tick = Timer_GetTickCount();
+#endif
+
                     u32ll(tmp) = _tx_buffer[1];
                     u32lh(tmp) = _tx_buffer[2];
                     u32hl(tmp) = _tx_buffer[3];
@@ -752,6 +782,9 @@ void sys_bl0942_process(void)
                 else
                 {
                     bl0942_checksum_error_count++;
+#if BL0942_REPRO_TEST_ENABLE
+                    g_bl0942_repro_frame_bad_count++;
+#endif
                     printf("checksum error1\n");
                 }                
                 sys_bl0942_state = SYS_BL0942_STATE_READ;
