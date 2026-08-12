@@ -18,10 +18,8 @@
 #include "factory_user_data.h"
 #include "sys_data.h"
 #include "hw_flash.h"
-#include "flash_address_assignment.h"
 #include "ntc.h"
 #include "main.h"
-#include "sys_calibration_mqtt.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -127,8 +125,8 @@ static uint32 zk_time_request_retry_tick = 0;
 #define ZK_OTA_REPORT_FLASH_MAGIC 0x5A4B4F54UL
 #define ZK_OTA_REPORT_FLASH_VERSION 1U
 #define ZK_OTA_REPORT_FLASH_OFFSET 0x300UL
-#define ZK_OTA_REPORT_FLASH_MAIN_ADDR CAT1_FLASH_OTA_REPORT_MAIN_START
-#define ZK_OTA_REPORT_FLASH_BACKUP_ADDR CAT1_FLASH_OTA_REPORT_BACKUP_START
+#define ZK_OTA_REPORT_FLASH_MAIN_ADDR (DATAROM_STARTADDR + FLASH_PAGE_SIZE + ZK_OTA_REPORT_FLASH_OFFSET)
+#define ZK_OTA_REPORT_FLASH_BACKUP_ADDR (BAKDATAROM_STARTADDR + FLASH_PAGE_SIZE + ZK_OTA_REPORT_FLASH_OFFSET)
 #define ZK_OTA_REPORT_SUCCESS_PROGRESS 100U
 #define ZK_OTA_REPORT_RETRY_DELAY_MS (10UL * 1000UL)
 #define ZK_OTA_REPORT_PUBLISH_TIMEOUT_MS (45UL * 1000UL)
@@ -777,7 +775,7 @@ static boolean_en zk_unix_seconds_to_rtc(long seconds, RtcTime_t *rtc)
     int year_days;
     int month_days;
 
-    if (rtc == NULL || seconds < 0)
+    if (rtc == NULL || seconds < 0)w
     {
         return BOOL_FALSE;
     }
@@ -1216,8 +1214,7 @@ void zk_mqtt_reset_session(void)
     zk_login_wait_pub_timeout_count = 0;
     zk_ota_progress_pending = BOOL_FALSE;
     zk_ota_error_pending = BOOL_FALSE;
-    /* 注意：不清零 zk_reboot_pending —— reboot意图是设备级的，
-       若在此清零，设备在复位窗口内掉线会导致MCU永不复位 */
+    zk_reboot_pending = BOOL_FALSE;
     /* 会话级复位心跳监督：重新从60s后开始第一次健康心跳 */
     zk_hb_monitor_state = ZK_HEARTBEAT_MONITOR_IDLE;
     zk_hb_period_tick = 0;
@@ -1895,10 +1892,6 @@ boolean_en zk_dispatch_message(cJSON *root, const zk_message_header_t *header)
     if (root == NULL || header == NULL)
     {
         return BOOL_FALSE;
-    }
-    if (strcmp(header->sv, ZK_SV_CAL) == 0)
-    {
-        return sys_calibration_mqtt_handle(root, header);
     }
     zk_apply_server_time_from_header(header);
     if (zk_handle_property_read(root, header))
@@ -2607,19 +2600,6 @@ static void zk_control_restore_process(void)
     }
 }
 
-/**
-*@brief   MCU重启检查：由主循环无条件调用，独立于登录/连接状态机。
-*         reboot命令只设置pending，此处统一在延时后执行NVIC_SystemReset，
-*         避免设备处于假在线/掉线等非连接状态时重启意图被吞掉（MCU永不复位）。
-*/
-void zk_mcu_reboot_process(void)
-{
-    if (zk_reboot_pending == BOOL_TRUE && Timer_PassedDelay(zk_reboot_tick, 500))
-    {
-        NVIC_SystemReset();
-    }
-}
-
 void zk_mqtt_session_process(void)
 {
     uint32 now;
@@ -2636,6 +2616,11 @@ void zk_mqtt_session_process(void)
     zk_control_restore_process();
     report_period_ms = zk_get_effective_period_sec(dev_cfg->uPeriod, ZK_UPLOAD_INTERVAL_SEC) * 1000UL;
     time_request_period_ms = zk_get_effective_period_sec(dev_cfg->tPeriod, ZK_TIME_REQUEST_INTERVAL_SEC) * 1000UL;
+
+    if (zk_reboot_pending == BOOL_TRUE && Timer_PassedDelay(zk_reboot_tick, 500))
+    {
+        NVIC_SystemReset();
+    }
 
     if (zk_login_state == ZK_LOGIN_STATE_WAIT_PUBLISH)
     {
@@ -2717,7 +2702,7 @@ void zk_mqtt_session_process(void)
         {
             return;
         }
-
+                    
         if (zk_ota_error_pending == BOOL_TRUE)
         {
             if (zk_publish_ota_error_now(zk_ota_error_code) == 0)
@@ -3450,7 +3435,7 @@ boolean_en zk_handle_control_message(cJSON *root, const zk_message_header_t *hea
     return BOOL_TRUE;
 }
 
-boolean_en zk_handle_request_message(cJSON *root, const zk_message_header_t *header)
+boolean_en zk_handle_request_message(cJSON *root, const zk_message_header_t *header)0
 {
     cJSON *dt;
     cJSON *tm_cali;
