@@ -30,6 +30,18 @@ cc \
   -Wextra \
   -Werror \
   -I"${ROOT_DIR}/Core/Src" \
+  "${ROOT_DIR}/Core/Src/sys_bl0942_frame.c" \
+  "${ROOT_DIR}/tools/calibration/test_bl0942_frame.c" \
+  -o "${BUILD_DIR}/test_bl0942_frame"
+
+"${BUILD_DIR}/test_bl0942_frame"
+
+cc \
+  -std=c11 \
+  -Wall \
+  -Wextra \
+  -Werror \
+  -I"${ROOT_DIR}/Core/Src" \
   "${ROOT_DIR}/Core/Src/sys_calibration_driver_protocol.c" \
   "${ROOT_DIR}/Core/Src/sys_calibration_dc5200.c" \
   "${ROOT_DIR}/Core/Src/sys_calibration_curve.c" \

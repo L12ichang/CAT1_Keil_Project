@@ -33,10 +33,11 @@ void hw_tim1_pwm2_set_off(void)
 #define PWM_OFFSET   OP_PWM_OFFSET //由于光耦的延迟问题增加3%输出
 #define PWM_USEFUL_RANGE    (u16)(PWM_MAX-PWM_OFFSET)  //
 
-void hw_tim1_pwm2_set_PWM_OUT(u16 pwm)//pwm输出
+static void hw_tim1_pwm2_set_PWM_OUT_internal(u16 pwm, boolean_en calibration_authorized)
 {
     /* 最后一道硬件出口门禁：先归零，再决定是否允许OCO导通。 */
-    if (pwm > 0U && sys_calibration_service_is_boot_inhibited() == BOOL_TRUE)
+    if (pwm > 0U && sys_calibration_service_is_boot_inhibited() == BOOL_TRUE &&
+        calibration_authorized != BOOL_TRUE)
     {
         pwm = 0U;
     }
@@ -62,6 +63,17 @@ void hw_tim1_pwm2_set_PWM_OUT(u16 pwm)//pwm输出
 #endif
    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, pwm+PWM_OFFSET);  //负逻辑
 
+}
+
+void hw_tim1_pwm2_set_PWM_OUT(u16 pwm)//pwm输出
+{
+    hw_tim1_pwm2_set_PWM_OUT_internal(pwm, BOOL_FALSE);
+}
+
+void hw_tim1_pwm2_set_calibration_PWM_OUT(u16 pwm)
+{
+    hw_tim1_pwm2_set_PWM_OUT_internal(
+        pwm, sys_calibration_service_is_output_authorized());
 }
 
 u16 hw_tim1_pwm2_get_logical_pwm(void)

@@ -23,12 +23,8 @@ static s32 sys_bl0942_frame_read_s24_le(const u8 *buffer)
     return (s32)value;
 }
 
-/************************************
-功能描述：计算 BL0942 23 字节读取帧校验和
-输入参数：frame 23 字节响应帧
-输出返回：按协议计算的校验字节
-************************************/
-u8 sys_bl0942_frame_calculate_checksum(const u8 *frame)
+static u8 sys_bl0942_frame_calculate_checksum_to(const u8 *frame,
+                                                  u8 last_data_index)
 {
     u16 sum;
     u8 index;
@@ -39,7 +35,7 @@ u8 sys_bl0942_frame_calculate_checksum(const u8 *frame)
     }
     sum = (u16)SYS_BL0942_READ_REQUEST_HEADER +
           (u16)SYS_BL0942_READ_RESPONSE_HEADER;
-    for (index = 1U; index <= 21U; ++index)
+    for (index = 1U; index <= last_data_index; ++index)
     {
         sum += frame[index];
     }
@@ -47,7 +43,43 @@ u8 sys_bl0942_frame_calculate_checksum(const u8 *frame)
 }
 
 /************************************
-功能描述：验证 BL0942 23 字节读取帧头、保留字节和校验
+功能描述：计算 BL0942 23 字节读取帧校验和
+输入参数：frame 23 字节响应帧
+输出返回：按协议计算的校验字节
+************************************/
+u8 sys_bl0942_frame_calculate_checksum(const u8 *frame)
+{
+    return sys_bl0942_frame_calculate_checksum_to(frame, 21U);
+}
+
+u8 sys_bl0942_frame_calculate_legacy_checksum(const u8 *frame)
+{
+    return sys_bl0942_frame_calculate_checksum_to(frame, 20U);
+}
+
+boolean_en sys_bl0942_frame_reserved_valid(const u8 *frame)
+{
+    if (frame == NULL)
+    {
+        return BOOL_FALSE;
+    }
+    return (frame[18] == 0U && frame[20] == 0U && frame[21] == 0U) ?
+           BOOL_TRUE : BOOL_FALSE;
+}
+
+boolean_en sys_bl0942_frame_uses_legacy_checksum(const u8 *frame)
+{
+    if (frame == NULL || frame[0] != SYS_BL0942_READ_RESPONSE_HEADER ||
+        frame[22] == sys_bl0942_frame_calculate_checksum(frame))
+    {
+        return BOOL_FALSE;
+    }
+    return (frame[22] == sys_bl0942_frame_calculate_legacy_checksum(frame)) ?
+           BOOL_TRUE : BOOL_FALSE;
+}
+
+/************************************
+功能描述：验证 BL0942 23 字节读取帧头和官方/基线兼容校验
 输入参数：frame 响应帧；length 帧长度
 输出返回：有效 BOOL_TRUE，无效 BOOL_FALSE
 ************************************/
@@ -57,14 +89,17 @@ boolean_en sys_bl0942_frame_validate(const u8 *frame, u16 length)
     {
         return BOOL_FALSE;
     }
-    if (frame[0] != SYS_BL0942_READ_RESPONSE_HEADER ||
-        frame[18] != 0U ||
-        frame[20] != 0U ||
-        frame[21] != 0U)
+    if (frame[0] != SYS_BL0942_READ_RESPONSE_HEADER)
     {
         return BOOL_FALSE;
     }
-    return (frame[22] == sys_bl0942_frame_calculate_checksum(frame)) ?
+    /*
+     * 官方 V1.06 格式的 checksum 覆盖字节1..21。基线固件长期采用
+     * 字节1..20的校验，字节21又不承载业务数据。两种校验都完整保护
+     * I/V/WATT/CF/FREQ/STATUS，因此保留兼容分支不会放宽有效电参字段。
+     */
+    return (frame[22] == sys_bl0942_frame_calculate_checksum(frame) ||
+            frame[22] == sys_bl0942_frame_calculate_legacy_checksum(frame)) ?
            BOOL_TRUE : BOOL_FALSE;
 }
 

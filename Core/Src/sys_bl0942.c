@@ -96,6 +96,7 @@ u32 total_power_this_time=0;
 u32 bl0942_checksum_error_count = 0;
 u32 bl0942_timeout_count = 0;
 u32 bl0942_uart_error_count = 0;
+u32 bl0942_compat_frame_count = 0;
 
 sys_bl0942_state_en  sys_bl0942_state = SYS_BL0942_STATE_IDLE;
 sys_bl0942_init_en  sys_bl0942_init1 =  SYS_BL0942_INIT_IDLE;
@@ -524,8 +525,19 @@ void sys_bl0942_process(void)
                     meter_status_raw = meter_frame.status_raw;
                     meter_valid_flags = SYS_CALIBRATION_METER_FRAME_VALID |
                                         SYS_CALIBRATION_METER_HEAD_VALID |
-                                        SYS_CALIBRATION_METER_CHECKSUM_VALID |
-                                        SYS_CALIBRATION_METER_RESERVED_VALID;
+                                        SYS_CALIBRATION_METER_CHECKSUM_VALID;
+                    if (sys_bl0942_frame_reserved_valid(_tx_buffer) == BOOL_TRUE)
+                    {
+                        meter_valid_flags |= SYS_CALIBRATION_METER_RESERVED_VALID;
+                    }
+                    if (sys_bl0942_frame_reserved_valid(_tx_buffer) != BOOL_TRUE ||
+                        sys_bl0942_frame_uses_legacy_checksum(_tx_buffer) == BOOL_TRUE)
+                    {
+                        if (bl0942_compat_frame_count < 0xFFFFFFFFUL)
+                        {
+                            bl0942_compat_frame_count++;
+                        }
+                    }
 
                     u32ll(tmp) = _tx_buffer[1];
                     u32lh(tmp) = _tx_buffer[2];

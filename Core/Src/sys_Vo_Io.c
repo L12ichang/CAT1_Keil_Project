@@ -534,6 +534,15 @@ void error_report_process(void)
                      Vo_value-=10;
                    }
                 }*/
+               if (MID == SYS_CALIBRATION_50W_MID)
+               {
+                   u16 calibrated_current_ma;
+                   if (sys_calibration_service_correct_output_current(
+                           (u16)Io_value, &calibrated_current_ma) == BOOL_TRUE)
+                   {
+                       Io_value = calibrated_current_ma;
+                   }
+               }
                Po_value = ((u32)Vo_value*Io_value)/1000U;   //单位0.1W
 
                /* 50W固件的额定功率和绝对过流均为锁存式fail-off门禁。 */

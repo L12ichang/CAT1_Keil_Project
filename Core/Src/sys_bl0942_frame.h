@@ -26,7 +26,28 @@ typedef struct
 extern u8 sys_bl0942_frame_calculate_checksum(const u8 *frame);
 
 /************************************
-功能描述：验证 BL0942 23 字节读取帧头、保留字节和校验
+功能描述：计算基线固件使用的兼容校验和（不计保留字节21）
+输入参数：frame 23 字节响应帧
+输出返回：兼容校验字节
+************************************/
+extern u8 sys_bl0942_frame_calculate_legacy_checksum(const u8 *frame);
+
+/************************************
+功能描述：检查数据手册定义的三个填充字节是否均为0
+输入参数：frame 23 字节响应帧
+输出返回：符合官方格式 BOOL_TRUE，否则 BOOL_FALSE
+************************************/
+extern boolean_en sys_bl0942_frame_reserved_valid(const u8 *frame);
+
+/************************************
+功能描述：判断帧是否仅通过基线固件兼容校验
+输入参数：frame 23 字节响应帧
+输出返回：仅兼容校验通过 BOOL_TRUE，否则 BOOL_FALSE
+************************************/
+extern boolean_en sys_bl0942_frame_uses_legacy_checksum(const u8 *frame);
+
+/************************************
+功能描述：验证 BL0942 23 字节读取帧头和官方/基线兼容校验
 输入参数：frame 响应帧；length 帧长度
 输出返回：有效 BOOL_TRUE，无效 BOOL_FALSE
 ************************************/

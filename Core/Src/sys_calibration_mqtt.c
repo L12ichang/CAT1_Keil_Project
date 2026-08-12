@@ -12,6 +12,9 @@
 #include "sys_calibration_driver_protocol.h"
 #include "sys_calibration_curve.h"
 #include "sys_calibration_safety.h"
+#include "sys_calibration_snapshot.h"
+#include "sys_bl0942.h"
+#include "sys_Vo_Io.h"
 #include "main.h"
 
 #include <string.h>
@@ -210,7 +213,12 @@ static void sys_calibration_mqtt_add_status(
     cJSON_AddNumberToObject(readback, "currentLevel", status->current_level);
     cJSON_AddNumberToObject(readback, "payloadLength", status->staged_length);
     cJSON_AddNumberToObject(readback, "payloadCrc32", status->staged_crc32);
+    cJSON_AddNumberToObject(readback, "committedCrc32", status->committed_crc32);
+    cJSON_AddNumberToObject(readback, "committedGeneration",
+                            status->committed_generation);
     cJSON_AddBoolToObject(readback, "staged", status->staged_valid == BOOL_TRUE);
+    cJSON_AddBoolToObject(readback, "committed",
+                          status->committed_valid == BOOL_TRUE);
     cJSON_AddBoolToObject(readback, "safetyReady", status->safety_ready == BOOL_TRUE);
     cJSON_AddBoolToObject(readback, "bootInhibit",
                           status->boot_inhibit_active == BOOL_TRUE);
@@ -220,6 +228,76 @@ static void sys_calibration_mqtt_add_status(
                           status->nonzero_output_allowed == BOOL_TRUE);
     cJSON_AddItemToObject(dt, "readback", readback);
     sys_calibration_mqtt_add_payload(dt);
+}
+
+static void sys_calibration_mqtt_add_raw(cJSON *dt, u32 now_ms)
+{
+    sys_calibration_snapshot_aggregate_st snapshot;
+    cJSON *raw;
+    cJSON *meter;
+    cJSON *adc;
+    cJSON *pwm;
+
+    if (dt == NULL ||
+        sys_calibration_snapshot_read_aggregate(now_ms, &snapshot) != BOOL_TRUE)
+    {
+        return;
+    }
+    raw = zk_cjson_create_tx_object("cal.raw");
+    meter = zk_cjson_create_tx_object("cal.raw.meter");
+    adc = zk_cjson_create_tx_object("cal.raw.adc");
+    pwm = zk_cjson_create_tx_object("cal.raw.pwm");
+    if (raw == NULL || meter == NULL || adc == NULL || pwm == NULL)
+    {
+        cJSON_Delete(raw);
+        cJSON_Delete(meter);
+        cJSON_Delete(adc);
+        cJSON_Delete(pwm);
+        return;
+    }
+    cJSON_AddNumberToObject(raw, "validFlags", snapshot.valid_flags);
+    cJSON_AddNumberToObject(raw, "meterAdcSkewMs", snapshot.meter_adc_skew_ms);
+    cJSON_AddNumberToObject(raw, "meterPwmSkewMs", snapshot.meter_pwm_skew_ms);
+    cJSON_AddNumberToObject(raw, "inputVoltage01V", ac_voltage_8209);
+    cJSON_AddNumberToObject(raw, "inputCurrentMa", Z_ac_current);
+    cJSON_AddNumberToObject(raw, "inputPower001W", ac_powerpa);
+    cJSON_AddNumberToObject(raw, "outputVoltage01V", Vo_value);
+    cJSON_AddNumberToObject(raw, "outputCurrentMa", Io_value);
+    cJSON_AddNumberToObject(raw, "outputPower01W", Po_value);
+    cJSON_AddNumberToObject(meter, "seq", snapshot.meter.seq);
+    cJSON_AddNumberToObject(meter, "ageMs", snapshot.meter_age_ms);
+    cJSON_AddNumberToObject(meter, "validFlags", snapshot.meter.valid_flags);
+    cJSON_AddNumberToObject(meter, "iRmsRaw", snapshot.meter.i_rms_raw);
+    cJSON_AddNumberToObject(meter, "vRmsRaw", snapshot.meter.v_rms_raw);
+    cJSON_AddNumberToObject(meter, "iFastRmsRaw", snapshot.meter.i_fast_rms_raw);
+    cJSON_AddNumberToObject(meter, "wattRaw", snapshot.meter.watt_raw);
+    cJSON_AddNumberToObject(meter, "cfCntRaw", snapshot.meter.cf_cnt_raw);
+    cJSON_AddNumberToObject(meter, "freqRaw", snapshot.meter.freq_raw);
+    cJSON_AddNumberToObject(meter, "statusRaw", snapshot.meter.status_raw);
+    cJSON_AddNumberToObject(meter, "frameErrors", bl0942_checksum_error_count);
+    cJSON_AddNumberToObject(meter, "timeoutErrors", bl0942_timeout_count);
+    cJSON_AddNumberToObject(meter, "uartErrors", bl0942_uart_error_count);
+    cJSON_AddNumberToObject(meter, "compatFrames", bl0942_compat_frame_count);
+    cJSON_AddNumberToObject(adc, "seq", snapshot.adc.seq);
+    cJSON_AddNumberToObject(adc, "ageMs", snapshot.adc_age_ms);
+    cJSON_AddNumberToObject(adc, "validFlags", snapshot.adc.valid_flags);
+    cJSON_AddNumberToObject(adc, "ntcRaw", snapshot.adc.ntc_raw);
+    cJSON_AddNumberToObject(adc, "voutRaw", snapshot.adc.vout_raw);
+    cJSON_AddNumberToObject(adc, "leakRaw", snapshot.adc.leak_raw);
+    cJSON_AddNumberToObject(adc, "ioutRaw", snapshot.adc.iout_raw);
+    cJSON_AddNumberToObject(pwm, "seq", snapshot.pwm.seq);
+    cJSON_AddNumberToObject(pwm, "ageMs", snapshot.pwm_age_ms);
+    cJSON_AddNumberToObject(pwm, "requestedPercent",
+                            snapshot.pwm.requested_percent);
+    cJSON_AddNumberToObject(pwm, "protectedPercent",
+                            snapshot.pwm.protected_percent);
+    cJSON_AddNumberToObject(pwm, "logicalPwm", snapshot.pwm.logical_pwm);
+    cJSON_AddNumberToObject(pwm, "ccr", snapshot.pwm.ccr);
+    cJSON_AddNumberToObject(pwm, "ocoOn", snapshot.pwm.oco_on);
+    cJSON_AddItemToObject(raw, "meter", meter);
+    cJSON_AddItemToObject(raw, "adc", adc);
+    cJSON_AddItemToObject(raw, "pwm", pwm);
+    cJSON_AddItemToObject(dt, "raw", raw);
 }
 
 static int sys_calibration_mqtt_send_response(
@@ -272,9 +350,15 @@ static int sys_calibration_mqtt_send_response(
                               SYS_CALIBRATION_FLASH_COMMIT_ENABLED != 0U);
         cJSON_AddBoolToObject(dt, "nonzeroOutputAllowed",
                               SYS_CALIBRATION_NONZERO_OUTPUT_ENABLED != 0U);
-        cJSON_AddStringToObject(dt, "commitGate", "SHARED_2K_PAGE_MAP_HIL");
+        cJSON_AddStringToObject(dt, "commitMethod", "AB_LAST_WORD_READBACK");
+        cJSON_AddStringToObject(dt, "rawSource", "BL0942_ADC_PWM_SNAPSHOT");
     }
     sys_calibration_mqtt_add_status(dt, status);
+    if (operation != NULL && strcmp(operation, "RAW") == 0 &&
+        result == SYS_CALIBRATION_RESULT_OK)
+    {
+        sys_calibration_mqtt_add_raw(dt, HAL_GetTick());
+    }
     send_result = zk_send_json_root(root, NULL);
     cJSON_Delete(root);
     return send_result;
@@ -293,7 +377,6 @@ boolean_en sys_calibration_mqtt_handle(
     u16 level;
     u16 length;
     u8 payload[SYS_CALIBRATION_DRIVER_TABLE_FRAME_LENGTH];
-    sys_calibration_raw_direction_en direction;
     sys_calibration_result_en result;
     sys_calibration_service_status_st status;
     boolean_en capabilities = BOOL_FALSE;
@@ -316,7 +399,20 @@ boolean_en sys_calibration_mqtt_handle(
     operation = op_node->valuestring;
     (void)sys_calibration_service_get_status(&status);
 
-    if (strcmp(operation, "CAPABILITIES") == 0)
+    if (((strcmp(operation, "CAPABILITIES") == 0 ||
+          strcmp(operation, "RAW") == 0 ||
+          strcmp(operation, "READBACK") == 0 ||
+          strcmp(operation, "CONFIG") == 0) &&
+         strcmp(header->ct, ZK_CT_READ) != 0) ||
+        ((strcmp(operation, "CAPABILITIES") != 0 &&
+          strcmp(operation, "RAW") != 0 &&
+          strcmp(operation, "READBACK") != 0 &&
+          strcmp(operation, "CONFIG") != 0) &&
+         strcmp(header->ct, ZK_CT_WRITE) != 0))
+    {
+        result = SYS_CALIBRATION_RESULT_PROTOCOL_ERROR;
+    }
+    else if (strcmp(operation, "CAPABILITIES") == 0)
     {
         capabilities = BOOL_TRUE;
         result = SYS_CALIBRATION_RESULT_OK;
@@ -365,22 +461,8 @@ boolean_en sys_calibration_mqtt_handle(
     }
     else if (strcmp(operation, "RAW") == 0)
     {
-        u16 direction_value = 0U;
-
-        if (sys_calibration_mqtt_read_payload(
-                dt, "frame", payload, sizeof(payload), &length) != BOOL_TRUE ||
-            sys_calibration_mqtt_read_u16(dt, "direction", &direction_value) !=
-                BOOL_TRUE || direction_value > 1U)
-        {
-            result = SYS_CALIBRATION_RESULT_PROTOCOL_ERROR;
-        }
-        else
-        {
-            direction = (sys_calibration_raw_direction_en)direction_value;
-            result = sys_calibration_service_raw_seq(
-                session_id, HAL_GetTick(), seq, payload, length, direction,
-                &status);
-        }
+        result = sys_calibration_service_snapshot_seq(
+            session_id, HAL_GetTick(), seq, &status);
     }
     else if (strcmp(operation, "STAGE_CONFIG") == 0)
     {
@@ -400,7 +482,8 @@ boolean_en sys_calibration_mqtt_handle(
         result = sys_calibration_service_apply_seq(
             session_id, HAL_GetTick(), seq, &status);
     }
-    else if (strcmp(operation, "READBACK") == 0)
+    else if (strcmp(operation, "READBACK") == 0 ||
+             strcmp(operation, "CONFIG") == 0)
     {
         result = sys_calibration_service_readback_seq(
             session_id, HAL_GetTick(), seq, &status);

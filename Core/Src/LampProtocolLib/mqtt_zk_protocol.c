@@ -1216,7 +1216,8 @@ void zk_mqtt_reset_session(void)
     zk_login_wait_pub_timeout_count = 0;
     zk_ota_progress_pending = BOOL_FALSE;
     zk_ota_error_pending = BOOL_FALSE;
-    zk_reboot_pending = BOOL_FALSE;
+    /* 注意：不清零 zk_reboot_pending —— reboot意图是设备级的，
+       若在此清零，设备在复位窗口内掉线会导致MCU永不复位 */
     /* 会话级复位心跳监督：重新从60s后开始第一次健康心跳 */
     zk_hb_monitor_state = ZK_HEARTBEAT_MONITOR_IDLE;
     zk_hb_period_tick = 0;
@@ -2606,6 +2607,19 @@ static void zk_control_restore_process(void)
     }
 }
 
+/**
+*@brief   MCU重启检查：由主循环无条件调用，独立于登录/连接状态机。
+*         reboot命令只设置pending，此处统一在延时后执行NVIC_SystemReset，
+*         避免设备处于假在线/掉线等非连接状态时重启意图被吞掉（MCU永不复位）。
+*/
+void zk_mcu_reboot_process(void)
+{
+    if (zk_reboot_pending == BOOL_TRUE && Timer_PassedDelay(zk_reboot_tick, 500))
+    {
+        NVIC_SystemReset();
+    }
+}
+
 void zk_mqtt_session_process(void)
 {
     uint32 now;
@@ -2622,11 +2636,6 @@ void zk_mqtt_session_process(void)
     zk_control_restore_process();
     report_period_ms = zk_get_effective_period_sec(dev_cfg->uPeriod, ZK_UPLOAD_INTERVAL_SEC) * 1000UL;
     time_request_period_ms = zk_get_effective_period_sec(dev_cfg->tPeriod, ZK_TIME_REQUEST_INTERVAL_SEC) * 1000UL;
-
-    if (zk_reboot_pending == BOOL_TRUE && Timer_PassedDelay(zk_reboot_tick, 500))
-    {
-        NVIC_SystemReset();
-    }
 
     if (zk_login_state == ZK_LOGIN_STATE_WAIT_PUBLISH)
     {

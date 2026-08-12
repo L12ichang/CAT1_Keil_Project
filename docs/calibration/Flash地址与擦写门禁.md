@@ -1,6 +1,6 @@
 # 量产校准 Flash 地址与擦写门禁
 
-状态：`PROVISIONAL`。地址表已集中，但校准槽尚未冻结。
+状态：`SOURCE_ENABLED / MAP_HIL_PENDING`。源码已接入 A/B 事务，候选地址仍未作为量产发布合同冻结。
 
 ## 当前源码所有者表
 
@@ -30,7 +30,9 @@
 
 - `hw_flash_write_bytes_checked()` 逐点检查 HAL 擦除、字编程和请求范围回读，并返回 `BOOL_FALSE`；它仍会重写完整 2KiB 页，不能绕过共享页所有者风险。
 - 旧 `hw_flash_write_bytes()` 仅为兼容入口，忽略返回值；新校准存储不得调用它。
-- 真正的校准 A/B commit 还需要非活动槽、序列号/CRC、专用不擦页 commit-word 和掉电恢复测试；本分支没有启用真实 commit。
+- `sys_calibration_flash.c` 已实现读取 A/B 最新有效序列、写非活动槽、payload/record CRC、最后写 `commit_word` 和整体回读。
+- boot-inhibit 使用每个 1KiB 候选槽内 `0x300` 偏移的独立 A/B 记录；新设备全 `0xFF` 视为未抑制，非空且两份均损坏时失败关闭。
+- 上述是源码能力，共页邻接记录保全和任意断电点仍需 Keil MAP/HEX 与实机故障注入。
 
 ## 必须通过的审计
 

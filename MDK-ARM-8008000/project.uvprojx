@@ -1640,6 +1640,11 @@
               <FilePath>..\Core\Src\sys_calibration_storage.c</FilePath>
             </File>
             <File>
+              <FileName>sys_calibration_flash.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_flash.c</FilePath>
+            </File>
+            <File>
               <FileName>sys_calibration_boot_inhibit.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\sys_calibration_boot_inhibit.c</FilePath>
@@ -3546,6 +3551,11 @@
               <FileName>sys_calibration_storage.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\sys_calibration_storage.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_flash.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_flash.c</FilePath>
             </File>
             <File>
               <FileName>sys_calibration_boot_inhibit.c</FileName>

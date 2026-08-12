@@ -102,6 +102,15 @@ u8  fa_test_EN;
       if (MID == SYS_CALIBRATION_50W_MID)
       {
           u8 safe_percent;
+          u8 calibrated_percent;
+
+          if (persent > 0U &&
+              sys_calibration_service_correct_output_percent(
+                  persent, (u16)SET_OUTCUR,
+                  &calibrated_percent) == BOOL_TRUE)
+          {
+              persent = calibrated_percent;
+          }
 
           if (Error_1_OL != 0U || Error_Out_LV != 0U ||
               Error_3_OV != 0U || Error_4_LV != 0U)
@@ -340,4 +349,58 @@ void sys_pwm_force_safe_off(void)
                                          hw_tim1_pwm2_get_ccr(),
                                          hw_tim1_pwm2_get_oco_on(),
                                          SYS_CALIBRATION_PWM_SAMPLE_VALID);
+}
+
+boolean_en sys_pwm_calibration_set_level(u16 level)
+{
+    sys_calibration_adc_snapshot_st adc;
+    u8 requested_percent;
+    u8 safe_percent;
+    u32 pwm_value;
+    u32 feedback_voltage_01v;
+
+    if (sys_calibration_curve_validate_level(level) != BOOL_TRUE)
+    {
+        return BOOL_FALSE;
+    }
+    requested_percent = (u8)(level / SYS_CALIBRATION_CURVE_LEVEL_STEP * 10U);
+    if (requested_percent == 0U)
+    {
+        sys_pwm_force_safe_off();
+        return BOOL_TRUE;
+    }
+    if (sys_calibration_snapshot_read_adc(&adc) != BOOL_TRUE)
+    {
+        sys_pwm_force_safe_off();
+        return BOOL_FALSE;
+    }
+    feedback_voltage_01v = (((u32)adc.vout_raw * 3300U) / 4095U) * 53U / 100U;
+    if (MID != SYS_CALIBRATION_50W_MID ||
+        Error_1_OL != 0U || Error_Out_LV != 0U ||
+        Error_3_OV != 0U || Error_4_LV != 0U ||
+        adc.valid_flags == 0U || (HAL_GetTick() - adc.tick_ms) > 500U ||
+        sys_calibration_safety_limit_percent(
+            requested_percent, (u16)feedback_voltage_01v, (u16)SET_OUTCUR,
+            &safe_percent) != BOOL_TRUE || safe_percent == 0U ||
+        HWMAX_OUTCUR == 0U)
+    {
+        sys_pwm_force_safe_off();
+        return BOOL_FALSE;
+    }
+    pwm_value = ((u32)safe_percent * (u32)SET_OUTCUR *
+                 (u32)PWM_USEFUL_RANGE) /
+                ((u32)HWMAX_OUTCUR * 100U);
+    if (pwm_value > PWM_OUT_MAX)
+    {
+        pwm_value = PWM_OUT_MAX;
+    }
+    sys_calibration_snapshot_prepare_pwm(requested_percent, safe_percent);
+    hw_tim1_pwm2_set_calibration_PWM_OUT((u16)pwm_value);
+    sys_calibration_snapshot_publish_pwm(HAL_GetTick(),
+                                         hw_tim1_pwm2_get_logical_pwm(),
+                                         hw_tim1_pwm2_get_ccr(),
+                                         hw_tim1_pwm2_get_oco_on(),
+                                         SYS_CALIBRATION_PWM_SAMPLE_VALID);
+    return (hw_tim1_pwm2_get_logical_pwm() == (u16)pwm_value) ?
+           BOOL_TRUE : BOOL_FALSE;
 }

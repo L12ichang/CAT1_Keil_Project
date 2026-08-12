@@ -45,6 +45,7 @@
 #include "sys_pwm.h"
 #include "sys_calibration_snapshot.h"
 #include "sys_calibration_service.h"
+#include "sys_calibration_flash.h"
 #include "sys_temp_over_protect.h"
 #include "aip1302.h"
 #include "sys_aip1302.h"
@@ -193,6 +194,7 @@ void main_timer(void)
 int main(void)
 {
     log_type_st log;
+    sys_calibration_flash_boot_st calibration_boot;
     *(uint32_t *)0x400220D0=0x0;//��˳�ر�flash��������ST���Բ�����һ��
     SCB->VTOR = APROM_OFFSET_ADDR;
 
@@ -222,6 +224,27 @@ int main(void)
     sys_calibration_snapshot_init();
     sys_calibration_service_init();
     sys_calibration_service_bind_safe_off(sys_pwm_force_safe_off);
+    sys_calibration_service_bind_platform(sys_pwm_calibration_set_level,
+                                          sys_calibration_flash_set_inhibit,
+                                          sys_calibration_flash_commit);
+    if (sys_calibration_flash_boot_load(&calibration_boot) == BOOL_TRUE)
+    {
+        if (calibration_boot.committed_valid == BOOL_TRUE)
+        {
+            (void)sys_calibration_service_load_committed(
+                calibration_boot.committed_payload,
+                calibration_boot.committed_length,
+                calibration_boot.committed_generation);
+        }
+        sys_calibration_service_restore_boot(
+            calibration_boot.boot_inhibited,
+            calibration_boot.persistence_ready);
+        if (calibration_boot.boot_inhibited != BOOL_TRUE &&
+            calibration_boot.persistence_ready == BOOL_TRUE)
+        {
+            sys_calibration_service_set_safety_ready(BOOL_TRUE);
+        }
+    }
     sys_calibration_snapshot_prepare_pwm(0U, 0U);
     hw_tim1_pwm2_set_PWM_OUT(0);//�ȵ����ٽ��п���������,CCO�����Ǹߵ�ƽ
     sys_calibration_snapshot_publish_pwm(HAL_GetTick(),
@@ -273,6 +296,7 @@ int main(void)
     uart_diam_process();
     adc_process();
     sys_temp_over_protect_process();
+    zk_mcu_reboot_process();   /* 主循环无条件检查：设备任何状态下都能执行重启 */
     resetNbModule_machine();
     APP_PROFILE_CALL(APP_PERF_4G_CONFIG, _4G_configModule_machine());
     APP_PROFILE_CALL(APP_PERF_NB_SEND, nbSendTcpData_sm());

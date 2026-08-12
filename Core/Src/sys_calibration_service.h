@@ -5,8 +5,8 @@
 
 #define SYS_CALIBRATION_PROTOCOL_FROZEN        1U
 #define SYS_CALIBRATION_CODEC_AVAILABLE        1U
-#define SYS_CALIBRATION_FLASH_COMMIT_ENABLED   0U
-#define SYS_CALIBRATION_NONZERO_OUTPUT_ENABLED 0U
+#define SYS_CALIBRATION_FLASH_COMMIT_ENABLED   1U
+#define SYS_CALIBRATION_NONZERO_OUTPUT_ENABLED 1U
 
 #define SYS_CALIBRATION_LEASE_MIN_MS 1000UL
 #define SYS_CALIBRATION_LEASE_MAX_MS 600000UL
@@ -38,6 +38,11 @@ typedef enum
 } sys_calibration_result_en;
 
 typedef void (*sys_calibration_safe_off_fn)(void);
+typedef boolean_en (*sys_calibration_set_level_fn)(u16 level);
+typedef boolean_en (*sys_calibration_set_inhibit_fn)(boolean_en active);
+typedef boolean_en (*sys_calibration_commit_fn)(const u8 *payload,
+                                                u16 length,
+                                                u32 *generation);
 
 typedef struct
 {
@@ -48,6 +53,8 @@ typedef struct
     u32 result_seq;
     u32 last_request_seq;
     u32 staged_crc32;
+    u32 committed_crc32;
+    u32 committed_generation;
     u16 current_level;
     u16 staged_length;
     boolean_en codec_available;
@@ -56,6 +63,7 @@ typedef struct
     boolean_en safety_ready;
     boolean_en boot_inhibit_active;
     boolean_en staged_valid;
+    boolean_en committed_valid;
 } sys_calibration_service_status_st;
 
 typedef enum
@@ -66,6 +74,16 @@ typedef enum
 
 extern void sys_calibration_service_init(void);
 extern void sys_calibration_service_bind_safe_off(sys_calibration_safe_off_fn safe_off);
+extern void sys_calibration_service_bind_platform(
+    sys_calibration_set_level_fn set_level,
+    sys_calibration_set_inhibit_fn set_inhibit,
+    sys_calibration_commit_fn commit);
+extern void sys_calibration_service_restore_boot(boolean_en inhibited,
+                                                 boolean_en persistence_ready);
+extern boolean_en sys_calibration_service_load_committed(
+    const u8 *payload,
+    u16 length,
+    u32 generation);
 extern void sys_calibration_service_set_safety_ready(boolean_en ready);
 extern boolean_en sys_calibration_service_get_status(
     sys_calibration_service_status_st *status);
@@ -74,6 +92,14 @@ extern boolean_en sys_calibration_service_get_staged_payload(
     u16 capacity,
     u16 *length);
 extern boolean_en sys_calibration_service_is_boot_inhibited(void);
+extern boolean_en sys_calibration_service_is_output_authorized(void);
+extern boolean_en sys_calibration_service_correct_output_percent(
+    u8 requested_percent,
+    u16 rated_current_ma,
+    u8 *corrected_percent);
+extern boolean_en sys_calibration_service_correct_output_current(
+    u16 device_current_ma,
+    u16 *corrected_current_ma);
 extern void sys_calibration_service_force_fault(void);
 
 extern sys_calibration_result_en sys_calibration_service_begin_seq(
@@ -101,6 +127,11 @@ extern sys_calibration_result_en sys_calibration_service_raw_seq(
     const u8 *frame,
     u16 frame_length,
     sys_calibration_raw_direction_en direction,
+    sys_calibration_service_status_st *status);
+extern sys_calibration_result_en sys_calibration_service_snapshot_seq(
+    u32 session_id,
+    u32 now_ms,
+    u32 seq,
     sys_calibration_service_status_st *status);
 extern sys_calibration_result_en sys_calibration_service_stage_config_seq(
     u32 session_id,

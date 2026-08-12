@@ -13,6 +13,7 @@ extern void sys_bl0942_energy_stats_clear(void);
 extern u32 bl0942_checksum_error_count;
 extern u32 bl0942_timeout_count;
 extern u32 bl0942_uart_error_count;
+extern u32 bl0942_compat_frame_count;
 
 extern u16  ac_voltage_8209;  //交流电的电压，单位 0.1V
 extern u16  Z_ac_current;      //休正容性无功电流后的值 单位mA
