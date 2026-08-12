@@ -20,6 +20,7 @@
 #define ZK_SV_OTA               "ota"
 #define ZK_SV_PLAN              "plan"
 #define ZK_SV_ALAM             "alam"
+#define ZK_SV_CAL              "cal"
 #define ZK_CT_LOGIN             "L"
 #define ZK_CT_HEARTBEAT         "H"
 #define ZK_CT_WRITE             "W"
@@ -50,7 +51,7 @@
 #define ZK_LOGIN_REQUEST_ID     "000001"
 #define ZK_JSON_ID_FIRST_REPORT 2UL
 #define ZK_JSON_ID_MAX          999999UL
-#define ZK_LOGIN_ACK_TIMEOUT_MS (10UL * 1000UL)
+#define ZK_LOGIN_ACK_TIMEOUT_MS (30UL * 1000UL)
 #define ZK_HEARTBEAT_INTERVAL_SEC 60
 #define ZK_UPLOAD_INTERVAL_SEC  300
 #define ZK_TIME_REQUEST_INTERVAL_SEC 3600
@@ -63,6 +64,10 @@
 #define ZK_PROTOCOL_ONLY        1
 #endif
 #define ZK_FLASH_SAVE_ERROR     99
+
+/* 信号强度查询(AT+QENG)错误码 */
+#define ZK_SIGNAL_ERR_BUSY      12   /* UART忙/查询进行中,无法立即处理 */
+#define ZK_SIGNAL_ERR_QENG_FAIL 13   /* QENG AT命令失败(超时/错误) */
 
 typedef enum
 {
@@ -148,7 +153,6 @@ const zk_mqtt_config_t *zk_mqtt_get_config(void);
 const char *zk_mqtt_get_pub_topic(void);
 const char *zk_mqtt_get_sub_topic(void);
 const char *zk_mqtt_get_upgrade_sub_topic(void);
-const char *zk_mqtt_get_will_topic(void);
 uint32 zk_mqtt_next_json_id(void);
 uint16 zk_mqtt_next_packet_id(void);
 
@@ -166,16 +170,15 @@ int zk_parse_message_header_from_root(cJSON *root, zk_message_header_t *header);
 boolean_en zk_message_header_matches_device(const zk_message_header_t *header);
 int zk_make_login_packet(char *buf, int buf_size);
 int zk_make_heartbeat_packet(char *buf, int buf_size);
-int zk_make_offline_packet(char *buf, int buf_size);
 int zk_publish_login_packet(void);
 int zk_publish_heartbeat_packet(void);
-int zk_publish_offline_packet(void);
 int zk_publish_error_response(const zk_message_header_t *request, int err_code);
 int zk_publish_response_with_dt(const zk_message_header_t *request,
                                 int err_code,
                                 zk_response_dt_builder_t builder,
                                 void *ctx);
 int zk_publish_alarm_report(uint16 alarm_id, u8 status, uint32 value, uint32 threshold);
+void zk_mcu_reboot_process(void);
 void zk_mqtt_session_process(void);
 void zk_runtime_stats_init(void);
 void zk_runtime_counter_process(void);
@@ -184,6 +187,7 @@ boolean_en zk_mqtt_accept_heartbeat_ack(const zk_message_header_t *header);
 int zk_parse_login_response(const char *json_str, zk_login_response_t *response);
 void zk_apply_server_time_from_header(const zk_message_header_t *header);
 boolean_en zk_dispatch_message(cJSON *root, const zk_message_header_t *header);
+boolean_en sys_calibration_mqtt_handle(cJSON *root, const zk_message_header_t *header);
 boolean_en zk_handle_property_read(cJSON *root, const zk_message_header_t *header);
 boolean_en zk_handle_property_write(cJSON *root, const zk_message_header_t *header);
 boolean_en zk_handle_control_message(cJSON *root, const zk_message_header_t *header);
@@ -191,7 +195,6 @@ boolean_en zk_handle_request_message(cJSON *root, const zk_message_header_t *hea
 boolean_en zk_handle_ota_message(cJSON *root, const zk_message_header_t *header);
 boolean_en zk_handle_plan_message(cJSON *root, const zk_message_header_t *header);
 boolean_en zk_handle_alam_message(cJSON *root, const zk_message_header_t *header);
-boolean_en zk_ota_is_busy(void);
 void zk_notify_state_changed(void);
 void zk_apply_plan_brightness(int brightness);
 int zk_publish_ota_progress(uint32 progress);

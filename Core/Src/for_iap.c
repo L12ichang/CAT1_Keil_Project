@@ -23,13 +23,13 @@
 
 //keil v6
 #if APROM_OFFSET_ADDR == 0x08008000
-const u32 prog_checksum __attribute__((used, section(".ARM.__at_0x8008200"))) = 0x12345678;  //程序检验使用, 原生是0x12345678。IAP后是具体的实际值
-const u32 prog_length   __attribute__((used, section(".ARM.__at_0x8008204"))) = 0x89abcdef;  //程序长度，单位是指令数。即4个字节为单位
-const u16 device_type   __attribute__((used, section(".ARM.__at_0x8008208"))) = 0x0003;         //设备类型。要与boot程序一致。
+const u32 prog_checksum __attribute__((section(".ARM.__at_0x8008200"))) = 0x12345678;  //程序检验使用, 原生是0x12345678。IAP后是具体的实际值
+const u32 prog_length   __attribute__((section(".ARM.__at_0x8008204"))) = 0x89abcdef;  //程序长度，单位是指令数。即4个字节为单位
+const u16 device_type   __attribute__((section(".ARM.__at_0x8008208"))) = 0x0003;         //设备类型。要与boot程序一致。
 #else 
-const u32 prog_checksum __attribute__((used, section(".ARM.__at_0x8000200"))) = 0x12345678;  //程序检验使用, 原生是0x12345678。IAP后是具体的实际值
-const u32 prog_length   __attribute__((used, section(".ARM.__at_0x8000204"))) = 0x89abcdef;  //程序长度，单位是指令数。即4个字节为单位
-const u16 device_type   __attribute__((used, section(".ARM.__at_0x8000208"))) = 0x0003;         //设备类型。要与boot程序一致。
+const u32 prog_checksum __attribute__((section(".ARM.__at_0x8000200"))) = 0x12345678;  //程序检验使用, 原生是0x12345678。IAP后是具体的实际值
+const u32 prog_length   __attribute__((section(".ARM.__at_0x8000204"))) = 0x89abcdef;  //程序长度，单位是指令数。即4个字节为单位
+const u16 device_type   __attribute__((section(".ARM.__at_0x8000208"))) = 0x0003;         //设备类型。要与boot程序一致。
 #endif
 
 

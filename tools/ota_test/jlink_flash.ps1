@@ -48,7 +48,6 @@ r
 g
 "@
   if ($ProbeAfterRunMs -gt 0) {
-    $postFlashCommands += "`n"
     $postFlashCommands += @"
 Sleep $ProbeAfterRunMs
 h

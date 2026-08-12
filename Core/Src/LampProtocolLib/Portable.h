@@ -10,7 +10,6 @@ typedef   signed long     int32;
 
 void powerUpNbModule(void);
 void resetNbModule(void);
-void hardResetNbModule(void);
 void delayMs(uint32 ms);
 uint32 Timer_GetTickCount(void);
 uint32 Timer_PassedMs(uint32 start, uint32 end);

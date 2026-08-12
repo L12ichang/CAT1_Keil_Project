@@ -10,15 +10,10 @@
 #define   POW_ON()    pwr_on()
 #define   POW_OFF()   pwr_off()
 #define   UART_SEND(buf,size)    hw_uart1_send( buf, size);
-
-#define NB_PWRKEY_BOOT_PULSE_MS 550UL
-#define NB_RESET_ASSERT_MS      320UL
-#define NB_RESET_TO_PWRKEY_MS    20UL
-
-void powerUpNbModule(void)
+void powerUpNbModule(void) 
 {
     POW_ON();
-    delayMs(NB_PWRKEY_BOOT_PULSE_MS);
+    delayMs(750);
     POW_OFF();
 }
 
@@ -29,19 +24,12 @@ void powerUpNbModule(void)
 #define  OFF_delay     3
 #define  OVER_delay    4
 #define  FINISH_delay  5
-#define  HARD_RESET_delay 6
-#define  HARD_PWRKEY_delay 7
 
 u8  _state_reset=IDLE_delay;
 static u32  timer;
-static u32  reset_timer;
-void resetNbModule(void)
+void resetNbModule(void) 
 {
-     _state_reset=STAR_delay;
-}
-void hardResetNbModule(void)
-{
-     _state_reset=HARD_RESET_delay;
+     _state_reset=STAR_delay;  
 }
 void  _4g_reset_idle(void) 
 {
@@ -65,53 +53,27 @@ void resetNbModule_machine(void)
     if( _state_reset==STAR_delay)
     {
         pwr_on();
-        printf("[BOOT] PWRKEY assert pulse=%lums\r\n", NB_PWRKEY_BOOT_PULSE_MS);
+        printf("4G_POWEON---------------\r\n");
         timer = Timer_GetTickCount();
         _state_reset=ON_delay;
     }
-    else if (_state_reset==HARD_RESET_delay)
-    {
-        /* EC800E hardware reset sequence: assert RESET_N first, then PWRKEY. */
-        reset_on();
-        reset_timer = Timer_GetTickCount();
-        timer = reset_timer;
-        printf("[BOOT] hardware reset RESET_N assert\r\n");
-        _state_reset=HARD_PWRKEY_delay;
-    }
-    else if (_state_reset==HARD_PWRKEY_delay)
-    {
-        if (Timer_PassedDelay(timer, NB_RESET_TO_PWRKEY_MS))
-        {
-            pwr_on();
-            timer = Timer_GetTickCount();
-            _state_reset=OVER_delay;
-        }
-    }
-    else if( _state_reset==ON_delay)
+     else if( _state_reset==ON_delay)
             {
-                 if (Timer_PassedDelay(timer, NB_PWRKEY_BOOT_PULSE_MS))
+                 if (Timer_PassedDelay(timer, 1000))
                   {
                      pwr_off();
-                     printf("[BOOT] PWRKEY release\r\n");
-                     _state_reset=FINISH_delay;
-                  }
+                     printf("4G_POWEOFF-RESET--------\r\n");
+                     _state_reset=OFF_delay;
+                     timer = Timer_GetTickCount();
+                 }
              }
-    else if (_state_reset==OVER_delay)
-    {
-        if (Timer_PassedDelay(reset_timer, NB_RESET_ASSERT_MS))
-        {
-            reset_off();
-        }
-        if (Timer_PassedDelay(timer, NB_PWRKEY_BOOT_PULSE_MS))
-        {
-            pwr_off();
-            reset_off();
-            printf("[BOOT] hardware reset release RESET_N=%lums PWRKEY=%lums\r\n",
-                   NB_RESET_ASSERT_MS,
-                   NB_PWRKEY_BOOT_PULSE_MS);
-            _state_reset=FINISH_delay;
-        }
-    }
+             else if( _state_reset==OFF_delay)
+                    {
+                           if (Timer_PassedDelay(timer, 5000))
+                          {  printf("4G_POWEOFF_delay_FINISH_delay\r\n");
+                             _state_reset=FINISH_delay;
+                          }
+                     }
 
 }
 

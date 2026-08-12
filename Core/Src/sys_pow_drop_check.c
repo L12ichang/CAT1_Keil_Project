@@ -9,7 +9,6 @@
 #include "sys_pow_drop_check.h"
 #include "sys_data.h"
 #include "sys_bl0942.h"
-#include "sys_pwm.h"
 
 #define TIMEOUT 600      //掉电存储6秒间隔
 #define POW_IDLE_STATE   0
@@ -63,9 +62,6 @@ void sys_pow_drop_check_timer(void)
 
 void sys_pow_drop_check_process(void)
 {
-      boolean_en meter_saved;
-      boolean_en system_saved;
-
       if(power_on_state==POW_IDLE_STATE)
       {
             if(power_on==1)
@@ -79,16 +75,10 @@ void sys_pow_drop_check_process(void)
            {                               
               
                printf("sys_pow_drop_check=掉电发生\r\n" );
-               if (power_downing_counter == 0)
+               if(power_downing_counter==0)//在允许的时间内
                {
-                   meter_saved = sys_bl0942_power_down_save();
-                   system_saved = (meter_saved == BOOL_TRUE) ?
-                                  sys_data_store_checked() : BOOL_FALSE;
-                   if (meter_saved != BOOL_TRUE ||
-                       system_saved != BOOL_TRUE)
-                   {
-                       sys_pwm_force_off();
-                   }
+                   sys_bl0942_power_down_save();
+                   sys_data_store();
                    power_downing_counter= TIMEOUT;  //放置存储限制时间
           
                    printf("sys_pow_drop_check=存储\r\n" );

@@ -26,7 +26,6 @@ static   u8 *sbuff;
 #endif
 #define  PICK_SIZE                 512
 #define  SERVER_PICK_SIZE          20480
-#define  OTA_MQTT_FINAL_TIMEOUT_COUNT 1500UL /* 30 s at the 20 ms AT tick */
 #if OTA_USE_QHTTPREADFILE_UFS && !OTA_DEBUG_DOWNLOAD_ONLY
 static u32 tihs_time_SERVER_PICK_SIZE=0;
 static u32 last_total_size=0;
@@ -36,6 +35,7 @@ static u32 server_big_pick_counter=0;//
 #endif
 extern  void SET_NB_STAT_EPOWER_DOWN(void);
 extern void set_gateway_state_idle(void) ;
+static u8 POWERED_DOWN_read_count=0;
 static u32 http_get_timer=0;
 #if OTA_USE_QHTTPREADFILE_UFS && !OTA_DEBUG_DOWNLOAD_ONLY
 static u32 wait_data_timer=0;
@@ -2167,11 +2167,11 @@ void  _4G_OTA_machine_star(void)
                 (unsigned int)OTA_DEBUG_DOWNLOAD_ONLY,
                 (unsigned int)OTA_STREAM_ALLOW_RAW_BIN_TEST);
        OTA_LOGI("code marker=ota_raw_tcp_v1\r\n");
-       congfig_delay_timer=Timer_GetTickCount();
-       ota_connect_state=CONNECT_OTA_AT_QHTTPCFG_CINFIG;
+       ota_connect_state=CONNECT_OTA_RESETING;
 #if OTA_USE_QHTTPREADFILE_UFS && !OTA_DEBUG_DOWNLOAD_ONLY
        server_big_pick_counter=0;
 #endif
+       POWERED_DOWN_read_count=0;
        http_get_timer=0;
 #if !OTA_RAW_TCP_STREAM_DEBUG
        ota_http_err_code=-1;
@@ -2244,44 +2244,53 @@ void _4G_OTA_machine(void)
       case CONNECT_OTA_STATE_IDLE:
             break;
        case CONNECT_OTA_RESETING:
-            /* OTA always reuses the live modem; never pulse PWRKEY here. */
-            congfig_delay_timer=Timer_GetTickCount();
-            ota_connect_state=CONNECT_OTA_AT_QHTTPCFG_CINFIG;
+            resetNbModule();//模块复位
+            ota_connect_state=CONNECT_OTA_READY;
             break;
 
        case CONNECT_OTA_READY:
-             congfig_delay_timer=Timer_GetTickCount();
-             ota_connect_state=CONNECT_OTA_AT_QHTTPCFG_CINFIG;
+             if( _4g_reset_finish()==BOOL_TRUE)
+            {
+               recvLength = 0;
+                if (readLine(stringBuf, &recvLength, 0))
+                {
+                    if( strstr((const char *) stringBuf, "POWERED DOWN"))
+                     {
+                            ota_connect_state=CONNECT_OTA_RESETING;
+                           break;
+                     }
+                    else if( strstr((const char *) stringBuf, "RDY"))
+                    {
+                              congfig_delay_timer=Timer_GetTickCount();
+                              ota_connect_state=CONNECT_OTA_AT_QHTTPCFG_CINFIG;
+                    }
+                    else
+                    {     //未读取到响应
+                         if(POWERED_DOWN_read_count<2)
+                         { //重读
+                                ota_connect_state= CONNECT_OTA_READY;
+                          break;
+                         }
+                         else
+                         {//直接往下走
+                             POWERED_DOWN_read_count=0;
+                         }
+                      }
+                   }
+              }
+
              break;
         case CONNECT_OTA_AT_QHTTPCFG_CINFIG:
              if(Timer_PassedDelay(congfig_delay_timer,400))  //OTA 切过来的时候要等 400mS 以上
              {
-                   send_AT_Command_machine_star("AT+QMTDISC=0\r\n",
-                                                strlen("AT+QMTDISC=0\r\n"),
-                                                "+QMTDISC: 0,0",
-                                                OTA_MQTT_FINAL_TIMEOUT_COUNT,
-                                                1);
-                   ota_connect_state=CONNECT_OTA_AT_QMTDISC;
+                   send_AT_Command_machine_star("AT+QMTCLOSE=0\r\n",strlen("AT+QMTCLOSE=0\r\n"),"OK", 5, 1);//+QMTCLOSE: <client_idx>,<result>+QMTCLOSE: 0,0
+                   ota_connect_state= CONNECT_OTA_AT_QMTT_CLOSE;
              }
              break;
-
-         case CONNECT_OTA_AT_QMTDISC:
-              if(send_AT_Command_machine_finish()==TRUE)
-              {
-                    OTA_LOGI("mqtt disconnect final result received\r\n");
-                    send_AT_Command_machine_star("AT+QMTCLOSE=0\r\n",
-                                                 strlen("AT+QMTCLOSE=0\r\n"),
-                                                 "+QMTCLOSE: 0,0",
-                                                 OTA_MQTT_FINAL_TIMEOUT_COUNT,
-                                                 1);
-                    ota_connect_state=CONNECT_OTA_AT_QMTT_CLOSE;
-              }
-              break;
 
          case CONNECT_OTA_AT_QMTT_CLOSE:
               if(send_AT_Command_machine_finish()==TRUE)
               {
-                    OTA_LOGI("mqtt close final result received\r\n");
                     // Close QMT and switch to OTA mode.
                     set_gateway_state_idle() ;//置位通信静默状态
                     SET_NB_STAT_EPOWER_DOWN();//重置URC处理状态
@@ -3467,8 +3476,6 @@ void _4G_OTA_machine(void)
              }
              break;
         case CONNECT_OTA_AT_QHTTPREADFILE_STROE_FINISH:
-                break;
-        default:
                 break;
      }
  }

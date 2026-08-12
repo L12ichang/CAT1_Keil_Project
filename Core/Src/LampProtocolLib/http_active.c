@@ -77,7 +77,7 @@ void http_congfig_fsm(void)//整个过程是2.5S
              {
                  
                  //-------------------------------------------------------------------设置超时关闭http
-                 _4G_configModule_machine_star();
+                 _4G_configModule_star_from_onestate( CONNECT_CONFIG_AT_qmtping) ;//重新开始配置
                   http_congfig_state= HTTP_CONFIG_IDLE;
                  break;
              }

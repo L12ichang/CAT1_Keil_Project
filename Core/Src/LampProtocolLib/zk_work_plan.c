@@ -3,13 +3,13 @@
 #include "zk_sunriset.h"
 #endif
 #include "hw_flash.h"
+#include "flash_address_assignment.h"
 #include "sys_aip1302.h"
-#include "current_calibration.h"
 #include <stdio.h>
 #include <string.h>
 
-#define ZK_PLAN_FLASH_MAIN_ADDR     ((u32)0x08006000)
-#define ZK_PLAN_FLASH_BACKUP_ADDR   ((u32)0x08007800)
+#define ZK_PLAN_FLASH_MAIN_ADDR     CAT1_FLASH_PLAN_MAIN_START
+#define ZK_PLAN_FLASH_BACKUP_ADDR   CAT1_FLASH_PLAN_BACKUP_START
 #define ZK_PLAN_FLASH_MAGIC         ((u32)0x5a4b504c)
 #define ZK_PLAN_FLASH_VERSION       2
 
@@ -88,14 +88,6 @@ static u16 zk_last_exec_minute = 0xffff;
 static u8 zk_last_exec_plan = 0xff;
 static u8 zk_last_exec_job = 0xff;
 static u8 zk_last_exec_action = 0xff;
-static boolean_en zk_plan_calibration_was_active = BOOL_FALSE;
-static boolean_en zk_plan_calibration_skip_active = BOOL_FALSE;
-static u16 zk_plan_calibration_skip_year = 0;
-static u8 zk_plan_calibration_skip_mon = 0;
-static u8 zk_plan_calibration_skip_day = 0;
-static u8 zk_plan_calibration_skip_plan = 0xff;
-static u8 zk_plan_calibration_skip_job = 0xff;
-static u8 zk_plan_calibration_skip_action = 0xff;
 
 static int zk_plan_handle_read(cJSON *dt, const zk_message_header_t *header);
 static int zk_plan_find_current_match(zk_plan_match_t *match);
@@ -110,7 +102,6 @@ static void zk_plan_clear_last_exec(void)
     zk_last_exec_plan = 0xff;
     zk_last_exec_job = 0xff;
     zk_last_exec_action = 0xff;
-    zk_plan_calibration_skip_active = BOOL_FALSE;
 }
 
 static u16 zk_plan_checksum(const zk_plan_store_t *store)
@@ -1435,48 +1426,14 @@ void zk_work_plan_process(void)
     zk_plan_datetime_t now;
     u16 minute;
     zk_plan_match_t match;
-    int found;
 
-    if (current_calibration_is_active() == BOOL_TRUE)
-    {
-        zk_plan_calibration_was_active = BOOL_TRUE;
-        return;
-    }
     zk_plan_ensure_loaded();
-    found = zk_plan_find_current_match(&match);
-    if (!found)
+    if (!zk_plan_find_current_match(&match))
     {
-        zk_plan_calibration_was_active = BOOL_FALSE;
-        zk_plan_calibration_skip_active = BOOL_FALSE;
         return;
     }
 
     zk_plan_current_datetime(&now);
-    if (zk_plan_calibration_was_active == BOOL_TRUE)
-    {
-        zk_plan_calibration_was_active = BOOL_FALSE;
-        zk_plan_calibration_skip_active = BOOL_TRUE;
-        zk_plan_calibration_skip_year = now.year;
-        zk_plan_calibration_skip_mon = now.mon;
-        zk_plan_calibration_skip_day = now.day;
-        zk_plan_calibration_skip_plan = (u8)(match.id - 1);
-        zk_plan_calibration_skip_job = match.job_index;
-        zk_plan_calibration_skip_action = match.action_index;
-        return;
-    }
-    if (zk_plan_calibration_skip_active == BOOL_TRUE)
-    {
-        if (zk_plan_calibration_skip_year == now.year &&
-            zk_plan_calibration_skip_mon == now.mon &&
-            zk_plan_calibration_skip_day == now.day &&
-            zk_plan_calibration_skip_plan == (u8)(match.id - 1) &&
-            zk_plan_calibration_skip_job == match.job_index &&
-            zk_plan_calibration_skip_action == match.action_index)
-        {
-            return;
-        }
-        zk_plan_calibration_skip_active = BOOL_FALSE;
-    }
     minute = (u16)(now.hour * 60U + now.min);
     if (zk_plan_already_executed(now.year, now.mon, now.day, minute,
                                  (u8)(match.id - 1),

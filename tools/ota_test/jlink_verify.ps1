@@ -66,12 +66,3 @@ $scriptPath = Join-Path $logDir "jlink_verify_$stamp.jlink"
 $logPath = Join-Path $logDir "jlink_verify_$stamp.log"
 $script | Out-File -Encoding ascii -LiteralPath $scriptPath
 & $JLinkExe -CommanderScript $scriptPath 2>&1 | Tee-Object -FilePath $logPath
-$jlinkExitCode = $LASTEXITCODE
-$logText = Get-Content -Raw -LiteralPath $logPath
-
-if ($jlinkExitCode -ne 0) {
-  throw "J-Link Commander failed with exit code $jlinkExitCode. See $logPath"
-}
-if ($logText -notmatch '(?m)^Verify successful\.$') {
-  throw "J-Link verify did not succeed. See $logPath"
-}

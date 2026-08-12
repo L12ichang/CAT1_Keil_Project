@@ -43,8 +43,9 @@
 #include "hw_4g_io.h"
 #include "sys_data.h"
 #include "sys_pwm.h"
-#include "current_calibration.h"
-#include "meter_runtime.h"
+#include "sys_calibration_snapshot.h"
+#include "sys_calibration_service.h"
+#include "sys_calibration_flash.h"
 #include "sys_temp_over_protect.h"
 #include "aip1302.h"
 #include "sys_aip1302.h"
@@ -162,6 +163,7 @@ static u8 _timer;
 u16 crc16;
 u16 upload_timer=0;
 u8 softstar=1;
+static sys_calibration_service_status_st calibration_service_status;
 
 void main_timer(void)
 { 
@@ -192,6 +194,7 @@ void main_timer(void)
 int main(void)
 {
     log_type_st log;
+    sys_calibration_flash_boot_st calibration_boot;
     *(uint32_t *)0x400220D0=0x0;//��˳�ر�flash��������ST���Բ�����һ��
     SCB->VTOR = APROM_OFFSET_ADDR;
 
@@ -212,17 +215,45 @@ int main(void)
     hw_uart1_init();
     hw_tim2_init();
     sys_tick_init();
-    nb_mark_boot_start();
     hw_tim4_pwm2_init();
     hw_tim4_cap1_init();
     hw_tim3_pwm2_init();
     hw_tim1_pwm2_init();
     printf("%s,%s\n",DataStr,TimeStr);
     oco_init();
+    sys_calibration_snapshot_init();
+    sys_calibration_service_init();
+    sys_calibration_service_bind_safe_off(sys_pwm_force_safe_off);
+    sys_calibration_service_bind_platform(sys_pwm_calibration_set_level,
+                                          sys_calibration_flash_set_inhibit,
+                                          sys_calibration_flash_commit);
+    if (sys_calibration_flash_boot_load(&calibration_boot) == BOOL_TRUE)
+    {
+        if (calibration_boot.committed_valid == BOOL_TRUE)
+        {
+            (void)sys_calibration_service_load_committed(
+                calibration_boot.committed_payload,
+                calibration_boot.committed_length,
+                calibration_boot.committed_generation);
+        }
+        sys_calibration_service_restore_boot(
+            calibration_boot.boot_inhibited,
+            calibration_boot.persistence_ready);
+        if (calibration_boot.boot_inhibited != BOOL_TRUE &&
+            calibration_boot.persistence_ready == BOOL_TRUE)
+        {
+            sys_calibration_service_set_safety_ready(BOOL_TRUE);
+        }
+    }
+    sys_calibration_snapshot_prepare_pwm(0U, 0U);
     hw_tim1_pwm2_set_PWM_OUT(0);//�ȵ����ٽ��п���������,CCO�����Ǹߵ�ƽ
+    sys_calibration_snapshot_publish_pwm(HAL_GetTick(),
+                                         hw_tim1_pwm2_get_logical_pwm(),
+                                         hw_tim1_pwm2_get_ccr(),
+                                         hw_tim1_pwm2_get_oco_on(),
+                                         SYS_CALIBRATION_PWM_SAMPLE_VALID);
     portableInit();
     sys_data_load();
-    current_calibration_init();
     zk_work_plan_init();
     zk_runtime_stats_init();
     if(sys_data.sn==0xaa5555aa)
@@ -234,11 +265,10 @@ int main(void)
     {
         sys_data.ac_EnergyP=0;
     }
-    /* current_calibration_init() loaded the shared calibration envelope;
-     * initialize metering only after legacy energy has been normalized. */
-    meter_runtime_init();
     system_colock_monitor();
     hw_4g_io_init();
+    pwr_off(); //λ�ò�Ҫת��  �ϵ����׹ػ�
+    delayMs(750);//��ʱ750mS   ģ��������λ�ò�Ҫת��
     sys_bl0942_init();
     sys_pow_drop_check_inint();  
     mac_reset();
@@ -251,20 +281,22 @@ int main(void)
     if(softstar) //����������
     {
         softstar=0;
-        dim_level = 100;                    /* 同步调光状态，确保RunSts上报亮灯+100%亮度 */
-        sys_pwm_fade_output(0, 100);        /* 上电默认满功率输出（不走zk_apply_brightness避免误触发变化上报） *///������������
+        dim_level = 0;                      /* 复位后保持关断，等待正常调光仲裁 */
+        sys_pwm_force_safe_off();          /* 禁止复位路径0->100渐升 */
     }
 #if APP_LOG_ENABLE || APP_OTA_LOG_ENABLE
     hw_uart3_process();
 #endif
     sys_tick_process();
-    meter_runtime_process();
+    (void)sys_calibration_service_timer(HAL_GetTick(),
+                                        &calibration_service_status);
     zk_runtime_counter_process();
   
     hw_gateway_process();           
     uart_diam_process();
     adc_process();
     sys_temp_over_protect_process();
+    zk_mcu_reboot_process();   /* 主循环无条件检查：设备任何状态下都能执行重启 */
     resetNbModule_machine();
     APP_PROFILE_CALL(APP_PERF_4G_CONFIG, _4G_configModule_machine());
     APP_PROFILE_CALL(APP_PERF_NB_SEND, nbSendTcpData_sm());
@@ -307,7 +339,6 @@ int main(void)
 #endif
 
     APP_PROFILE_CALL(APP_PERF_JSON, json_process());
-    current_calibration_process();
     watchdog_loop_end();
   }
 }

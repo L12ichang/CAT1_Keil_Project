@@ -7,9 +7,7 @@
 #include "sys_data.h"
 #include "sys_pwm.h"
 #include "hw_flash.h"
-#include "current_calibration.h"
-#include "current_cal_storage.h"
-#include "current_cal_curve.h"
+#include "flash_address_assignment.h"
 #include <string.h>
 
 extern uint8 simCardICCID[22];
@@ -18,8 +16,8 @@ static zk_device_config_t zk_dev_cfg;
 
 #define ZK_PROPERTY_FLASH_MAGIC 0x5A4B5052UL
 #define ZK_PROPERTY_FLASH_VERSION 1U
-#define ZK_PROPERTY_FLASH_MAIN_ADDR (DATAROM_STARTADDR + FLASH_PAGE_SIZE)
-#define ZK_PROPERTY_FLASH_BACKUP_ADDR (BAKDATAROM_STARTADDR + FLASH_PAGE_SIZE)
+#define ZK_PROPERTY_FLASH_MAIN_ADDR CAT1_FLASH_PROPERTY_MAIN_START
+#define ZK_PROPERTY_FLASH_BACKUP_ADDR CAT1_FLASH_PROPERTY_BACKUP_START
 #define ZK_RUNTIME_FLASH_OFFSET 0x200UL
 
 #define ZK_STATIC_ASSERT_CONCAT_(a, b) a##b
@@ -174,36 +172,8 @@ static boolean_en zk_property_flash_read_record(u32 addr,
 static boolean_en zk_property_flash_write_record(u32 addr,
                                                  zk_property_flash_record_t *record)
 {
-    HAL_StatusTypeDef status;
-
-    /* The calibration A/B slot shares the second half of this Flash page.
-     * Checked page RMW verifies the complete page, not only this record. */
-    status = hw_flash_update_bytes_checked(addr, (const u8 *)record,
-                                           sizeof(*record));
-    if (status != HAL_OK)
-    {
-        sys_pwm_force_off();
-        return BOOL_FALSE;
-    }
-    return BOOL_TRUE;
-}
-
-/* Serial-number arithmetic: a positive difference below half the u32 range
- * is newer. Exactly half a range is ambiguous and treated as conflict. */
-static int zk_property_seq_compare(u32 lhs, u32 rhs)
-{
-    u32 difference;
-
-    difference = lhs - rhs;
-    if (difference == 0U)
-    {
-        return 0;
-    }
-    if (difference == 0x80000000UL)
-    {
-        return 2;
-    }
-    return (difference < 0x80000000UL) ? 1 : -1;
+    hw_flash_write_bytes(addr, (u8 *)record, sizeof(*record));
+    return user_flash_check(addr, (u8 *)record, sizeof(*record));
 }
 
 static boolean_en zk_property_flash_load(zk_device_config_t *config)
@@ -213,7 +183,6 @@ static boolean_en zk_property_flash_load(zk_device_config_t *config)
     zk_property_flash_record_t *selected;
     boolean_en main_ok;
     boolean_en backup_ok;
-    int sequence_order;
 
     main_ok = zk_property_flash_read_record(ZK_PROPERTY_FLASH_MAIN_ADDR, &main_record);
     backup_ok = zk_property_flash_read_record(ZK_PROPERTY_FLASH_BACKUP_ADDR, &backup_record);
@@ -222,24 +191,7 @@ static boolean_en zk_property_flash_load(zk_device_config_t *config)
     selected = NULL;
     if (main_ok == BOOL_TRUE && backup_ok == BOOL_TRUE)
     {
-        sequence_order = zk_property_seq_compare(main_record.seq, backup_record.seq);
-        if (sequence_order == 0)
-        {
-            /* Equal sequence is valid only when both committed records are
-             * byte-identical; otherwise neither copy is trustworthy. */
-            if (memcmp(&main_record, &backup_record, sizeof(main_record)) == 0)
-            {
-                selected = &main_record;
-            }
-        }
-        else if (sequence_order == 1)
-        {
-            selected = &main_record;
-        }
-        else if (sequence_order == -1)
-        {
-            selected = &backup_record;
-        }
+        selected = (main_record.seq >= backup_record.seq) ? &main_record : &backup_record;
     }
     else if (main_ok == BOOL_TRUE)
     {
@@ -265,7 +217,6 @@ static boolean_en zk_property_flash_store_config(const zk_device_config_t *confi
 {
     zk_property_flash_record_t record;
     u32 next_seq;
-    u32 rollback_seq;
     boolean_en main_ok;
     boolean_en backup_ok;
 
@@ -276,48 +227,12 @@ static boolean_en zk_property_flash_store_config(const zk_device_config_t *confi
     }
 
     zk_property_record_from_config(&record, config, next_seq);
-    if (current_cal_storage_prepare_shared_page_update() != BOOL_TRUE)
-    {
-        sys_pwm_force_off();
-        return BOOL_FALSE;
-    }
     main_ok = zk_property_flash_write_record(ZK_PROPERTY_FLASH_MAIN_ADDR, &record);
-    if (main_ok != BOOL_TRUE)
-    {
-        return BOOL_FALSE;
-    }
     backup_ok = zk_property_flash_write_record(ZK_PROPERTY_FLASH_BACKUP_ADDR, &record);
-    if (main_ok == BOOL_TRUE && backup_ok == BOOL_TRUE)
+    if (main_ok == BOOL_TRUE || backup_ok == BOOL_TRUE)
     {
         zk_property_flash_seq = next_seq;
         return BOOL_TRUE;
-    }
-
-    /* A checked page update can fail after one copy already contains the new
-     * sequence.  Publish the previous RAM config with a still newer sequence
-     * as a best-effort rollback so reboot does not silently accept a command
-     * that was reported as failed. */
-    rollback_seq = next_seq + 1U;
-    if (rollback_seq == 0U)
-    {
-        rollback_seq = 1U;
-    }
-    zk_property_record_from_config(&record, &zk_dev_cfg, rollback_seq);
-    if (current_cal_storage_prepare_shared_page_update() != BOOL_TRUE)
-    {
-        sys_pwm_force_off();
-        return BOOL_FALSE;
-    }
-    main_ok = zk_property_flash_write_record(ZK_PROPERTY_FLASH_MAIN_ADDR, &record);
-    backup_ok = BOOL_FALSE;
-    if (main_ok == BOOL_TRUE)
-    {
-        backup_ok = zk_property_flash_write_record(
-            ZK_PROPERTY_FLASH_BACKUP_ADDR, &record);
-    }
-    if (main_ok == BOOL_TRUE || backup_ok == BOOL_TRUE)
-    {
-        zk_property_flash_seq = rollback_seq;
     }
     return BOOL_FALSE;
 }
@@ -340,10 +255,10 @@ static void zk_device_config_set_defaults(zk_device_config_t *config)
     memset(config, 0, sizeof(*config));
     config->protId = 100;
     strcpy(config->clas, "DL-MXG");
-    strcpy(config->prottp, "DL-56T-MXG");
+    strcpy(config->prottp, "DL-50Z-56T-MXG");
     config->hver = 1;
     config->sver = APP_VERSION;
-    strcpy(config->mver, "BC28GJAR01A01");
+    strcpy(config->mver, "EC801E");
     zk_device_config_refresh_iccid_field(config);
     config->lng = 120000000;
     config->lat = 30000000;
@@ -393,8 +308,6 @@ void zk_device_config_init(void)
 {
     zk_device_config_set_defaults(&zk_dev_cfg);
     (void)zk_property_flash_load(&zk_dev_cfg);
-    /* Firmware identity is defined by this image, not by persisted settings. */
-    zk_dev_cfg.sver = APP_VERSION;
     zk_device_config_refresh_iccid();
 }
 
@@ -689,28 +602,19 @@ static boolean_en zk_json_pick_config_number(cJSON *object,
     {
         return BOOL_FALSE;
     }
-    if (!cJSON_IsNumber(node))
+    if (cJSON_IsNumber(node))
     {
-        *err = 2;
+        *value = node->valueint;
+        *err = 0;
         return BOOL_TRUE;
     }
-    /* Never use valueint here: cJSON truncates fractions and may saturate
-     * out-of-range doubles.  Reject non-finite and non-integral JSON numbers
-     * before the cast. */
-    if (node->valuedouble != node->valuedouble ||
-        node->valuedouble < -2147483648.0 ||
-        node->valuedouble > 2147483647.0)
+    if (cJSON_IsBool(node))
     {
-        *err = 3;
+        *value = cJSON_IsTrue(node) ? 1 : 0;
+        *err = 0;
         return BOOL_TRUE;
     }
-    *value = (int)node->valuedouble;
-    if ((double)*value != node->valuedouble)
-    {
-        *err = 3;
-        return BOOL_TRUE;
-    }
-    *err = 0;
+    *err = 2;
     return BOOL_TRUE;
 }
 
@@ -742,46 +646,6 @@ static void zk_factory_buf_set_u16be(u8 *factory_buf, u16 offset, u16 value)
 {
     factory_buf[offset] = (u8)(value >> 8);
     factory_buf[offset + 1] = (u8)(value & 0xFFu);
-}
-
-static u16 zk_factory_buf_get_u16be(const u8 *factory_buf, u16 offset)
-{
-    return (u16)(((u16)factory_buf[offset] << 8) |
-                 (u16)factory_buf[offset + 1U]);
-}
-
-static boolean_en zk_factory_store_checked(const u8 *factory_buf,
-                                           const u8 *old_factory_buf,
-                                           boolean_en *rollback_ok)
-{
-    memcpy(sys_data.fa_Parambuf, factory_buf, 128U);
-    factory_user_load_data();
-    if (sys_data_store_checked() == BOOL_TRUE)
-    {
-        if (rollback_ok != NULL)
-        {
-            *rollback_ok = BOOL_TRUE;
-        }
-        return BOOL_TRUE;
-    }
-    memcpy(sys_data.fa_Parambuf, old_factory_buf, 128U);
-    factory_user_load_data();
-    if (rollback_ok != NULL)
-    {
-        *rollback_ok = sys_data_store_checked();
-    }
-    else
-    {
-        (void)sys_data_store_checked();
-    }
-    return BOOL_FALSE;
-}
-
-static boolean_en zk_factory_restore_checked(const u8 *old_factory_buf)
-{
-    memcpy(sys_data.fa_Parambuf, old_factory_buf, 128U);
-    factory_user_load_data();
-    return sys_data_store_checked();
 }
 
 static int zk_apply_factory_config(cJSON *factory, u8 *factory_buf, int *changed)
@@ -845,7 +709,7 @@ static int zk_apply_factory_config(cJSON *factory, u8 *factory_buf, int *changed
         {
             return err;
         }
-        if (value <= 0 || value > FACTORY_OUTPUT_CUR_SENSOR_MAX_MOHM)
+        if (value <= 0 || value >= 0xFFFF)
         {
             return 3;
         }
@@ -858,7 +722,7 @@ static int zk_apply_factory_config(cJSON *factory, u8 *factory_buf, int *changed
         {
             return err;
         }
-        if (value < 0 || value >= FACTORY_PWM_OFFSET_MAX_EXCLUSIVE)
+        if (value < 0 || value > 1000)
         {
             return 3;
         }
@@ -1288,25 +1152,12 @@ boolean_en zk_handle_property_write(cJSON *root, const zk_message_header_t *head
     zk_device_config_t candidate;
     RtcTime_t rtc_value;
     u8 factory_buf[128];
-    u8 old_factory_buf[128];
     int err;
     int handled;
     int persist_needed;
     int reset_period_timers;
     int update_rtc;
     int factory_changed;
-    int factory_context_changed;
-    int factory_set_changed;
-    int factory_committed;
-    u16 candidate_set_current;
-    u16 candidate_hwmax_current;
-    u16 candidate_sensor;
-    u16 candidate_pwm_offset;
-    const current_cal_curve_t *active_curve;
-    current_cal_curve_t previous_curve;
-    boolean_en previous_curve_valid;
-    boolean_en rollback_ok;
-    boolean_en factory_restore_ok;
 
     if (root == NULL || header == NULL)
     {
@@ -1330,12 +1181,6 @@ boolean_en zk_handle_property_write(cJSON *root, const zk_message_header_t *head
     svr = cJSON_GetObjectItem(dt, "Svr");
     rtc = cJSON_GetObjectItem(dt, "RTC");
     factory = cJSON_GetObjectItem(dt, "Factory");
-
-    if (factory != NULL && current_calibration_is_active() == BOOL_TRUE)
-    {
-        zk_publish_simple_response(header, 12);
-        return BOOL_TRUE;
-    }
 
     handled = 0;
     if (gis != NULL)
@@ -1377,12 +1222,7 @@ boolean_en zk_handle_property_write(cJSON *root, const zk_message_header_t *head
     reset_period_timers = (svr != NULL) ? 1 : 0;
     update_rtc = (rtc != NULL) ? 1 : 0;
     memcpy(factory_buf, sys_data.fa_Parambuf, sizeof(factory_buf));
-    memcpy(old_factory_buf, sys_data.fa_Parambuf, sizeof(old_factory_buf));
     factory_changed = 0;
-    factory_context_changed = 0;
-    factory_set_changed = 0;
-    factory_committed = 0;
-    previous_curve_valid = BOOL_FALSE;
 
     if (gis != NULL && (err = zk_apply_gis_config(gis, &candidate)) != 0)
     {
@@ -1415,97 +1255,10 @@ boolean_en zk_handle_property_write(cJSON *root, const zk_message_header_t *head
         return BOOL_TRUE;
     }
 
-    if (factory_changed != 0)
-    {
-        candidate_set_current = zk_factory_buf_get_u16be(factory_buf, 0x10U);
-        candidate_hwmax_current = zk_factory_buf_get_u16be(factory_buf, 0x12U);
-        candidate_sensor = zk_factory_buf_get_u16be(factory_buf, 0x14U);
-        candidate_pwm_offset = zk_factory_buf_get_u16be(factory_buf, 0x16U);
-        factory_context_changed =
-            (factory_buf[0x04] != old_factory_buf[0x04] ||
-             factory_buf[0x05] != old_factory_buf[0x05] ||
-             factory_buf[0x06] != old_factory_buf[0x06] ||
-             memcmp(factory_buf + 0x12, old_factory_buf + 0x12, 6U) != 0) ? 1 : 0;
-        factory_set_changed = (candidate_set_current != SET_OUTCUR) ? 1 : 0;
-        active_curve = current_cal_storage_active_curve();
-        if (candidate_set_current == 0U || candidate_hwmax_current == 0U ||
-            candidate_set_current > FACTORY_OUTCUR_MAX_MA ||
-            candidate_hwmax_current > FACTORY_OUTCUR_MAX_MA ||
-            candidate_sensor == 0U ||
-            candidate_sensor > FACTORY_OUTPUT_CUR_SENSOR_MAX_MOHM ||
-            candidate_pwm_offset >= FACTORY_PWM_OFFSET_MAX_EXCLUSIVE ||
-            candidate_set_current > candidate_hwmax_current ||
-            (factory_context_changed == 0 && active_curve != NULL &&
-             (u32)candidate_set_current > active_curve->calibration_max_current_ma))
-        {
-            zk_publish_simple_response(header, 3);
-            return BOOL_TRUE;
-        }
-    }
-
-    /* Invalidate the old-context curve before persisting new hardware fields;
-     * checked persistence below restores the old context/curve on failure. */
-    if (factory_changed != 0)
-    {
-        if (memcmp(factory_buf, old_factory_buf, sizeof(factory_buf)) == 0)
-        {
-            factory_changed = 0;
-        }
-        else
-        {
-            active_curve = current_cal_storage_active_curve();
-            previous_curve_valid = (active_curve != NULL) ? BOOL_TRUE : BOOL_FALSE;
-            if (active_curve != NULL)
-            {
-                previous_curve = *active_curve;
-            }
-            sys_pwm_force_off();
-            if ((factory_context_changed != 0 &&
-                 current_cal_storage_invalidate() != BOOL_TRUE) ||
-                (factory_context_changed == 0 && factory_set_changed != 0 &&
-                 current_cal_storage_ensure_v2() != BOOL_TRUE))
-            {
-                zk_publish_simple_response(header, ZK_FLASH_SAVE_ERROR);
-                return BOOL_TRUE;
-            }
-            rollback_ok = BOOL_FALSE;
-            if (zk_factory_store_checked(factory_buf, old_factory_buf,
-                                         &rollback_ok) != BOOL_TRUE)
-            {
-                if (factory_context_changed != 0 && rollback_ok == BOOL_TRUE &&
-                    previous_curve_valid == BOOL_TRUE)
-                {
-                    if (current_cal_storage_commit(&previous_curve) != BOOL_TRUE)
-                    {
-                        printf("factory rollback kept PWM fail-safe tombstone\n");
-                    }
-                }
-                zk_publish_simple_response(header, ZK_FLASH_SAVE_ERROR);
-                return BOOL_TRUE;
-            }
-            /* Keep the force-off latch asserted until every other partition in
-             * this property packet has also persisted successfully. */
-            factory_committed = 1;
-        }
-    }
-
     if (persist_needed != 0)
     {
         if (zk_property_flash_store_config(&candidate) == BOOL_FALSE)
         {
-            if (factory_committed != 0)
-            {
-                factory_restore_ok = zk_factory_restore_checked(old_factory_buf);
-                if (factory_context_changed != 0 &&
-                    factory_restore_ok == BOOL_TRUE &&
-                    previous_curve_valid == BOOL_TRUE)
-                {
-                    if (current_cal_storage_commit(&previous_curve) != BOOL_TRUE)
-                    {
-                        printf("dependent property rollback kept PWM fail-safe tombstone\n");
-                    }
-                }
-            }
             zk_publish_simple_response(header, ZK_FLASH_SAVE_ERROR);
             return BOOL_TRUE;
         }
@@ -1519,10 +1272,14 @@ boolean_en zk_handle_property_write(cJSON *root, const zk_message_header_t *head
     {
         zk_set_local_rtc(&rtc_value);
     }
-    if (factory_committed != 0)
+    if (factory_changed != 0)
     {
-        sys_pwm_release_and_reload();
+        memcpy(sys_data.fa_Parambuf, factory_buf, sizeof(factory_buf));
+        factory_user_load_data();
+        sys_data_store();
+        sys_pwm_reload();
     }
+
     zk_publish_simple_response(header, 0);
     return BOOL_TRUE;
 }

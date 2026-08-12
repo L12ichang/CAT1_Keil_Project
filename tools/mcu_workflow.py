@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -11,19 +12,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import termios
 import time
 import struct
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
-
-try:
-    import fcntl
-    import termios
-except ImportError:  # Windows supports the non-serial analysis commands.
-    fcntl = None
-    termios = None
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -539,8 +534,6 @@ def baud_flag(baudrate: int) -> int:
 
 
 def configure_serial(fd: int, baudrate: int, data_bits: int, stop_bits: int, parity: str) -> None:
-    if termios is None:
-        raise RuntimeError("serial capture requires a POSIX termios environment")
     attrs = termios.tcgetattr(fd)
     attrs[0] = 0
     attrs[1] = 0
@@ -724,9 +717,7 @@ def flash_firmware(config: dict, firmware_path: Path, dry_run: bool = False) -> 
         ]
         jlink_commander(commands, config, timeout=120)
         print_line("[70%] 目标烧录完成，开始回读验证")
-        verify_fd, verify_name = tempfile.mkstemp(suffix=".bin")
-        os.close(verify_fd)
-        verify_file = Path(verify_name)
+        verify_file = Path(tempfile.mkstemp(suffix=".bin")[1])
         try:
             jlink_commander(
                 [

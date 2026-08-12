@@ -179,7 +179,7 @@ def main() -> int:
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
 
-    pub_topic = f"MS/{args.imei}/plt2dev"
+    pub_topic = f"MS/{args.imei}/pcp2dev"
     topics = [
         f"MS/{args.imei}/dev2pcp",
         f"MS/{args.imei}/dev2plt",

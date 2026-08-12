@@ -48,28 +48,22 @@ typedef enum
 typedef enum 
 { 
     CONNECT_CONFIG_STATE_IDLE,
-    CONNECT_CONFIG_PROBE_AT,
-    CONNECT_CONFIG_PWRKEY_START,
-    CONNECT_CONFIG_WAIT_AT,
-    CONNECT_CONFIG_HARD_RESET_START,
-    CONNECT_CONFIG_WAIT_HARD_RESET_AT,
+    CONNECT_CONFIG_RESETING,
+    CONNECT_CONFIG_READY,
     CONNECT_CONFIG_AT_CFUN0,
     CONNECT_CONFIG_AT_CFUN1,
     CONNECT_CONFIG_AT_CPIN,
-    CONNECT_CONFIG_AT_CEREG_ENABLE,
-    CONNECT_CONFIG_AT_CEREG_QUERY,
-    CONNECT_CONFIG_WAIT_CEREG_QUERY,
+    CONNECT_CONFIG_AT_QENG,
     CONNECT_CONFIG_AT_RECVMODE,
     CONNECT_CONFIG_AT_VERSION,
     CONNECT_CONFIG_AT_keepalive,
-    CONNECT_CONFIG_AT_SESSION,
-    CONNECT_CONFIG_AT_TIMEOUT,
     CONNECT_CONFIG_AT_IEMI,
     CONNECT_CONFIG_AT_QCCID,
-    CONNECT_CONFIG_AT_WILL_PROMPT,
-    CONNECT_CONFIG_AT_WILL_RESULT,
+    //HTTP激活
+     CONNECT_CONFIG_HTTP_ACTIVE,
+    CONNECT_CONFIG_WAIT_ACTIVE,
+    CONNECT_CONFIG_AT_qmtping,
     CONNECT_CONFIG_WAITING_QMTCLOSE,
-    CONNECT_CONFIG_RECOVERY_WAIT,
     CONNECT_CONFIG_AT_IPPORT,
     CONNECT_CONFIG_AT_QMTCONN,
     CONNECT_CONFIG_AT_QMTSUB,
@@ -91,6 +85,7 @@ typedef enum
 extern u8   OTA_ENABLE_state;
 extern PUBSEDN_STATE_EN pubsend_state ;
 extern void changea_to_MQTT_modle(void);
+void  _4G_configModule_star_from_onestate(CONNECT_CONFIG_state_en start_state) ;//从某一个状态开始启动
 extern u8   OTA_ENABLE;
 boolean_en pubsend_state_finish(void);
 void pubsend_state_set_idle(void);
@@ -101,20 +96,26 @@ uint32 nb_mqtt_get_publish_timeout_count(void);
 void  _4G_configModule_machine_star(void) ;
 boolean_en  _4G_configModule_machine_finish(void) ;
 void _4G_configModule_machine(void) ;
-void nb_mark_boot_start(void);
-void nb_trace_milestone(const char *stage);
-void nb_mark_business_online(void);
-void nb_request_reconnect(const char *reason);
 void send_AT_Command_machine(void);
 boolean_en  send_AT_Command_machine_finish(void);
 void  send_AT_Command_machine_idle(void);
 void  send_AT_Command_machine_star(char *command,uint8 length, char *response, uint32 waitCount, uint8 throwAwayTail) ;
 boolean_en nb_get_rsrp_dbm10(s32 *rsrp_dbm10);
+boolean_en nb_uart_is_available_for_at(void);
+boolean_en nb_at_command_is_failed(void);
+boolean_en nb_qeng_last_capture_valid(void);
+boolean_en nb_qeng_trigger_runtime(void);
 boolean_en OTA_ENABLE_IS_SET(void);
 void nb_modem_lock_for_ota(void);
 void nb_modem_unlock_for_ota(void);
 boolean_en nb_modem_locked_by_ota(void);
 void set_OTA_ENABLE(void);
+
+/* ===================== MQTT假在线分级自愈：4G恢复管理器 ===================== */
+void nb_mqtt_recovery_start(const char *reason);
+void nb_mqtt_recovery_mark_transport_success(void);
+boolean_en nb_mqtt_recovery_is_active(void);
+u8 nb_mqtt_recovery_get_attempt_count(void);
 void nbSendTcpData_sm(void);
  uint16 readLine(uint8 *buf, uint16 *len, uint8 syncMode) ;
  uint16 readLine_get_firmware(uint8 *buf, uint16 *len, uint16 *firmwarelenth);
@@ -163,11 +164,6 @@ uint8 nbSendTcpData(uint8 *pData, uint16 length);
 uint8 getSimCardIMSI(uint8 *simCardIMSILength, uint8 *simCardIMSI);
 
 
-/**
-*@brief   获取信号强度
-*@return  0：信号弱；1：信号中；2：信号强
-*/
-uint8 getSignalQuality(void);
 /**
 *@brief   获取当前日期时间
 *@param	  sTime：时间

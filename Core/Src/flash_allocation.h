@@ -3,11 +3,12 @@
 #define FLASH_ALLOCATION_H
 
 #include "common.h"
+#include "flash_address_assignment.h"
 
 
 
-#define WRITE_START_ADDR  ((u32)0x801E000)	  //分配了8K给数据
-#define WRITE_END_ADDR    ((u32)0x8020000-1)	
+#define WRITE_START_ADDR  CAT1_FLASH_LEGACY_PROGRAMMER_START  //旧编程器数据区，不属于校准槽
+#define WRITE_END_ADDR    (CAT1_FLASH_LEGACY_PROGRAMMER_END-1U)
 
 //8K给编程器工厂和用户，0.5K*2给系统参数
 

@@ -15,6 +15,7 @@
 
  u8 flag_adc_ntc1;
  u8 flag_adc_ntc2;
+extern u32 ADC_Value1;
 static ntcTemp_t NtcTcmp(u32 rntc);
 
 /*

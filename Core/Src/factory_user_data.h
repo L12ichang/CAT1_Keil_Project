@@ -10,21 +10,16 @@ extern u16 OUTPUT_CUR_SENSOR_temp;
 extern u16 OP_PWM_OFFSET_temp;
 
 #define FACTORY_OUTCUR_MAX_MA 10000U
-#define FACTORY_OUTPUT_CUR_SENSOR_MAX_MOHM 1000U
-#define FACTORY_PWM_OFFSET_MAX_EXCLUSIVE 1000U
 
-/*
- * Dedicated 50 W product defaults. MID remains the existing platform model
- * identifier; electrical behavior must use the explicit factory parameters.
- */
-#define FACTORY_DEFAULT_MID                         4U
+/* 50W product factory fallback profile. */
+#define FACTORY_DEFAULT_MID                       1U
 #define FACTORY_DEFAULT_SET_OUTCUR_MA             890U
 #define FACTORY_DEFAULT_HWMAX_OUTCUR_MA           1680U
-#define FACTORY_DEFAULT_OUTPUT_CUR_SENSOR_MOHM     100U
-#define FACTORY_DEFAULT_PWM_OFFSET_PERMILLE          0U
-#define FACTORY_DEFAULT_TEMP_PROTECT_ENABLE           1U
-#define FACTORY_DEFAULT_TEMP_PROTECT_C                85
-#define FACTORY_DEFAULT_CX_CENTI_UF                    33U
+#define FACTORY_DEFAULT_OUTPUT_CUR_SENSOR_MOHM    120U
+#define FACTORY_DEFAULT_PWM_OFFSET_PERMILLE       0U
+#define FACTORY_DEFAULT_TEMP_PROTECT_ENABLE       1U
+#define FACTORY_DEFAULT_TEMP_PROTECT_C            85
+#define FACTORY_DEFAULT_CX_CENTI_UF               33U
 
 typedef struct
 {
@@ -47,7 +42,7 @@ typedef struct
 
 /*工厂区参数 */
 #define SID                  (*((u8*)(factory_user_buff+0x04)))      //产品系列
-#define MID                  (*((u8*)(factory_user_buff+0x05)))      //平台产品型号标识
+#define MID                  (*((u8*)(factory_user_buff+0x05)))      //产品型号；50W产品使用型号值1
 #define DRV_VERSION          (*((u8*)(factory_user_buff+0x06)))      //驱动器版本
 #define Protocol_version     (*((u8*)(factory_user_buff+0x07)))      //协议版本号	0是初始旧协议，1是新协议
 
@@ -67,7 +62,7 @@ typedef struct
 */
 #define INNRE_TEMP_PRO_EN    (*((u8*)(factory_user_buff+0x18)))      //过温使能     
 #define INNRE_TEMP_PRO       (*((s8*)(factory_user_buff+0x19)))      //过温保护值 
-#define CX                   (*((u8*)(factory_user_buff+0x1e)))      //单位uF放大100倍，50W默认0.33uF
+#define CX                   (*((u8*)(factory_user_buff+0x1e)))      //单位uf放大了100倍，使用时要除以100，默认0.33uf值为33
 
 
 

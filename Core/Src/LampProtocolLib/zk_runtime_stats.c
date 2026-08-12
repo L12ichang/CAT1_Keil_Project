@@ -2,21 +2,19 @@
 #include "common.h"
 #include "Portable.h"
 #include "hw_flash.h"
-#include "flash_address_assignment.h"
 #include "crc16_modbus.h"
 #include "sys_data.h"
 #include "sys_pow_drop_check.h"
 #include "net_dim.h"
-#include "current_cal_storage.h"
-#include "sys_pwm.h"
+#include "flash_address_assignment.h"
 
 /* ========== Flash 存储布局 ========== */
 #define ZK_RUNTIME_FLASH_MAGIC        0x5A4B5254UL
 #define ZK_RUNTIME_FLASH_VERSION      1U
 #define ZK_RUNTIME_FLASH_OFFSET       0x200UL
 /* 运行时统计存储在属性配置之后 0x200 字节偏移处 */
-#define ZK_RUNTIME_FLASH_MAIN_ADDR    (DATAROM_STARTADDR + FLASH_PAGE_SIZE + ZK_RUNTIME_FLASH_OFFSET)
-#define ZK_RUNTIME_FLASH_BACKUP_ADDR  (BAKDATAROM_STARTADDR + FLASH_PAGE_SIZE + ZK_RUNTIME_FLASH_OFFSET)
+#define ZK_RUNTIME_FLASH_MAIN_ADDR    CAT1_FLASH_RUNTIME_MAIN_START
+#define ZK_RUNTIME_FLASH_BACKUP_ADDR  CAT1_FLASH_RUNTIME_BACKUP_START
 #define ZK_RUNTIME_SAVE_INTERVAL_MS   (6UL * 60UL * 60UL * 1000UL)  /* 每6小时持久化一次 */
 
 #define ZK_FLASH_SAVE_ERROR           99
@@ -38,7 +36,6 @@ typedef struct
 } zk_runtime_flash_record_t;
 
 ZK_STATIC_ASSERT((ZK_RUNTIME_FLASH_OFFSET + sizeof(zk_runtime_flash_record_t)) <= FLASH_PAGE_SIZE);
-ZK_STATIC_ASSERT((ZK_RUNTIME_FLASH_OFFSET + sizeof(zk_runtime_flash_record_t)) <= CURRENT_CAL_FLASH_SLOT_OFFSET);
 
 /* ========== 运行时统计状态 ========== */
 static uint32 zk_boot_run_seconds;              /* 本次上电累计运行秒数 */
@@ -98,13 +95,8 @@ static void zk_runtime_record_from_current(zk_runtime_flash_record_t *record,
 static boolean_en zk_runtime_flash_write_record(u32 addr,
                                                 zk_runtime_flash_record_t *record)
 {
-    if (hw_flash_update_bytes_checked(addr, (const u8 *)record,
-                                      sizeof(*record)) != HAL_OK)
-    {
-        sys_pwm_force_off();
-        return BOOL_FALSE;
-    }
-    return BOOL_TRUE;
+    hw_flash_write_bytes(addr, (u8 *)record, sizeof(*record));
+    return user_flash_check(addr, (u8 *)record, sizeof(*record));
 }
 
 /* 将当前统计值持久化到Flash（主/备双备份） */
@@ -122,18 +114,9 @@ static boolean_en zk_runtime_flash_store_current(void)
     }
 
     zk_runtime_record_from_current(&record, next_seq);
-    if (current_cal_storage_prepare_shared_page_update() != BOOL_TRUE)
-    {
-        sys_pwm_force_off();
-        return BOOL_FALSE;
-    }
     main_ok = zk_runtime_flash_write_record(ZK_RUNTIME_FLASH_MAIN_ADDR, &record);
-    if (main_ok != BOOL_TRUE)
-    {
-        return BOOL_FALSE;
-    }
     backup_ok = zk_runtime_flash_write_record(ZK_RUNTIME_FLASH_BACKUP_ADDR, &record);
-    if (backup_ok == BOOL_TRUE)
+    if (main_ok == BOOL_TRUE || backup_ok == BOOL_TRUE)
     {
         zk_runtime_flash_seq = next_seq;
         return BOOL_TRUE;
@@ -265,7 +248,9 @@ void zk_runtime_counter_process(void)
 boolean_en zk_runtime_stats_clear(void)
 {
     uint32 old_boot_run;
+    uint32 old_boot_light;
     uint32 old_total_run_base;
+    uint32 old_total_light_base;
     uint32 now;
 
     if (zk_runtime_loaded != BOOL_TRUE)
@@ -275,15 +260,21 @@ boolean_en zk_runtime_stats_clear(void)
 
     zk_runtime_counter_process();
     old_boot_run = zk_boot_run_seconds;
+    old_boot_light = zk_boot_light_seconds;
     old_total_run_base = zk_total_run_base_seconds;
+    old_total_light_base = zk_total_light_base_seconds;
 
     zk_boot_run_seconds = 0U;
+    zk_boot_light_seconds = 0U;
     zk_total_run_base_seconds = 0U;
+    zk_total_light_base_seconds = 0U;
 
     if (zk_runtime_flash_store_current() != BOOL_TRUE)
     {
         zk_boot_run_seconds = old_boot_run;
+        zk_boot_light_seconds = old_boot_light;
         zk_total_run_base_seconds = old_total_run_base;
+        zk_total_light_base_seconds = old_total_light_base;
         return BOOL_FALSE;
     }
 

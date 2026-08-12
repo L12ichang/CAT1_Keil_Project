@@ -11,17 +11,19 @@
 #include "u32_q.h"
 //#include "sys_data.h"
 #include "hw_uart2.h"
+#if BL0942_REPRO_TEST_ENABLE
+#include "Portable.h"
+#endif
 //#include "hw_bl0942.h"
 //#include "sys_rn8209c.h"
 #include "sys_data.h"
 #include <math.h>
 #include "factory_user_data.h"
-#include "meter_runtime.h"
-#include "Portable.h"
+#include "sys_calibration_snapshot.h"
+#include "sys_bl0942_frame.h"
 #define READ_HEADER                 0x58
 #define WRITE_HEADER                0xa8
 #define READ_ALL_HEAD               0xaa
-#define READ_ALL_BACK_HEAD          0x55
 
 #define WRITE_PACKET_LENGTH         6
 #define READ_PACKET_LENGTH          4
@@ -97,6 +99,14 @@ u32 total_power_this_time=0;
 u32 bl0942_checksum_error_count = 0;
 u32 bl0942_timeout_count = 0;
 u32 bl0942_uart_error_count = 0;
+u32 bl0942_compat_frame_count = 0;
+
+#if BL0942_REPRO_TEST_ENABLE
+volatile u32 g_bl0942_repro_read_start_count = 0;
+volatile u32 g_bl0942_repro_frame_ok_count = 0;
+volatile u32 g_bl0942_repro_frame_bad_count = 0;
+volatile u32 g_bl0942_repro_last_ok_tick = 0;
+#endif
 
 sys_bl0942_state_en  sys_bl0942_state = SYS_BL0942_STATE_IDLE;
 sys_bl0942_init_en  sys_bl0942_init1 =  SYS_BL0942_INIT_IDLE;
@@ -127,7 +137,6 @@ static u16 _timer=0;
 static u16 minute=0;
 static u32 bl0942_energy_0_01wh_remainder = 0;
 static u32 bl0942_last_uart_error_count = 0;
-static u32 bl0942_frame_sequence = 0;
 
 #define SYS_BL0942_ENERGY_ACCUM_DIVISOR 60U
 
@@ -139,12 +148,6 @@ void sys_bl0942_timer(void)
     if(_timer_for_read > 0)
     {
         --_timer_for_read;
-    }
-    /* In calibrated mode CF is the sole energy authority.  Retaining the
-     * minute power integral as a second writer would double count energy. */
-    if (meter_runtime_mode() == METER_RUNTIME_MODE_CALIBRATED)
-    {
-        return;
     }
      ++_timer;
     if(_timer > 6000)//满一分钟
@@ -178,7 +181,6 @@ static void sys_bl0942_check_uart_error(void)
     {
         bl0942_uart_error_count += uart_error_count - bl0942_last_uart_error_count;
         bl0942_last_uart_error_count = uart_error_count;
-        meter_runtime_mark_bl_discontinuous();
         sys_bl0942_state = SYS_BL0942_STATE_READ;
         _timer_for_read = 10;
     }
@@ -425,189 +427,30 @@ void sys_bl0942_write_disable(void)
     sys_bl0942_write(Addr_WRPROT, 0x00);
 }
 
-static u32 sys_bl0942_uwh_to_legacy_001wh(u64 energy_uwh)
-{
-    u64 value;
-
-    value = energy_uwh / 10000ULL;
-    if ((energy_uwh % 10000ULL) >= 5000ULL)
-    {
-        ++value;
-    }
-    return (value > 0xffffffffULL) ? 0xffffffffUL : (u32)value;
-}
-
-static void sys_bl0942_sync_calibrated_energy_legacy(void)
-{
-    meter_runtime_snapshot_t snapshot;
-
-    if (meter_runtime_mode() != METER_RUNTIME_MODE_CALIBRATED ||
-        meter_runtime_get_snapshot(&snapshot) != BOOL_TRUE ||
-        snapshot.energy_valid != BOOL_TRUE)
-    {
-        return;
-    }
-    energy_this_time =
-        sys_bl0942_uwh_to_legacy_001wh(snapshot.session_energy_uwh);
-    sys_data.ac_EnergyP =
-        sys_bl0942_uwh_to_legacy_001wh(snapshot.total_energy_uwh);
-    /* Compatibility mirror only.  Calibrated mode never integrates this
-     * field and MQTT never adds it to the CF accumulator. */
-    total_power_this_time = 0U;
-}
-
-static void sys_bl0942_accept_frame(
-    const meter_runtime_bl0942_frame_t *frame)
-{
-    meter_runtime_legacy_input_t legacy;
-    u32 raw_energy;
-    u32 energy_delta;
-    u32 apparent_power;
-    u32 corrected_current;
-    u32 local_current;
-    u32 local_voltage;
-    u32 local_power;
-    u32 local_frequency;
-    u32 local_pf;
-
-    local_current = get_ac_current(frame->current_rms_raw);
-    local_voltage = get_ac_voltage(frame->voltage_rms_raw);
-    local_power = (frame->signed_watt_raw > 0) ?
-                  get_ac_power((u32)frame->signed_watt_raw) : 0U;
-    if (local_current > 0xffffU)
-    {
-        local_current = 0xffffU;
-    }
-    if (local_voltage > 0xffffU)
-    {
-        local_voltage = 0xffffU;
-    }
-    if (local_power > 0xffffU)
-    {
-        local_power = 0xffffU;
-    }
-    apparent_power = (local_current * local_voltage) / 100U;
-    if (apparent_power == 0U)
-    {
-        local_pf = 0U;
-    }
-    else
-    {
-        local_pf = (local_power * 100U) / apparent_power;
-        if (local_pf > 99U)
-        {
-            local_pf = 99U;
-        }
-    }
-    local_frequency = (frame->frequency_period_raw != 0U) ?
-        ((u32)200U * (u32)FS) / frame->frequency_period_raw : 0U;
-    if (local_frequency > 0xffffU)
-    {
-        local_frequency = 0xffffU;
-    }
-
-    /* Preserve the legacy CF implementation only for fallback reporting.
-     * The calibrated runtime consumes the raw 24-bit counter independently. */
-    if (frame->cf_counter24 < _cf_cnt_bak && _cf_over_cnt < 0xffU)
-    {
-        ++_cf_over_cnt;
-    }
-    _cf_cnt_bak = frame->cf_counter24;
-    raw_energy = get_ac_energy(frame->cf_counter24);
-    if (_cf_over_cnt > 0U)
-    {
-        raw_energy += ONE_CYCLE_ENERGY * _cf_over_cnt;
-    }
-    bl0942_energy_counter_raw = raw_energy;
-    if (bl0942_energy_clear_pending == BOOL_TRUE)
-    {
-        bl0942_energy_clear_base = raw_energy;
-        bl0942_energy_clear_pending = BOOL_FALSE;
-    }
-    energy_this_time = (raw_energy >= bl0942_energy_clear_base) ?
-                       raw_energy - bl0942_energy_clear_base : 0U;
-    energy_delta = raw_energy - energy_tmp;
-    energy_tmp = raw_energy;
-    _ac_EnergyP += energy_delta;
-
-    corrected_current = local_current;
-    if (apparent_power == 0U)
-    {
-        corrected_current = 0U;
-    }
-    else
-    {
-#if !BL0942_USE_FLOAT_XCAP_COMPENSATION
-        u32 operation_tmp0;
-        u32 operation_tmp1;
-        u32 operation_tmp2;
-        u32 operation_tmp3;
-        u32 operation_tmp33;
-        u16 operation_tmp4;
-        u32 operation_tmp5;
-
-        operation_tmp0 = local_pf * local_pf;
-        operation_tmp1 = (u32)(((u64)local_current *
-            (u64)local_current * (u64)operation_tmp0) / 10000U);
-        operation_tmp2 = (u32)(((u64)31416U * (u64)CX *
-            (u64)local_voltage) / 100000000U);
-        operation_tmp3 = (operation_tmp0 < 10000U) ?
-                         (10000U - operation_tmp0) : 0U;
-        operation_tmp33 = (u32)(((u64)operation_tmp3 * 65536U) / 10000U);
-        operation_tmp4 = sqrt_16(operation_tmp33);
-        operation_tmp5 = local_current * operation_tmp4 / 256U +
-                         operation_tmp2;
-        corrected_current =
-            (sqrt_16((operation_tmp1 +
-                      operation_tmp5 * operation_tmp5) * 256U)) / 16U;
-#else
-        corrected_current = (u32)(get_xcap_current_creent(
-            (float)local_current / 1000.0f,
-            (float)local_pf / 100.0f,
-            (float)local_voltage / 10.0f,
-            50.0f,
-            (float)CX / 100.0f / 1000000.0f) * 1000.0f);
-        if ((MID == 3U || MID == 2U) && local_power > 500U &&
-            local_power < 5000U)
-        {
-            local_power = local_power * 97U / 100U;
-            corrected_current = (corrected_current > 7U) ?
-                                corrected_current - 7U : 0U;
-        }
-#endif
-    }
-    if (corrected_current > 0xffffU)
-    {
-        corrected_current = 0xffffU;
-    }
-
-    /* Commit all legacy fields only after the complete frame has passed
-     * header/layout/checksum validation and all derived values are ready. */
-    ac_current = (u16)local_current;
-    ac_voltage_8209 = (u16)local_voltage;
-    ac_powerpa = (u16)local_power;
-    ac_power_S = (apparent_power > 0xffffU) ?
-                 0xffffU : (u16)apparent_power;
-    ac_pf = (u8)local_pf;
-    ac_freq = (u16)local_frequency;
-    Z_ac_current = (u16)corrected_current;
-
-    memset(&legacy, 0, sizeof(legacy));
-    legacy.voltage_01v = ac_voltage_8209;
-    legacy.current_ma = Z_ac_current;
-    legacy.active_power_001w = ac_powerpa;
-    legacy.frequency_001hz = ac_freq;
-    legacy.pf_percent = ac_pf;
-    legacy.session_energy_001wh = energy_this_time;
-    legacy.total_energy_001wh = sys_data.ac_EnergyP +
-                                total_power_this_time;
-    meter_runtime_publish_bl0942(frame, &legacy);
-    sys_bl0942_sync_calibrated_energy_legacy();
-    bl0942data_ready = 1U;
-}
-
 void sys_bl0942_process(void)
 {
+    u32 tmp;
+    sys_bl0942_frame_st meter_frame;
+    u32 meter_i_rms_raw;
+    u32 meter_v_rms_raw;
+    u32 meter_i_fast_rms_raw;
+    s32 meter_watt_raw;
+    u32 meter_cf_cnt_raw;
+    u16 meter_freq_raw;
+    u8 meter_status_raw;
+    u32 meter_tick_ms;
+    u16 meter_valid_flags;
+
+#if BL0942_REPRO_TEST_ENABLE
+    if(g_bl0942_repro_force_recover != 0U)
+    {
+        g_bl0942_repro_force_recover = 0U;
+        hw_bl0942_repro_force_recover();
+        sys_bl0942_state = SYS_BL0942_STATE_READ;
+        _timer_for_read = 10U;
+    }
+#endif
+
     sys_bl0942_check_uart_error();
     switch(sys_bl0942_state)
     {
@@ -678,7 +521,11 @@ void sys_bl0942_process(void)
                 _timer_for_read = 100;
                 _tx_buffer[0] = READ_HEADER;
                 _tx_buffer[1] = READ_ALL_HEAD;
-                  
+
+#if BL0942_REPRO_TEST_ENABLE
+                g_bl0942_repro_read_start_count++;
+#endif
+
                 hw_bl0942_uart_read(_tx_buffer, READ_PACKET_MAX_LENGTH);
                 
                 sys_bl0942_state = SYS_BL0942_STATE_WAIT_READ_READY;
@@ -689,12 +536,38 @@ void sys_bl0942_process(void)
         {
             if(hw_bl0942_get_state() == BL0942_STATE_READ_READY)
             {
-#if 0
-                /* Retained only as historical reference.  This path omitted
-                 * response byte 21 from checksum coverage and published
-                 * globals piecemeal, so it must never be compiled. */
-                if(checksum(READ_HEADER, READ_ALL_BACK_HEAD,_tx_buffer+1, 21))
+                meter_tick_ms = HAL_GetTick();
+                if (sys_bl0942_frame_decode(_tx_buffer,
+                                             READ_PACKET_MAX_LENGTH,
+                                             &meter_frame) == BOOL_TRUE)
                 {
+                    meter_i_rms_raw = meter_frame.i_rms_raw;
+                    meter_v_rms_raw = meter_frame.v_rms_raw;
+                    meter_i_fast_rms_raw = meter_frame.i_fast_rms_raw;
+                    meter_watt_raw = meter_frame.watt_raw;
+                    meter_cf_cnt_raw = meter_frame.cf_cnt_raw;
+                    meter_freq_raw = meter_frame.freq_raw;
+                    meter_status_raw = meter_frame.status_raw;
+                    meter_valid_flags = SYS_CALIBRATION_METER_FRAME_VALID |
+                                        SYS_CALIBRATION_METER_HEAD_VALID |
+                                        SYS_CALIBRATION_METER_CHECKSUM_VALID;
+                    if (sys_bl0942_frame_reserved_valid(_tx_buffer) == BOOL_TRUE)
+                    {
+                        meter_valid_flags |= SYS_CALIBRATION_METER_RESERVED_VALID;
+                    }
+                    if (sys_bl0942_frame_reserved_valid(_tx_buffer) != BOOL_TRUE ||
+                        sys_bl0942_frame_uses_legacy_checksum(_tx_buffer) == BOOL_TRUE)
+                    {
+                        if (bl0942_compat_frame_count < 0xFFFFFFFFUL)
+                        {
+                            bl0942_compat_frame_count++;
+                        }
+                    }
+#if BL0942_REPRO_TEST_ENABLE
+                    g_bl0942_repro_frame_ok_count++;
+                    g_bl0942_repro_last_ok_tick = Timer_GetTickCount();
+#endif
+
                     u32ll(tmp) = _tx_buffer[1];
                     u32lh(tmp) = _tx_buffer[2];
                     u32hl(tmp) = _tx_buffer[3];
@@ -922,32 +795,26 @@ void sys_bl0942_process(void)
 
                 //计量数据更新完一次
                  bl0942data_ready=1;
+                 sys_calibration_snapshot_publish_meter(meter_tick_ms,
+                                                        meter_i_rms_raw,
+                                                        meter_v_rms_raw,
+                                                        meter_i_fast_rms_raw,
+                                                        meter_watt_raw,
+                                                        meter_cf_cnt_raw,
+                                                        meter_freq_raw,
+                                                        meter_status_raw,
+                                                        _tx_buffer,
+                                                        meter_valid_flags,
+                                                        bl0942_checksum_error_count);
                 }
                 else
                 {
                     bl0942_checksum_error_count++;
-                    printf("checksum error1\n");
-                }
+#if BL0942_REPRO_TEST_ENABLE
+                    g_bl0942_repro_frame_bad_count++;
 #endif
-                {
-                    meter_runtime_bl0942_frame_t frame;
-                    meter_runtime_frame_result_en frame_result;
-
-                    frame_result = meter_runtime_parse_bl0942_frame(
-                        _tx_buffer, READ_PACKET_MAX_LENGTH, &frame);
-                    if (frame_result == METER_RUNTIME_FRAME_OK)
-                    {
-                        frame.sequence = ++bl0942_frame_sequence;
-                        frame.sample_tick = Timer_GetTickCount();
-                        sys_bl0942_accept_frame(&frame);
-                    }
-                    else
-                    {
-                        bl0942_checksum_error_count++;
-                        printf("BL0942 full frame rejected=%u\n",
-                               (unsigned int)frame_result);
-                    }
-                }
+                    printf("checksum error1\n");
+                }                
                 sys_bl0942_state = SYS_BL0942_STATE_READ;
             }
             else if(_timer_for_read == 0)
@@ -969,8 +836,7 @@ void sys_bl0942_process(void)
 
 void sys_bl0942_power_on(void)
 {
-    meter_runtime_mark_bl_discontinuous();
-    sys_bl0942_state = SYS_BL0942_STATE_READ;
+    sys_bl0942_state = SYS_BL0942_STATE_READ; 
     _timer_for_read = 10;
 }
 
@@ -982,7 +848,7 @@ void sys_bl0942_power_on(void)
 
 void sys_bl0942_power_off(void)
 {
-    meter_runtime_mark_bl_discontinuous();
+
     sys_bl0942_state = SYS_BL0942_STATE_IDLE;
 
 }
@@ -992,30 +858,14 @@ void sys_bl0942_power_off(void)
 输入参数：无
 输出返回：无
 *************************************/
-boolean_en sys_bl0942_power_down_save(void)
+void sys_bl0942_power_down_save(void)
 {
-    if (meter_runtime_mode() == METER_RUNTIME_MODE_CALIBRATED)
-    {
-        boolean_en saved;
-
-        saved = meter_runtime_power_down_save();
-        sys_bl0942_sync_calibrated_energy_legacy();
-        return saved;
-    }
     sys_data.ac_EnergyP += total_power_this_time;
     total_power_this_time = 0;
-    return BOOL_TRUE;
 }
 
-boolean_en sys_bl0942_energy_stats_clear(void)
+void sys_bl0942_energy_stats_clear(void)
 {
-    boolean_en saved;
-
-    saved = BOOL_TRUE;
-    if (meter_runtime_mode() == METER_RUNTIME_MODE_CALIBRATED)
-    {
-        saved = meter_runtime_energy_clear();
-    }
     /* The next valid CF sample becomes the new zero point for rEc. */
     bl0942_energy_clear_base = bl0942_energy_counter_raw;
     bl0942_energy_clear_pending = BOOL_TRUE;
@@ -1026,7 +876,6 @@ boolean_en sys_bl0942_energy_stats_clear(void)
     _ac_EnergyP = 0U;
     sys_data.ac_EnergyP = 0U;
     sys_data.today_Energy = 0U;
-    return saved;
 }
 
 void sys_bl0942_init(void)

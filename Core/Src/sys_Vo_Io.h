@@ -16,24 +16,6 @@ extern void voio_timer(void);
 extern u8  error_flag_byte;
 extern void error_report_process(void);
 
-typedef struct
-{
-    u32 adc_raw[4];
-    /* Filtered 12-bit ADC codes, not millivolts. */
-    u32 adc_voltage_raw;
-    u32 adc_current_raw;
-    u32 output_voltage_01v;
-    u32 output_current_ma;
-    u32 output_power_01w;
-    s16 temperature_01c;
-    u16 protect_code;
-    u32 sequence;
-    u32 sample_tick;
-    u32 sample_age_ms;
-} sys_vo_io_snapshot_t;
-
-boolean_en sys_vo_io_get_snapshot(sys_vo_io_snapshot_t *snapshot);
-
 extern boolean_en DC_low_voltage_detect_is_low(u16* out, u16 in);
 boolean_en High_voltage_detect_is_high(u16* out, u16 in) ;
 

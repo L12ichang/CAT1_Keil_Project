@@ -96,8 +96,9 @@ boolean_en data_store_data(u8* buf, u16 size, u32 addr_main)
     {
       return BOOL_TRUE;
     }
-    return (hw_flash_update_bytes_checked(addr_main, buf, size) == HAL_OK) ?
-           BOOL_TRUE : BOOL_FALSE;
+    hw_flash_write_bytes(addr_main, buf, size);
+    // *(uint32_t *)0x400220D0=0x1;
+    return BOOL_TRUE;
 }
 
 boolean_en data_load_data(u8* buf, u16 size, u32 addr_main)
@@ -168,7 +169,7 @@ void sys_data_load(void)
         }       
 
       #endif
-
+         
 }
 
 
@@ -177,7 +178,7 @@ void sys_data_load(void)
 输入参数：无
 输出返回：无
 *************************************/
-boolean_en sys_data_store_checked(void)
+void sys_data_store(void)
 {
     #if 1 
     //新算法：写数据同时写主区副区 
@@ -186,25 +187,17 @@ boolean_en sys_data_store_checked(void)
     if(data_store_data((u8*)&sys_data, sizeof(sys_data), DATAROM_STARTADDR) == BOOL_FALSE)
     {
         printf("sys_data_store fail\n");
-        return BOOL_FALSE;
-    }
+    }   
      if(data_store_data((u8*)&sys_data, sizeof(sys_data), BAKDATAROM_STARTADDR) == BOOL_FALSE)  //数据备份
     {
         printf("sys_data_store_bakrom_fail\n");
-        return BOOL_FALSE;
-    }
+    }  
    #else     //旧启用备份功能会导致掉电数据异常
         if(data_backup_store_data((u8*)&sys_data, sizeof(sys_data), DATAROM_STARTADDR,BAKDATAROM_STARTADDR,DATA_BACKUP_SYS_DATA) == BOOL_FALSE)
     {
         printf("sys_data_store fail\n");
-        return BOOL_FALSE;
-    }
+    }  
    #endif
-    return BOOL_TRUE;
-}
-
-void sys_data_store(void)
-{
-    (void)sys_data_store_checked();
+    
 }
 

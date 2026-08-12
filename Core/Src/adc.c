@@ -21,6 +21,7 @@
 #include "adc.h"
 #include "stm32f1xx_hal.h"
 #include "common.h"
+#include "sys_calibration_snapshot.h"
 /* USER CODE BEGIN 0 */
 
 /* USER CODE END 0 */
@@ -123,8 +124,17 @@ uint16_t adc_timer=0;
 uint32_t adc_average[ADC_CH_MAX];
 u8 adc_stat=1;
 // 1.定义ADC存的数组 应该声明16位变量，因为CubeMX设置ADC_DMA的时候设置为half world
-	uint16_t adc_buf[4];
-	uint32_t ADC_Value1,ADC_Value2,ADC_Value3,ADC_Value4;  // 用于保存ADC的值 
+	volatile uint16_t adc_buf[4];
+	uint32_t ADC_Value1,ADC_Value2,ADC_Value3,ADC_Value4;  // 用于保存ADC的值
+
+#define ADC_DMA_SCAN_LENGTH        4U
+#define ADC_DMA_BUFFER_LENGTH      (ADC_DMA_SCAN_LENGTH * 2U)
+static volatile u16 _adc_dma_buffer[ADC_DMA_BUFFER_LENGTH];
+static volatile u16 _adc_dma_capture[2][4];
+static volatile u32 _adc_dma_capture_tick[2];
+static volatile u8 _adc_dma_active;
+static volatile u32 _adc_dma_write_seq;
+static volatile u32 _adc_dma_consumed_seq;
    
 
 
@@ -288,32 +298,116 @@ void HAL_ADC_MspDeInit(ADC_HandleTypeDef* adcHandle)
 
 
 void adc_process_timer(void)
-{  
+{
     ++adc_timer;
+}
+
+static void adc_dma_capture_complete(ADC_HandleTypeDef *hadc, u8 start_index)
+{
+    u8 next_buffer;
+    u8 channel;
+
+    if (hadc != &hadc1)
+    {
+        return;
+    }
+    ++_adc_dma_write_seq;
+    next_buffer = (u8)(_adc_dma_active ^ 1U);
+    for (channel = 0U; channel < ADC_DMA_SCAN_LENGTH; ++channel)
+    {
+        _adc_dma_capture[next_buffer][channel] = _adc_dma_buffer[start_index + channel];
+        adc_buf[channel] = _adc_dma_buffer[start_index + channel];
+    }
+    _adc_dma_capture_tick[next_buffer] = HAL_GetTick();
+    _adc_dma_active = next_buffer;
+    ++_adc_dma_write_seq;
+}
+
+/************************************
+功能描述：复制 ADC DMA 半区中的完整扫描结果
+输入参数：hadc ADC 句柄
+输出返回：无
+注意：半传输回调只复制已完成的非活动半区，不执行滤波、换算或输出控制。
+************************************/
+void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef *hadc)
+{
+    adc_dma_capture_complete(hadc, 0U);
+}
+
+/************************************
+功能描述：复制 ADC DMA 半区中的完整扫描结果
+输入参数：hadc ADC 句柄
+输出返回：无
+注意：全传输回调只复制已完成的非活动半区，不执行滤波、换算或输出控制。
+************************************/
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
+{
+    adc_dma_capture_complete(hadc, ADC_DMA_SCAN_LENGTH);
 }
 
 void adc_process(void)
 {
-    
+    u16 adc_sample[ADC_CH_MAX];
+    u8 sample_buffer;
+    u32 before_seq;
+    u32 after_seq;
+    u32 sample_tick_ms;
+    u8 retry;
+    boolean_en sample_ready = BOOL_FALSE;
+
     if(adc_stat)
     {       
         adc_stat=0;
-		HAL_ADC_Start_DMA((ADC_HandleTypeDef*)&hadc1,  (uint32_t*) adc_buf, (uint32_t) 4);  
-    }	  
-        
+		HAL_ADC_Start_DMA((ADC_HandleTypeDef*)&hadc1,
+                         (uint32_t *)_adc_dma_buffer,
+                         (uint32_t)ADC_DMA_BUFFER_LENGTH);
+	}
 
-        adc_channel_en i;        
+    for (retry = 0U; retry < SYS_CALIBRATION_SNAPSHOT_READ_RETRIES; ++retry)
+    {
+        before_seq = _adc_dma_write_seq;
+        if ((before_seq & 1U) != 0U || before_seq == _adc_dma_consumed_seq)
+        {
+            continue;
+        }
+        sample_buffer = _adc_dma_active;
+        adc_sample[ADC_CH08_NTC] = _adc_dma_capture[sample_buffer][ADC_CH08_NTC];
+        adc_sample[ADC_CH09_VO] = _adc_dma_capture[sample_buffer][ADC_CH09_VO];
+        adc_sample[ADC_CH04_VO] = _adc_dma_capture[sample_buffer][ADC_CH04_VO];
+        adc_sample[ADC_CH06_VO] = _adc_dma_capture[sample_buffer][ADC_CH06_VO];
+        sample_tick_ms = _adc_dma_capture_tick[sample_buffer];
+        after_seq = _adc_dma_write_seq;
+        if (before_seq == after_seq)
+        {
+            _adc_dma_consumed_seq = before_seq;
+            sample_ready = BOOL_TRUE;
+            break;
+        }
+    }
+    if (sample_ready == BOOL_FALSE)
+    {
+        return;
+    }
+
+    sys_calibration_snapshot_publish_adc(sample_tick_ms,
+                                         adc_sample[ADC_CH08_NTC],
+                                         adc_sample[ADC_CH09_VO],
+                                         adc_sample[ADC_CH04_VO],
+                                         adc_sample[ADC_CH06_VO],
+                                         SYS_CALIBRATION_ADC_SAMPLE_VALID);
+
+        adc_channel_en i;
         if(_first_take_adc == BOOL_TRUE)
         {
             _first_take_adc = BOOL_FALSE;
              for(i=ADC_CH08_NTC; i<ADC_CH_MAX; i++)
              {
-                first_order_filter_set_old_data(i, adc_buf[i]);
+                first_order_filter_set_old_data(i, adc_sample[i]);
              }
         }
         for(i=ADC_CH08_NTC; i<ADC_CH_MAX; i++)
         {
-             adc_average[i] = first_order_filter(i,adc_buf[i]);
+             adc_average[i] = first_order_filter(i,adc_sample[i]);
             
         }  
         ADC_Value1 = ((uint32_t)adc_average[ADC_CH08_NTC] * 3300U) / 4095U;  //滤波后的实际电压,单位是mV
