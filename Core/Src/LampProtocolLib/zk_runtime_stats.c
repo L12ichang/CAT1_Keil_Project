@@ -6,14 +6,15 @@
 #include "sys_data.h"
 #include "sys_pow_drop_check.h"
 #include "net_dim.h"
+#include "flash_address_assignment.h"
 
 /* ========== Flash 存储布局 ========== */
 #define ZK_RUNTIME_FLASH_MAGIC        0x5A4B5254UL
 #define ZK_RUNTIME_FLASH_VERSION      1U
 #define ZK_RUNTIME_FLASH_OFFSET       0x200UL
 /* 运行时统计存储在属性配置之后 0x200 字节偏移处 */
-#define ZK_RUNTIME_FLASH_MAIN_ADDR    (DATAROM_STARTADDR + FLASH_PAGE_SIZE + ZK_RUNTIME_FLASH_OFFSET)
-#define ZK_RUNTIME_FLASH_BACKUP_ADDR  (BAKDATAROM_STARTADDR + FLASH_PAGE_SIZE + ZK_RUNTIME_FLASH_OFFSET)
+#define ZK_RUNTIME_FLASH_MAIN_ADDR    CAT1_FLASH_RUNTIME_MAIN_START
+#define ZK_RUNTIME_FLASH_BACKUP_ADDR  CAT1_FLASH_RUNTIME_BACKUP_START
 #define ZK_RUNTIME_SAVE_INTERVAL_MS   (6UL * 60UL * 60UL * 1000UL)  /* 每6小时持久化一次 */
 
 #define ZK_FLASH_SAVE_ERROR           99

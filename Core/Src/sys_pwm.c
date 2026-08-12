@@ -14,6 +14,10 @@
 #include "hw_tim1_pwm2.h"
 #include "sys_Vo_Io.h"
 #include "factory_user_data.h"
+#include "sys_calibration_snapshot.h"
+#include "sys_calibration_curve.h"
+#include "sys_calibration_safety.h"
+#include "sys_calibration_service.h"
 #define TIMEOUT_MAX      200
 #define PWM_OUT_MAX      1000
 #define PWM_OFFSET   (u16)(OP_PWM_OFFSET)  //由于光耦的延迟问题增加3%输出
@@ -50,6 +54,7 @@ u8  fa_test_EN;
 {
      u16 pwm;
      u32 pwm_value;
+     u8 requested_percent = persent;
 #if APP_PWM_DEBUG_ENABLE
      u8 init_persent = persent;
 #endif
@@ -93,6 +98,45 @@ u8  fa_test_EN;
             }
         }
 
+      /* 50W产品的正常路径和产测直通路径都受同一软件限幅约束。 */
+      if (MID == SYS_CALIBRATION_50W_MID)
+      {
+          u8 safe_percent;
+          u8 calibrated_percent;
+
+          if (persent > 0U &&
+              sys_calibration_service_correct_output_percent(
+                  persent, (u16)SET_OUTCUR,
+                  &calibrated_percent) == BOOL_TRUE)
+          {
+              persent = calibrated_percent;
+          }
+
+          if (Error_1_OL != 0U || Error_Out_LV != 0U ||
+              Error_3_OV != 0U || Error_4_LV != 0U)
+          {
+              persent = 0U;
+          }
+          else if (persent > 0U &&
+                   sys_calibration_safety_limit_percent(
+                       persent, (u16)Vo_value, (u16)SET_OUTCUR,
+                       &safe_percent) == BOOL_TRUE)
+          {
+              persent = safe_percent;
+          }
+          else if (persent > 0U)
+          {
+              persent = 0U;
+          }
+      }
+
+      /* 直驱没有最坏映射和新鲜反馈证明，非零请求在量纲换算前失败关闭。 */
+      if (fa_test_EN != 0U && persent > 0U &&
+          SYS_CALIBRATION_FACTORY_DIRECT_PWM_ENABLED == 0U)
+      {
+          persent = 0U;
+      }
+
       if(fa_test_EN==0)
       {
          if(HWMAX_OUTCUR == 0)
@@ -107,9 +151,27 @@ u8  fa_test_EN;
       }
       else   //产测模式
       {
-        pwm_value = ((u32)persent * (u32)PWM_USEFUL_RANGE) / 100U;
-        PWM_DBG("[PWM] fac_test mode -> pwm_value=%lu\r\n", pwm_value);
+        if (SYS_CALIBRATION_FACTORY_DIRECT_PWM_ENABLED != 0U)
+        {
+            /* 未来开启前必须补齐最坏映射、渐升和反馈新鲜度门禁。 */
+            pwm_value = ((u32)persent * (u32)PWM_USEFUL_RANGE) / 100U;
+            PWM_DBG("[PWM] fac_test mode -> pwm_value=%lu\r\n", pwm_value);
+        }
+        else
+        {
+            pwm_value = 0U;
+            PWM_DBG("[PWM] fac_test nonzero output is safety-gated\r\n");
+        }
       }
+
+    pwm_value = sys_calibration_safety_arbitrate_pwm(
+        (u16)pwm_value,
+        (fa_test_EN != 0U) ? SYS_CALIBRATION_OUTPUT_SOURCE_FACTORY_DIRECT :
+                             SYS_CALIBRATION_OUTPUT_SOURCE_NORMAL,
+        sys_calibration_service_is_boot_inhibited(),
+        (Error_1_OL != 0U || Error_Out_LV != 0U ||
+         Error_3_OV != 0U || Error_4_LV != 0U) ? BOOL_TRUE : BOOL_FALSE,
+        BOOL_FALSE);
 
     /* PWM 调试日志：可观察完整计算过程与电子负载对比 */
     PWM_DBG("====== PWM Calc ======\r\n");
@@ -137,7 +199,13 @@ u8  fa_test_EN;
             ((pwm_value * 1000U) / PWM_OUT_MAX) % 10U);
     PWM_DBG("======================\r\n");
 
+    sys_calibration_snapshot_prepare_pwm((u16)requested_percent, (u16)persent);
     hw_set_pwm((u16)pwm_value);
+    sys_calibration_snapshot_publish_pwm(HAL_GetTick(),
+                                         hw_tim1_pwm2_get_logical_pwm(),
+                                         hw_tim1_pwm2_get_ccr(),
+                                         hw_tim1_pwm2_get_oco_on(),
+                                         SYS_CALIBRATION_PWM_SAMPLE_VALID);
 }
 
 void sys_pwm_timer(void)
@@ -267,4 +335,72 @@ void sys_pwm_process(void)
     
 }
 
+void sys_pwm_force_safe_off(void)
+{
+    _fade = BOOL_FALSE;
+    power_old = 0U;
+    power_new = 0U;
+    power_current = 0U;
+    set_percent = 0U;
+    sys_calibration_snapshot_prepare_pwm(0U, 0U);
+    hw_tim1_pwm2_set_PWM_OUT(0U);
+    sys_calibration_snapshot_publish_pwm(HAL_GetTick(),
+                                         hw_tim1_pwm2_get_logical_pwm(),
+                                         hw_tim1_pwm2_get_ccr(),
+                                         hw_tim1_pwm2_get_oco_on(),
+                                         SYS_CALIBRATION_PWM_SAMPLE_VALID);
+}
 
+boolean_en sys_pwm_calibration_set_level(u16 level)
+{
+    sys_calibration_adc_snapshot_st adc;
+    u8 requested_percent;
+    u8 safe_percent;
+    u32 pwm_value;
+    u32 feedback_voltage_01v;
+
+    if (sys_calibration_curve_validate_level(level) != BOOL_TRUE)
+    {
+        return BOOL_FALSE;
+    }
+    requested_percent = (u8)(level / SYS_CALIBRATION_CURVE_LEVEL_STEP * 10U);
+    if (requested_percent == 0U)
+    {
+        sys_pwm_force_safe_off();
+        return BOOL_TRUE;
+    }
+    if (sys_calibration_snapshot_read_adc(&adc) != BOOL_TRUE)
+    {
+        sys_pwm_force_safe_off();
+        return BOOL_FALSE;
+    }
+    feedback_voltage_01v = (((u32)adc.vout_raw * 3300U) / 4095U) * 53U / 100U;
+    if (MID != SYS_CALIBRATION_50W_MID ||
+        Error_1_OL != 0U || Error_Out_LV != 0U ||
+        Error_3_OV != 0U || Error_4_LV != 0U ||
+        adc.valid_flags == 0U || (HAL_GetTick() - adc.tick_ms) > 500U ||
+        sys_calibration_safety_limit_percent(
+            requested_percent, (u16)feedback_voltage_01v, (u16)SET_OUTCUR,
+            &safe_percent) != BOOL_TRUE || safe_percent == 0U ||
+        HWMAX_OUTCUR == 0U)
+    {
+        sys_pwm_force_safe_off();
+        return BOOL_FALSE;
+    }
+    pwm_value = ((u32)safe_percent * (u32)SET_OUTCUR *
+                 (u32)PWM_USEFUL_RANGE) /
+                ((u32)HWMAX_OUTCUR * 100U);
+    if (pwm_value > PWM_OUT_MAX)
+    {
+        pwm_value = PWM_OUT_MAX;
+    }
+    sys_calibration_snapshot_prepare_pwm(requested_percent, safe_percent);
+    hw_tim1_pwm2_set_calibration_PWM_OUT((u16)pwm_value);
+    sys_calibration_snapshot_publish_pwm(HAL_GetTick(),
+                                         hw_tim1_pwm2_get_logical_pwm(),
+                                         hw_tim1_pwm2_get_ccr(),
+                                         hw_tim1_pwm2_get_oco_on(),
+                                         SYS_CALIBRATION_PWM_SAMPLE_VALID);
+    return (hw_tim1_pwm2_get_logical_pwm() == (u16)pwm_value) ?
+           BOOL_TRUE : BOOL_FALSE;
+}

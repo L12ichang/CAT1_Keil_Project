@@ -2,6 +2,7 @@
 #define SYS_DATA_H
 
 #include "common.h"
+#include "flash_address_assignment.h"
 
 
 /*STM32F103CBT6
@@ -82,13 +83,13 @@
 ++++++++++++++++++++++++++++++++ 0x803FFFF(256K)
 */
                                  
-#define   BOOTROM_STARTADDR               (u32)0x8000000  
-#define   DATAROM_STARTADDR               (u32)0x8005000  //参数区
-#define   BAKDATAROM_STARTADDR            (u32)0x8006800  //数据备份区
-#define   APROM_STARTADDR                 (u32)0x8008000 
-#define   APROM_SAFE_ENDADDR              (u32)0x8024000
-#define   OTABAKROM_STARTADDR             (u32)0x8024000    //( BOOTROM_STARTADDR+ROM_OFFSET)                  
-#define   OTABAKROM_ENDADDR               (u32)0x803FFFF     //        
+#define   BOOTROM_STARTADDR               CAT1_FLASH_BOOT_START
+#define   DATAROM_STARTADDR               CAT1_FLASH_SYSTEM_DATA_MAIN_START  //参数区
+#define   BAKDATAROM_STARTADDR            CAT1_FLASH_SYSTEM_DATA_BACKUP_START //数据备份区
+#define   APROM_STARTADDR                 CAT1_FLASH_APP_START
+#define   APROM_SAFE_ENDADDR              CAT1_FLASH_APP_END
+#define   OTABAKROM_STARTADDR             CAT1_FLASH_OTA_BACKUP_START    //( BOOTROM_STARTADDR+ROM_OFFSET)
+#define   OTABAKROM_ENDADDR               (CAT1_FLASH_OTA_BACKUP_END-1U)
 
 
 #define   ADDR_CHECKSUM_OFFSET            0x200

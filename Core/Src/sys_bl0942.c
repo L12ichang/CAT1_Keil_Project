@@ -19,10 +19,11 @@
 #include "sys_data.h"
 #include <math.h>
 #include "factory_user_data.h"
+#include "sys_calibration_snapshot.h"
+#include "sys_bl0942_frame.h"
 #define READ_HEADER                 0x58
 #define WRITE_HEADER                0xa8
 #define READ_ALL_HEAD               0xaa
-#define READ_ALL_BACK_HEAD          0x55
 
 #define WRITE_PACKET_LENGTH         6
 #define READ_PACKET_LENGTH          4
@@ -98,6 +99,7 @@ u32 total_power_this_time=0;
 u32 bl0942_checksum_error_count = 0;
 u32 bl0942_timeout_count = 0;
 u32 bl0942_uart_error_count = 0;
+u32 bl0942_compat_frame_count = 0;
 
 #if BL0942_REPRO_TEST_ENABLE
 volatile u32 g_bl0942_repro_read_start_count = 0;
@@ -184,26 +186,6 @@ static void sys_bl0942_check_uart_error(void)
     }
 }
 
-
-//length校验的数据长度，但除去header,addr,checksum三个字节
-boolean_en checksum(u8 header, u8 addr, u8* buffer, u8 length)
-{
-    u8 i;
-    u8 tmp = header+addr;
-    for(i=0; i<length-1; i++)
-    {
-        tmp += buffer[i];
-    }
-    tmp = ~tmp;
-    if(tmp == buffer[length])
-    {
-        return BOOL_TRUE;
-    }
-    else
-    {
-        return BOOL_FALSE;
-    }
-}
 
 #if 0  //10mR
 /*
@@ -448,6 +430,16 @@ void sys_bl0942_write_disable(void)
 void sys_bl0942_process(void)
 {
     u32 tmp;
+    sys_bl0942_frame_st meter_frame;
+    u32 meter_i_rms_raw;
+    u32 meter_v_rms_raw;
+    u32 meter_i_fast_rms_raw;
+    s32 meter_watt_raw;
+    u32 meter_cf_cnt_raw;
+    u16 meter_freq_raw;
+    u8 meter_status_raw;
+    u32 meter_tick_ms;
+    u16 meter_valid_flags;
 
 #if BL0942_REPRO_TEST_ENABLE
     if(g_bl0942_repro_force_recover != 0U)
@@ -544,8 +536,33 @@ void sys_bl0942_process(void)
         {
             if(hw_bl0942_get_state() == BL0942_STATE_READ_READY)
             {
-                if(checksum(READ_HEADER, READ_ALL_BACK_HEAD,_tx_buffer+1, 21))
+                meter_tick_ms = HAL_GetTick();
+                if (sys_bl0942_frame_decode(_tx_buffer,
+                                             READ_PACKET_MAX_LENGTH,
+                                             &meter_frame) == BOOL_TRUE)
                 {
+                    meter_i_rms_raw = meter_frame.i_rms_raw;
+                    meter_v_rms_raw = meter_frame.v_rms_raw;
+                    meter_i_fast_rms_raw = meter_frame.i_fast_rms_raw;
+                    meter_watt_raw = meter_frame.watt_raw;
+                    meter_cf_cnt_raw = meter_frame.cf_cnt_raw;
+                    meter_freq_raw = meter_frame.freq_raw;
+                    meter_status_raw = meter_frame.status_raw;
+                    meter_valid_flags = SYS_CALIBRATION_METER_FRAME_VALID |
+                                        SYS_CALIBRATION_METER_HEAD_VALID |
+                                        SYS_CALIBRATION_METER_CHECKSUM_VALID;
+                    if (sys_bl0942_frame_reserved_valid(_tx_buffer) == BOOL_TRUE)
+                    {
+                        meter_valid_flags |= SYS_CALIBRATION_METER_RESERVED_VALID;
+                    }
+                    if (sys_bl0942_frame_reserved_valid(_tx_buffer) != BOOL_TRUE ||
+                        sys_bl0942_frame_uses_legacy_checksum(_tx_buffer) == BOOL_TRUE)
+                    {
+                        if (bl0942_compat_frame_count < 0xFFFFFFFFUL)
+                        {
+                            bl0942_compat_frame_count++;
+                        }
+                    }
 #if BL0942_REPRO_TEST_ENABLE
                     g_bl0942_repro_frame_ok_count++;
                     g_bl0942_repro_last_ok_tick = Timer_GetTickCount();
@@ -778,6 +795,17 @@ void sys_bl0942_process(void)
 
                 //计量数据更新完一次
                  bl0942data_ready=1;
+                 sys_calibration_snapshot_publish_meter(meter_tick_ms,
+                                                        meter_i_rms_raw,
+                                                        meter_v_rms_raw,
+                                                        meter_i_fast_rms_raw,
+                                                        meter_watt_raw,
+                                                        meter_cf_cnt_raw,
+                                                        meter_freq_raw,
+                                                        meter_status_raw,
+                                                        _tx_buffer,
+                                                        meter_valid_flags,
+                                                        bl0942_checksum_error_count);
                 }
                 else
                 {

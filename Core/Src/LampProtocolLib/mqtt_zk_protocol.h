@@ -20,6 +20,7 @@
 #define ZK_SV_OTA               "ota"
 #define ZK_SV_PLAN              "plan"
 #define ZK_SV_ALAM             "alam"
+#define ZK_SV_CAL              "cal"
 #define ZK_CT_LOGIN             "L"
 #define ZK_CT_HEARTBEAT         "H"
 #define ZK_CT_WRITE             "W"
@@ -177,6 +178,7 @@ int zk_publish_response_with_dt(const zk_message_header_t *request,
                                 zk_response_dt_builder_t builder,
                                 void *ctx);
 int zk_publish_alarm_report(uint16 alarm_id, u8 status, uint32 value, uint32 threshold);
+void zk_mcu_reboot_process(void);
 void zk_mqtt_session_process(void);
 void zk_runtime_stats_init(void);
 void zk_runtime_counter_process(void);
@@ -185,6 +187,7 @@ boolean_en zk_mqtt_accept_heartbeat_ack(const zk_message_header_t *header);
 int zk_parse_login_response(const char *json_str, zk_login_response_t *response);
 void zk_apply_server_time_from_header(const zk_message_header_t *header);
 boolean_en zk_dispatch_message(cJSON *root, const zk_message_header_t *header);
+boolean_en sys_calibration_mqtt_handle(cJSON *root, const zk_message_header_t *header);
 boolean_en zk_handle_property_read(cJSON *root, const zk_message_header_t *header);
 boolean_en zk_handle_property_write(cJSON *root, const zk_message_header_t *header);
 boolean_en zk_handle_control_message(cJSON *root, const zk_message_header_t *header);

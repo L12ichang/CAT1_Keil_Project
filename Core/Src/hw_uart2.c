@@ -21,13 +21,13 @@ UART_HandleTypeDef huart2;
 #ifdef  _4G_CAT_1
 
 
-static u8  *  _buffer;
+static u8 * volatile _buffer;
 u8 rx3_buffer[1];// HAL_UART_Receive_IT(&huart2, (uint8_t*)rx3_buffer, 1);中断需要，可能是_buffer指针在初始下是空，无法正常产生中断
 //uint8_t u8_buffer[1024];
-static u8  _index;
-static u8  _tx_length;
-static u8  _rx_length;
-static hw_bl0942_state_en  _bl0942_state =  BL0942_STATE_IDLE;
+static volatile u8 _index;
+static volatile u8 _tx_length;
+static volatile u8 _rx_length;
+static volatile hw_bl0942_state_en _bl0942_state =  BL0942_STATE_IDLE;
 static volatile u32 hw_uart2_error_count = 0;
 
 #if BL0942_REPRO_TEST_ENABLE
@@ -486,7 +486,6 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* huart)
 }
 
 #endif
-
 
 
 

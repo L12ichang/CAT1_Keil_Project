@@ -47,7 +47,7 @@ typedef enum
     PA6     ------> ADC1_IN6   //Io
 */
 extern	uint32_t ADC_Value1,ADC_Value2,ADC_Value3,ADC_Value4;  // 用于保存ADC的值 
-extern	uint16_t adc_buf[4];
+extern volatile uint16_t adc_buf[4];
 extern uint32_t adc_average[ADC_CH_MAX];
 extern void adc_process(void);
 extern void adc_process_timer(void);

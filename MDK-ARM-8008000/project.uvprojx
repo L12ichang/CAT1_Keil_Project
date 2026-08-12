@@ -1605,6 +1605,56 @@
               <FilePath>..\Core\Src\sys_bl0942.c</FilePath>
             </File>
             <File>
+              <FileName>sys_calibration_snapshot.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_snapshot.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_service.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_service.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_driver_protocol.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_driver_protocol.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_dc5200.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_dc5200.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_curve.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_curve.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_safety.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_safety.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_storage.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_storage.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_flash.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_flash.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_boot_inhibit.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_boot_inhibit.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_bl0942_frame.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_bl0942_frame.c</FilePath>
+            </File>
+            <File>
               <FileName>sys_data.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\sys_data.c</FilePath>
@@ -1683,6 +1733,11 @@
               <FileName>hw_flash.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\hw_flash.c</FilePath>
+            </File>
+            <File>
+              <FileName>hw_flash_page_writer.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\hw_flash_page_writer.c</FilePath>
             </File>
             <File>
               <FileName>charge.c</FileName>
@@ -1826,6 +1881,11 @@
               <FileName>mqtt_zk_protocol.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\LampProtocolLib\mqtt_zk_protocol.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_mqtt.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_mqtt.c</FilePath>
             </File>
             <File>
               <FileName>zk_alarm.c</FileName>
@@ -3458,6 +3518,56 @@
               <FilePath>..\Core\Src\sys_bl0942.c</FilePath>
             </File>
             <File>
+              <FileName>sys_calibration_snapshot.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_snapshot.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_service.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_service.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_driver_protocol.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_driver_protocol.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_dc5200.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_dc5200.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_curve.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_curve.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_safety.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_safety.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_storage.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_storage.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_flash.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_flash.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_boot_inhibit.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_boot_inhibit.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_bl0942_frame.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_bl0942_frame.c</FilePath>
+            </File>
+            <File>
               <FileName>sys_data.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\sys_data.c</FilePath>
@@ -3536,6 +3646,11 @@
               <FileName>hw_flash.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\hw_flash.c</FilePath>
+            </File>
+            <File>
+              <FileName>hw_flash_page_writer.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\hw_flash_page_writer.c</FilePath>
             </File>
             <File>
               <FileName>charge.c</FileName>
@@ -3679,6 +3794,11 @@
               <FileName>mqtt_zk_protocol.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\LampProtocolLib\mqtt_zk_protocol.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_calibration_mqtt.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_calibration_mqtt.c</FilePath>
             </File>
             <File>
               <FileName>zk_alarm.c</FileName>
