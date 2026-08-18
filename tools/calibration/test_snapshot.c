@@ -6,6 +6,7 @@
 #include "sys_calibration_driver_protocol.h"
 #include "sys_calibration_curve.h"
 #include "sys_calibration_safety.h"
+#include "sys_calibration_storage.h"
 #include "sys_bl0942_frame.h"
 
 static unsigned int safe_off_calls;
@@ -14,6 +15,11 @@ static unsigned short last_level;
 static unsigned int inhibit_calls;
 static boolean_en inhibit_state;
 static unsigned char committed_payload[SYS_CALIBRATION_DRIVER_TABLE_PAYLOAD_LENGTH];
+
+static u16 test_bound_voltage(void)
+{
+    return 560U;
+}
 
 static void test_safe_off(void)
 {
@@ -34,9 +40,12 @@ static boolean_en test_set_inhibit(boolean_en active)
     return BOOL_TRUE;
 }
 
-static boolean_en test_commit(const u8 *payload, u16 length, u32 *generation)
+static boolean_en test_commit(const sys_calibration_context_st *context,
+                              const u8 *payload, u16 length, u32 *generation)
 {
-    if (payload == NULL || generation == NULL ||
+    if (context == NULL || payload == NULL || generation == NULL ||
+        sys_product_profile_context_validate(context, BOOL_TRUE) != BOOL_TRUE ||
+        context->table_crc32 != sys_calibration_storage_crc32(payload, length) ||
         length != sizeof(committed_payload))
     {
         return BOOL_FALSE;
@@ -51,6 +60,7 @@ static void test_bind_platform(void)
     sys_calibration_service_bind_platform(test_set_level,
                                           test_set_inhibit,
                                           test_commit);
+    sys_calibration_service_bind_bound_voltage(test_bound_voltage);
     sys_calibration_service_restore_boot(BOOL_FALSE, BOOL_TRUE);
 }
 
@@ -85,9 +95,17 @@ int main(void)
     sys_calibration_pwm_snapshot_st pwm;
     sys_calibration_snapshot_aggregate_st aggregate;
     sys_calibration_service_status_st service_status;
+    sys_calibration_context_st calibration_context;
+    sys_calibration_context_st staged_context;
     unsigned char frame[SYS_BL0942_READ_FRAME_LENGTH];
     sys_bl0942_frame_st decoded_frame;
     int failures = 0;
+
+    failures += expect_true(sys_product_profile_context_build(
+                                560U, 890U, 0U, 0U,
+                                &calibration_context) == BOOL_TRUE &&
+                                calibration_context.calibrated_max_current_ma == 0U,
+                            "BEGIN context has no calibrated maximum before sampling");
 
     sys_calibration_snapshot_init();
     failures += expect_true(sys_calibration_snapshot_read_meter(&meter) == BOOL_TRUE,
@@ -176,6 +194,7 @@ int main(void)
                             "null aggregate output rejected");
 
     sys_calibration_service_init();
+    sys_calibration_service_bind_bound_voltage(test_bound_voltage);
     failures += expect_true(sys_calibration_service_get_status(&service_status) == BOOL_TRUE,
                             "service status read");
     failures += expect_true(service_status.state == SYS_CALIBRATION_STATE_DISABLED &&
@@ -197,15 +216,17 @@ int main(void)
             0U, SYS_CALIBRATION_OUTPUT_SOURCE_NORMAL,
             service_status.boot_inhibit_active, BOOL_FALSE, BOOL_FALSE) == 0U,
         "boot inhibit blocks normal/offline/direct nonzero and preserves zero");
-    failures += expect_true(sys_calibration_service_begin(1U, 0U, 1000U, &service_status) ==
+    failures += expect_true(sys_calibration_service_begin_context_seq(
+                                1U, 0U, 1000U, 1U, &calibration_context,
+                                &service_status) ==
                                 SYS_CALIBRATION_RESULT_SAFETY_NOT_READY,
                             "begin is blocked without safety proof");
     failures += expect_true(sys_calibration_service_set_point(1U, 1U, 100U, &service_status) ==
                                 SYS_CALIBRATION_RESULT_INVALID_STATE,
                             "set point requires an active lease");
     failures += expect_true(sys_calibration_service_commit(1U, &service_status) ==
-                                SYS_CALIBRATION_RESULT_INVALID_STATE,
-                            "commit requires an active lease");
+                                SYS_CALIBRATION_RESULT_CONTEXT_MISMATCH,
+                            "legacy commit without explicit context is rejected");
     failures += expect_true(sys_calibration_service_abort(1U, &service_status) == BOOL_FALSE &&
                                 service_status.state == SYS_CALIBRATION_STATE_FAULT,
                             "abort without persistent inhibit storage fails closed");
@@ -233,6 +254,12 @@ int main(void)
             put_u16_be(staged_payload, index * 18U + 14U, index * 50U);
             put_u16_be(staged_payload, index * 18U + 16U, index * 100U);
         }
+        failures += expect_true(sys_product_profile_context_build(
+                                    560U, 890U, 890U,
+                                    sys_calibration_storage_crc32(
+                                        staged_payload, sizeof(staged_payload)),
+                                    &staged_context) == BOOL_TRUE,
+                                "staged context stores table-derived calibrated max");
         sys_calibration_service_init();
         safe_off_calls = 0U;
         set_level_calls = 0U;
@@ -240,15 +267,17 @@ int main(void)
         sys_calibration_service_bind_safe_off(test_safe_off);
         test_bind_platform();
         sys_calibration_service_set_safety_ready(BOOL_TRUE);
-        failures += expect_true(sys_calibration_service_begin_seq(
-                                    42U, 100U, 1000U, 1U, &service_status) ==
+        failures += expect_true(sys_calibration_service_begin_context_seq(
+                                    42U, 100U, 1000U, 1U,
+                                    &calibration_context, &service_status) ==
                                     SYS_CALIBRATION_RESULT_OK,
                                 "test safety hook opens a lease");
         failures += expect_true(inhibit_calls == 1U && inhibit_state == BOOL_TRUE &&
                                     service_status.boot_inhibit_active == BOOL_TRUE,
                                 "begin persists boot inhibit before output");
-        failures += expect_true(sys_calibration_service_begin_seq(
-                                    42U, 100U, 1000U, 1U, &service_status) ==
+        failures += expect_true(sys_calibration_service_begin_context_seq(
+                                    42U, 100U, 1000U, 1U,
+                                    &calibration_context, &service_status) ==
                                     SYS_CALIBRATION_RESULT_OK,
                                 "duplicate begin returns cached result");
         failures += expect_true(sys_calibration_service_set_point_seq(
@@ -260,8 +289,9 @@ int main(void)
                                 "setpoint reaches bound output callback");
         {
             unsigned int safe_off_before_replay = safe_off_calls;
-            failures += expect_true(sys_calibration_service_begin_seq(
-                                        42U, 101U, 1000U, 1U, &service_status) ==
+            failures += expect_true(sys_calibration_service_begin_context_seq(
+                                        42U, 101U, 1000U, 1U,
+                                        &calibration_context, &service_status) ==
                                         SYS_CALIBRATION_RESULT_DUPLICATE &&
                                         safe_off_calls == safe_off_before_replay,
                                     "old seq is rejected without replaying begin side effect");
@@ -296,13 +326,13 @@ int main(void)
                                     42U, 104U, 11U, &service_status) ==
                                     SYS_CALIBRATION_RESULT_OK,
                                 "RAW snapshot operation succeeds in active lease");
-        failures += expect_true(sys_calibration_service_stage_config_seq(
-                                    42U, 200U, 12U, staged_payload,
+        failures += expect_true(sys_calibration_service_stage_config_context_seq(
+                                    42U, 200U, 12U, &staged_context, staged_payload,
                                     sizeof(staged_payload), &service_status) ==
                                     SYS_CALIBRATION_RESULT_OK,
                                 "table payload stages without output");
-        failures += expect_true(sys_calibration_service_stage_config_seq(
-                                    42U, 200U, 12U, staged_payload,
+        failures += expect_true(sys_calibration_service_stage_config_context_seq(
+                                    42U, 200U, 12U, &staged_context, staged_payload,
                                     sizeof(staged_payload), &service_status) ==
                                     SYS_CALIBRATION_RESULT_OK,
                                 "duplicate stage returns cached result");
@@ -321,8 +351,21 @@ int main(void)
                                     SYS_CALIBRATION_RESULT_OK &&
                                     service_status.state == SYS_CALIBRATION_STATE_APPLIED,
                                 "apply activates staged protocol table");
-        failures += expect_true(sys_calibration_service_commit_seq(
-                                    42U, 203U, 15U, &service_status) ==
+        failures += expect_true(
+            sys_calibration_service_set_validation_percent_seq(
+                42U, 202U, 15U, 50U, &service_status) ==
+                SYS_CALIBRATION_RESULT_OK &&
+            last_level == 100U &&
+            sys_calibration_service_get_staged_payload(
+                readback_payload, sizeof(readback_payload),
+                &readback_length) == BOOL_TRUE &&
+            readback_length == sizeof(staged_payload) &&
+            memcmp(readback_payload, staged_payload,
+                   sizeof(staged_payload)) == 0,
+            "validation percent drives an interpolated temporary level without writing the table");
+        failures += expect_true(sys_calibration_service_commit_context_seq(
+                                    42U, 203U, 16U,
+                                    &service_status.context, &service_status) ==
                                     SYS_CALIBRATION_RESULT_OK &&
                                     service_status.committed_valid == BOOL_TRUE &&
                                     service_status.committed_generation == 3U &&
@@ -331,14 +374,22 @@ int main(void)
                                 "commit callback persists and reads matching payload");
         failures += expect_true(
             sys_calibration_service_correct_output_percent(
-                50U, SYS_CALIBRATION_50W_RATED_CURRENT_MA,
+                50U, SYS_PRODUCT_PROFILE_50W_DEFAULT_CURRENT_MA,
                 &corrected_percent) == BOOL_TRUE && corrected_percent == 50U &&
+            sys_calibration_service_correct_output_percent(
+                50U, 800U, &corrected_percent) == BOOL_TRUE &&
+                corrected_percent == 45U &&
+            sys_calibration_service_runtime_context_matches_voltage(560U) ==
+                BOOL_TRUE &&
+            sys_calibration_service_runtime_context_matches_voltage(550U) ==
+                BOOL_FALSE &&
+            service_status.context.calibrated_max_current_ma == 890U &&
             sys_calibration_service_correct_output_current(
                 440U, &corrected_current) == BOOL_TRUE &&
                 corrected_current == 445U,
-            "committed 11-point table affects output control and sampling");
+            "one full-span table also maps a lower writable SET_OUTCUR");
         failures += expect_true(sys_calibration_service_heartbeat_seq(
-                                    42U, 204U, 1000U, 16U, &service_status) ==
+                                    42U, 204U, 1000U, 17U, &service_status) ==
                                     SYS_CALIBRATION_RESULT_OK,
                                 "heartbeat renews lease");
         failures += expect_true(sys_calibration_service_timer(1204U, &service_status) ==
@@ -371,8 +422,9 @@ int main(void)
     test_bind_platform();
     sys_calibration_service_set_safety_ready(BOOL_FALSE);
     sys_calibration_service_set_safety_ready(BOOL_TRUE);
-    failures += expect_true(sys_calibration_service_begin_seq(
-                                77U, 0U, 1000U, 1U, &service_status) ==
+    failures += expect_true(sys_calibration_service_begin_context_seq(
+                                77U, 0U, 1000U, 1U,
+                                &calibration_context, &service_status) ==
                                 SYS_CALIBRATION_RESULT_OK,
                             "force fault test begins a lease");
     sys_calibration_service_force_fault();

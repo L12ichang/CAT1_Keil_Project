@@ -12,6 +12,8 @@ fi
 if [[ "$#" -eq 0 ]]; then
   set -- \
     "${ROOT_DIR}/Core/Src/LampProtocolLib/mqtt_zk_protocol.c" \
+    "${ROOT_DIR}/Core/Src/LampProtocolLib/App.c" \
+    "${ROOT_DIR}/Core/Src/LampProtocolLib/Protocol.c" \
     "${ROOT_DIR}/Core/Src/LampProtocolLib/zk_alarm.c" \
     "${ROOT_DIR}/Core/Src/LampProtocolLib/zk_runtime_stats.c" \
     "${ROOT_DIR}/Core/Src/LampProtocolLib/zk_property.c" \
@@ -20,11 +22,14 @@ if [[ "$#" -eq 0 ]]; then
     "${ROOT_DIR}/Core/Src/sys_calibration_driver_protocol.c" \
     "${ROOT_DIR}/Core/Src/sys_calibration_dc5200.c" \
     "${ROOT_DIR}/Core/Src/sys_calibration_curve.c" \
+    "${ROOT_DIR}/Core/Src/sys_product_profile.c" \
     "${ROOT_DIR}/Core/Src/sys_calibration_safety.c" \
     "${ROOT_DIR}/Core/Src/sys_calibration_storage.c" \
     "${ROOT_DIR}/Core/Src/sys_calibration_boot_inhibit.c" \
     "${ROOT_DIR}/Core/Src/sys_calibration_flash.c" \
     "${ROOT_DIR}/Core/Src/sys_calibration_mqtt.c" \
+    "${ROOT_DIR}/Core/Src/factory_user_data.c" \
+    "${ROOT_DIR}/Core/Src/sys_bl0942.c" \
     "${ROOT_DIR}/Core/Src/sys_bl0942_frame.c" \
     "${ROOT_DIR}/Core/Src/hw_flash_page_writer.c" \
     "${ROOT_DIR}/Core/Src/hw_flash.c" \
@@ -43,6 +48,10 @@ arm-none-eabi-gcc \
   -DUSE_HAL_DRIVER \
   -DSTM32F103xE \
   -DAPROM_OFFSET \
+  -DLEGACY_DATAPOINT_PROTOCOL_ENABLE=1 \
+  -DLEGACY_APP_PROCESS_ENABLE=1 \
+  -DLEGACY_ACTIVE_ENABLE=1 \
+  -isystem "${ROOT_DIR}/tools/arm_syntax_shims" \
   -isystem "${SDK_PATH}/usr/include" \
   -I"${ROOT_DIR}/Core/Inc" \
   -I"${ROOT_DIR}/Core/Src" \

@@ -42,6 +42,8 @@
 #include "oco.h"
 #include "hw_4g_io.h"
 #include "sys_data.h"
+#include "factory_user_data.h"
+#include "sys_product_profile.h"
 #include "sys_pwm.h"
 #include "sys_calibration_snapshot.h"
 #include "sys_calibration_service.h"
@@ -195,6 +197,8 @@ int main(void)
 {
     log_type_st log;
     sys_calibration_flash_boot_st calibration_boot;
+    boolean_en calibration_boot_loaded = BOOL_FALSE;
+    boolean_en calibration_context_loaded = BOOL_TRUE;
     *(uint32_t *)0x400220D0=0x0;//��˳�ر�flash��������ST���Բ�����һ��
     SCB->VTOR = APROM_OFFSET_ADDR;
 
@@ -227,22 +231,18 @@ int main(void)
     sys_calibration_service_bind_platform(sys_pwm_calibration_set_level,
                                           sys_calibration_flash_set_inhibit,
                                           sys_calibration_flash_commit);
+    sys_calibration_service_bind_bound_voltage(
+        factory_user_get_bound_output_voltage_01v);
     if (sys_calibration_flash_boot_load(&calibration_boot) == BOOL_TRUE)
     {
+        calibration_boot_loaded = BOOL_TRUE;
         if (calibration_boot.committed_valid == BOOL_TRUE)
         {
-            (void)sys_calibration_service_load_committed(
+            calibration_context_loaded = sys_calibration_service_load_committed(
+                &calibration_boot.committed_context,
                 calibration_boot.committed_payload,
                 calibration_boot.committed_length,
                 calibration_boot.committed_generation);
-        }
-        sys_calibration_service_restore_boot(
-            calibration_boot.boot_inhibited,
-            calibration_boot.persistence_ready);
-        if (calibration_boot.boot_inhibited != BOOL_TRUE &&
-            calibration_boot.persistence_ready == BOOL_TRUE)
-        {
-            sys_calibration_service_set_safety_ready(BOOL_TRUE);
         }
     }
     sys_calibration_snapshot_prepare_pwm(0U, 0U);
@@ -253,7 +253,29 @@ int main(void)
                                          hw_tim1_pwm2_get_oco_on(),
                                          SYS_CALIBRATION_PWM_SAMPLE_VALID);
     portableInit();
+    /* Preserve the original load order, then evaluate all calibration gates. */
     sys_data_load();
+    if (calibration_boot_loaded != BOOL_TRUE ||
+        calibration_context_loaded != BOOL_TRUE ||
+        sys_product_profile_runtime_matches(
+            MID, OUTPUT_CUR_SENSOR, HWMAX_OUTCUR) != BOOL_TRUE ||
+        sys_product_profile_validate_runtime_current(
+            sys_product_profile_current(), BOUND_OUTPUT_VOLTAGE_01V,
+            SET_OUTCUR) != SYS_PRODUCT_CURRENT_VALID)
+    {
+        sys_calibration_service_restore_boot(BOOL_TRUE, BOOL_FALSE);
+    }
+    else
+    {
+        sys_calibration_service_restore_boot(
+            calibration_boot.boot_inhibited,
+            calibration_boot.persistence_ready);
+        if (calibration_boot.boot_inhibited != BOOL_TRUE &&
+            calibration_boot.persistence_ready == BOOL_TRUE)
+        {
+            sys_calibration_service_set_safety_ready(BOOL_TRUE);
+        }
+    }
     zk_work_plan_init();
     zk_runtime_stats_init();
     if(sys_data.sn==0xaa5555aa)

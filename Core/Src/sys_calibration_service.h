@@ -2,8 +2,10 @@
 #define SYS_CALIBRATION_SERVICE_H
 
 #include "type.h"
+#include "sys_product_profile.h"
 
-#define SYS_CALIBRATION_PROTOCOL_FROZEN        1U
+#define SYS_CALIBRATION_DRIVER_PROTOCOL_FROZEN 1U
+#define SYS_CALIBRATION_MQTT_V2_FIELDS_FROZEN  1U
 #define SYS_CALIBRATION_CODEC_AVAILABLE        1U
 #define SYS_CALIBRATION_FLASH_COMMIT_ENABLED   1U
 #define SYS_CALIBRATION_NONZERO_OUTPUT_ENABLED 1U
@@ -34,15 +36,19 @@ typedef enum
     SYS_CALIBRATION_RESULT_SAFETY_NOT_READY,
     SYS_CALIBRATION_RESULT_DUPLICATE,
     SYS_CALIBRATION_RESULT_FLASH_GATED,
-    SYS_CALIBRATION_RESULT_HARDWARE_FAULT
+    SYS_CALIBRATION_RESULT_HARDWARE_FAULT,
+    SYS_CALIBRATION_RESULT_CONTEXT_MISMATCH
 } sys_calibration_result_en;
 
 typedef void (*sys_calibration_safe_off_fn)(void);
 typedef boolean_en (*sys_calibration_set_level_fn)(u16 level);
 typedef boolean_en (*sys_calibration_set_inhibit_fn)(boolean_en active);
-typedef boolean_en (*sys_calibration_commit_fn)(const u8 *payload,
-                                                u16 length,
-                                                u32 *generation);
+typedef boolean_en (*sys_calibration_commit_fn)(
+    const sys_calibration_context_st *context,
+    const u8 *payload,
+    u16 length,
+    u32 *generation);
+typedef u16 (*sys_calibration_bound_voltage_fn)(void);
 
 typedef struct
 {
@@ -62,8 +68,11 @@ typedef struct
     boolean_en nonzero_output_allowed;
     boolean_en safety_ready;
     boolean_en boot_inhibit_active;
+    boolean_en persistence_ready;
     boolean_en staged_valid;
     boolean_en committed_valid;
+    boolean_en context_valid;
+    sys_calibration_context_st context;
 } sys_calibration_service_status_st;
 
 typedef enum
@@ -78,9 +87,12 @@ extern void sys_calibration_service_bind_platform(
     sys_calibration_set_level_fn set_level,
     sys_calibration_set_inhibit_fn set_inhibit,
     sys_calibration_commit_fn commit);
+extern void sys_calibration_service_bind_bound_voltage(
+    sys_calibration_bound_voltage_fn get_bound_voltage);
 extern void sys_calibration_service_restore_boot(boolean_en inhibited,
                                                  boolean_en persistence_ready);
 extern boolean_en sys_calibration_service_load_committed(
+    const sys_calibration_context_st *context,
     const u8 *payload,
     u16 length,
     u32 generation);
@@ -91,8 +103,17 @@ extern boolean_en sys_calibration_service_get_staged_payload(
     u8 *payload,
     u16 capacity,
     u16 *length);
+extern boolean_en sys_calibration_service_get_context(
+    sys_calibration_context_st *context);
+extern boolean_en sys_calibration_service_get_committed_context(
+    sys_calibration_context_st *context);
 extern boolean_en sys_calibration_service_is_boot_inhibited(void);
 extern boolean_en sys_calibration_service_is_output_authorized(void);
+extern boolean_en sys_calibration_service_runtime_context_matches_voltage(
+    u16 bound_voltage_01v);
+extern boolean_en sys_calibration_service_get_calibrated_max_current_ma(
+    u16 bound_voltage_01v,
+    u16 *calibrated_max_current_ma);
 extern boolean_en sys_calibration_service_correct_output_percent(
     u8 requested_percent,
     u16 rated_current_ma,
@@ -108,6 +129,13 @@ extern sys_calibration_result_en sys_calibration_service_begin_seq(
     u32 lease_ms,
     u32 seq,
     sys_calibration_service_status_st *status);
+extern sys_calibration_result_en sys_calibration_service_begin_context_seq(
+    u32 session_id,
+    u32 now_ms,
+    u32 lease_ms,
+    u32 seq,
+    const sys_calibration_context_st *context,
+    sys_calibration_service_status_st *status);
 extern sys_calibration_result_en sys_calibration_service_heartbeat_seq(
     u32 session_id,
     u32 now_ms,
@@ -119,6 +147,12 @@ extern sys_calibration_result_en sys_calibration_service_set_point_seq(
     u32 now_ms,
     u32 seq,
     u16 level,
+    sys_calibration_service_status_st *status);
+extern sys_calibration_result_en sys_calibration_service_set_validation_percent_seq(
+    u32 session_id,
+    u32 now_ms,
+    u32 seq,
+    u8 target_percent,
     sys_calibration_service_status_st *status);
 extern sys_calibration_result_en sys_calibration_service_raw_seq(
     u32 session_id,
@@ -140,6 +174,14 @@ extern sys_calibration_result_en sys_calibration_service_stage_config_seq(
     const u8 *payload,
     u16 length,
     sys_calibration_service_status_st *status);
+extern sys_calibration_result_en sys_calibration_service_stage_config_context_seq(
+    u32 session_id,
+    u32 now_ms,
+    u32 seq,
+    const sys_calibration_context_st *context,
+    const u8 *payload,
+    u16 length,
+    sys_calibration_service_status_st *status);
 extern sys_calibration_result_en sys_calibration_service_apply_seq(
     u32 session_id,
     u32 now_ms,
@@ -154,6 +196,12 @@ extern sys_calibration_result_en sys_calibration_service_commit_seq(
     u32 session_id,
     u32 now_ms,
     u32 seq,
+    sys_calibration_service_status_st *status);
+extern sys_calibration_result_en sys_calibration_service_commit_context_seq(
+    u32 session_id,
+    u32 now_ms,
+    u32 seq,
+    const sys_calibration_context_st *context,
     sys_calibration_service_status_st *status);
 extern sys_calibration_result_en sys_calibration_service_abort_seq(
     u32 session_id,

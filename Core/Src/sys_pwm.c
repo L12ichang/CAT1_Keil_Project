@@ -54,6 +54,7 @@ u8  fa_test_EN;
 {
      u16 pwm;
      u32 pwm_value;
+     u16 pwm_current_reference_ma = (u16)SET_OUTCUR;
      u8 requested_percent = persent;
 #if APP_PWM_DEBUG_ENABLE
      u8 init_persent = persent;
@@ -98,19 +99,17 @@ u8  fa_test_EN;
             }
         }
 
-      /* 50W产品的正常路径和产测直通路径都受同一软件限幅约束。 */
-      if (MID == SYS_CALIBRATION_50W_MID)
+      /* Runtime SET_OUTCUR is writable, but may never exceed the profile envelope. */
+      if (sys_product_profile_runtime_matches(
+              MID, OUTPUT_CUR_SENSOR, HWMAX_OUTCUR) == BOOL_TRUE &&
+          factory_user_validate_runtime_current(
+              BOUND_OUTPUT_VOLTAGE_01V, SET_OUTCUR) ==
+              SYS_PRODUCT_CURRENT_VALID &&
+          sys_calibration_service_runtime_context_matches_voltage(
+              BOUND_OUTPUT_VOLTAGE_01V) == BOOL_TRUE)
       {
           u8 safe_percent;
           u8 calibrated_percent;
-
-          if (persent > 0U &&
-              sys_calibration_service_correct_output_percent(
-                  persent, (u16)SET_OUTCUR,
-                  &calibrated_percent) == BOOL_TRUE)
-          {
-              persent = calibrated_percent;
-          }
 
           if (Error_1_OL != 0U || Error_Out_LV != 0U ||
               Error_3_OV != 0U || Error_4_LV != 0U)
@@ -128,6 +127,29 @@ u8  fa_test_EN;
           {
               persent = 0U;
           }
+          if (persent > 0U)
+          {
+              if (sys_calibration_service_correct_output_percent(
+                      persent, (u16)SET_OUTCUR,
+                      &calibrated_percent) == BOOL_TRUE &&
+                  sys_product_profile_compute_i100_ma(
+                      sys_product_profile_current(),
+                      BOUND_OUTPUT_VOLTAGE_01V,
+                      &pwm_current_reference_ma) == BOOL_TRUE)
+              {
+                  /* The table level was produced with the profile I100 PWM
+                     scale; do not multiply by the lower SET a second time. */
+                  persent = calibrated_percent;
+              }
+              else
+              {
+                  persent = 0U;
+              }
+          }
+      }
+      else if (persent > 0U)
+      {
+          persent = 0U;
       }
 
       /* 直驱没有最坏映射和新鲜反馈证明，非零请求在量纲换算前失败关闭。 */
@@ -146,7 +168,17 @@ u8  fa_test_EN;
          }
          else
          {
-             pwm_value = ((u32)persent * (u32)SET_OUTCUR * (u32)PWM_USEFUL_RANGE) / ((u32)HWMAX_OUTCUR * 100U);
+             if (sys_product_profile_scale_percent_to_pwm(
+                     sys_product_profile_current(),
+                     BOUND_OUTPUT_VOLTAGE_01V, persent,
+                     PWM_USEFUL_RANGE, &pwm) == BOOL_TRUE)
+             {
+                 pwm_value = pwm;
+             }
+             else
+             {
+                 pwm_value = 0U;
+             }
          }
       }
       else   //产测模式
@@ -178,6 +210,7 @@ u8  fa_test_EN;
     PWM_DBG("  brightness     = %u %%\r\n", init_persent);
     PWM_DBG("  eff_persent    = %u %%\r\n", persent);
     PWM_DBG("  SET_OUTCUR     = %u mA\r\n", (u16)SET_OUTCUR);
+    PWM_DBG("  PWM_REF_CUR    = %u mA\r\n", pwm_current_reference_ma);
     PWM_DBG("  HWMAX_OUTCUR   = %u mA\r\n", (u16)HWMAX_OUTCUR);
     PWM_DBG("  PWM_OFFSET     = %u\r\n", (u16)PWM_OFFSET);
     PWM_DBG("  PWM_USEFUL_RNG = %u\r\n", (u16)PWM_USEFUL_RANGE);
@@ -185,7 +218,8 @@ u8  fa_test_EN;
 #if APP_PWM_DEBUG_ENABLE
     if (HWMAX_OUTCUR > 0 && fa_test_EN == 0)
     {
-        u32 numerator   = (u32)persent * (u32)SET_OUTCUR * (u32)PWM_USEFUL_RANGE;
+        u32 numerator   = (u32)persent * (u32)pwm_current_reference_ma *
+                          (u32)PWM_USEFUL_RANGE;
         u32 denominator = (u32)HWMAX_OUTCUR * 100U;
         PWM_DBG("  numerator      = %lu\r\n", numerator);
         PWM_DBG("  denominator    = %lu\r\n", denominator);
@@ -353,17 +387,21 @@ void sys_pwm_force_safe_off(void)
 
 boolean_en sys_pwm_calibration_set_level(u16 level)
 {
+    const sys_product_profile_st *profile = sys_product_profile_current();
     sys_calibration_adc_snapshot_st adc;
+    sys_calibration_context_st context;
+    u16 calibration_max_current_ma;
+    u16 pwm;
     u8 requested_percent;
     u8 safe_percent;
     u32 pwm_value;
     u32 feedback_voltage_01v;
 
-    if (sys_calibration_curve_validate_level(level) != BOOL_TRUE)
+    if (level > 200U)
     {
         return BOOL_FALSE;
     }
-    requested_percent = (u8)(level / SYS_CALIBRATION_CURVE_LEVEL_STEP * 10U);
+    requested_percent = (u8)(level / 2U);
     if (requested_percent == 0U)
     {
         sys_pwm_force_safe_off();
@@ -375,25 +413,34 @@ boolean_en sys_pwm_calibration_set_level(u16 level)
         return BOOL_FALSE;
     }
     feedback_voltage_01v = (((u32)adc.vout_raw * 3300U) / 4095U) * 53U / 100U;
-    if (MID != SYS_CALIBRATION_50W_MID ||
+    if (sys_product_profile_runtime_matches(
+            MID, OUTPUT_CUR_SENSOR, HWMAX_OUTCUR) != BOOL_TRUE ||
+        sys_calibration_service_get_context(&context) != BOOL_TRUE ||
+        sys_product_profile_compute_i100_ma(
+            profile, context.calibration_voltage_01v,
+            &calibration_max_current_ma) != BOOL_TRUE ||
+        sys_calibration_service_runtime_context_matches_voltage(
+            BOUND_OUTPUT_VOLTAGE_01V) != BOOL_TRUE ||
         Error_1_OL != 0U || Error_Out_LV != 0U ||
         Error_3_OV != 0U || Error_4_LV != 0U ||
         adc.valid_flags == 0U || (HAL_GetTick() - adc.tick_ms) > 500U ||
         sys_calibration_safety_limit_percent(
-            requested_percent, (u16)feedback_voltage_01v, (u16)SET_OUTCUR,
+            requested_percent, (u16)feedback_voltage_01v,
+            calibration_max_current_ma,
             &safe_percent) != BOOL_TRUE || safe_percent == 0U ||
         HWMAX_OUTCUR == 0U)
     {
         sys_pwm_force_safe_off();
         return BOOL_FALSE;
     }
-    pwm_value = ((u32)safe_percent * (u32)SET_OUTCUR *
-                 (u32)PWM_USEFUL_RANGE) /
-                ((u32)HWMAX_OUTCUR * 100U);
-    if (pwm_value > PWM_OUT_MAX)
+    if (sys_product_profile_scale_percent_to_pwm(
+            profile, context.calibration_voltage_01v, safe_percent,
+            PWM_USEFUL_RANGE, &pwm) != BOOL_TRUE)
     {
-        pwm_value = PWM_OUT_MAX;
+        sys_pwm_force_safe_off();
+        return BOOL_FALSE;
     }
+    pwm_value = pwm;
     sys_calibration_snapshot_prepare_pwm(requested_percent, safe_percent);
     hw_tim1_pwm2_set_calibration_PWM_OUT((u16)pwm_value);
     sys_calibration_snapshot_publish_pwm(HAL_GetTick(),

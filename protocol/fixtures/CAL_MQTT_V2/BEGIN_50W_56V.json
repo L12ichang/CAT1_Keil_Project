@@ -1,0 +1,58 @@
+{
+  "fixtureVersion": 1,
+  "name": "BEGIN_50W_56V",
+  "requestTopic": "MS/TEST50W0000001/plt2dev",
+  "responseTopic": "MS/TEST50W0000001/dev2plt",
+  "request": {
+    "SN": "TEST50W0000001",
+    "TM": "2026-08-17 10:00:01",
+    "SV": "cal",
+    "ID": "B001",
+    "CT": "W",
+    "DT": {
+      "op": "BEGIN",
+      "protocolVersion": 2,
+      "sessionId": 1234,
+      "seq": 1,
+      "leaseMs": 60000,
+      "profileContext": {
+        "contextVersion": 1,
+        "profileId": 50,
+        "modelCode": "DL-50Z-56T-MXG",
+        "profileVersion": 1,
+        "profileFingerprint": 2809625630,
+        "calibrationVoltage01V": 560,
+        "configuredRatedCurrentMa": 890,
+        "calibratedMaxCurrentMa": 0,
+        "tableCrc32": 0
+      },
+      "profileBindingCrc32": 2215728488
+    }
+  },
+  "expectedResponse": {
+    "DT": {
+      "op": "BEGIN",
+      "protocolVersion": 2,
+      "seq": 1,
+      "result": 0,
+      "ack": true,
+      "readback": {
+        "profileContext": {
+          "contextVersion": 1,
+          "profileId": 50,
+          "modelCode": "DL-50Z-56T-MXG",
+          "profileVersion": 1,
+          "profileFingerprint": 2809625630,
+          "calibrationVoltage01V": 560,
+          "configuredRatedCurrentMa": 890,
+          "calibratedMaxCurrentMa": 0,
+          "tableCrc32": 0
+        },
+        "profileBindingCrc32": 2215728488,
+        "committed": false,
+        "committedTableCrc32": 0,
+        "committedProfileBindingCrc32": 0
+      }
+    }
+  }
+}

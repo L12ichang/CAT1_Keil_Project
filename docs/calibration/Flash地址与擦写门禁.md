@@ -31,7 +31,8 @@
 - `hw_flash_write_bytes_checked()` 逐点检查 HAL 擦除、字编程和请求范围回读，并返回 `BOOL_FALSE`；它仍会重写完整 2KiB 页，不能绕过共享页所有者风险。
 - 旧 `hw_flash_write_bytes()` 仅为兼容入口，忽略返回值；新校准存储不得调用它。
 - `sys_calibration_flash.c` 已实现读取 A/B 最新有效序列、写非活动槽、payload/record CRC、最后写 `commit_word` 和整体回读。
-- boot-inhibit 使用每个 1KiB 候选槽内 `0x300` 偏移的独立 A/B 记录；新设备全 `0xFF` 视为未抑制，非空且两份均损坏时失败关闭。
+- 校准记录格式已升级为 v3：198 字节 payload 原样保留，记录头绑定 Profile/电压/`configuredRatedCurrentMa`/`calibratedMaxCurrentMa`/表 CRC；静态断言固定 payload 长度198、payload偏移40和记录总长244字节。v1/v2或外Profile记录失败关闭，不做隐式迁移。
+- boot-inhibit 使用每个 1KiB 候选槽内 `0x300` 偏移的独立 A/B 记录；为兼容升级前设备，两槽全 `0xFF` 时允许进入受控校准初始化路径，但没有有效 v3 表/`calibratedMaxCurrentMa` 时普通非零输出仍被阻断；任一槽非空且两份均无效时失败关闭。
 - 上述是源码能力，共页邻接记录保全和任意断电点仍需 Keil MAP/HEX 与实机故障注入。
 
 ## 必须通过的审计

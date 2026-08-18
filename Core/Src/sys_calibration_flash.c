@@ -6,7 +6,7 @@
 #include "sys_calibration_flash.h"
 #include "sys_calibration_storage.h"
 #include "sys_calibration_boot_inhibit.h"
-#include "sys_calibration_curve.h"
+#include "sys_product_profile.h"
 #include "flash_address_assignment.h"
 #include "hw_flash.h"
 #include <stddef.h>
@@ -108,15 +108,23 @@ boolean_en sys_calibration_flash_boot_load(sys_calibration_flash_boot_st *boot)
     }
 
     if (sys_calibration_storage_select_newest(
-            &_record_a, &_record_b, &selected) == BOOL_TRUE &&
-        selected->mid == SYS_CALIBRATION_50W_MID &&
-        selected->rs3_mohm == SYS_CALIBRATION_50W_RS3_MOHM)
+            &_record_a, &_record_b, &selected) == BOOL_TRUE)
     {
         boot->committed_valid = BOOL_TRUE;
         boot->committed_generation = selected->generation;
         boot->committed_length = selected->payload_length;
+        boot->committed_context = selected->context;
         memcpy(boot->committed_payload, selected->payload,
                selected->payload_length);
+    }
+    else if (sys_calibration_flash_is_blank((const u8 *)&_record_a,
+                                            sizeof(_record_a)) != BOOL_TRUE ||
+             sys_calibration_flash_is_blank((const u8 *)&_record_b,
+                                            sizeof(_record_b)) != BOOL_TRUE)
+    {
+        /* Legacy, corrupt or foreign-profile records have no trusted context. */
+        boot->boot_inhibited = BOOL_TRUE;
+        boot->persistence_ready = BOOL_FALSE;
     }
     return BOOL_TRUE;
 }
@@ -168,7 +176,9 @@ boolean_en sys_calibration_flash_set_inhibit(boolean_en active)
     return sys_calibration_boot_inhibit_record_validate(&record);
 }
 
-boolean_en sys_calibration_flash_commit(const u8 *payload,
+boolean_en sys_calibration_flash_commit(
+                                        const sys_calibration_context_st *context,
+                                        const u8 *payload,
                                         u16 length,
                                         u32 *generation)
 {
@@ -177,7 +187,8 @@ boolean_en sys_calibration_flash_commit(const u8 *payload,
     u32 next_generation = 1U;
     u32 address = CAT1_FLASH_CALIBRATION_A_CANDIDATE_START;
 
-    if (payload == NULL || generation == NULL)
+    if (context == NULL || payload == NULL || generation == NULL ||
+        sys_product_profile_context_validate(context, BOOL_TRUE) != BOOL_TRUE)
     {
         return BOOL_FALSE;
     }
@@ -191,8 +202,7 @@ boolean_en sys_calibration_flash_commit(const u8 *payload,
                   CAT1_FLASH_CALIBRATION_A_CANDIDATE_START;
     }
     if (sys_calibration_storage_record_build(
-            &record, next_generation, SYS_CALIBRATION_50W_MID,
-            SYS_CALIBRATION_50W_RS3_MOHM, payload, length) != BOOL_TRUE ||
+            &record, next_generation, context, payload, length) != BOOL_TRUE ||
         sys_calibration_flash_write_committed(
             address, (u8 *)&record, sizeof(record),
             offsetof(sys_calibration_storage_record_st, commit_word),

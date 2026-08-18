@@ -12,7 +12,7 @@
 static u32 sys_calibration_storage_record_crc(
     const sys_calibration_storage_record_st *record)
 {
-    u8 header[20U];
+    u8 header[34U];
     u32 index = 0U;
     u32 crc;
 
@@ -28,10 +28,24 @@ static u32 sys_calibration_storage_record_crc(
     header[index++] = (u8)(record->generation >> 16U);
     header[index++] = (u8)(record->generation >> 8U);
     header[index++] = (u8)record->generation;
-    header[index++] = record->mid;
-    header[index++] = record->reserved;
-    header[index++] = (u8)(record->rs3_mohm >> 8U);
-    header[index++] = (u8)record->rs3_mohm;
+    header[index++] = (u8)(record->context.profile_id >> 8U);
+    header[index++] = (u8)record->context.profile_id;
+    header[index++] = (u8)(record->context.profile_version >> 8U);
+    header[index++] = (u8)record->context.profile_version;
+    header[index++] = (u8)(record->context.profile_fingerprint_crc32 >> 24U);
+    header[index++] = (u8)(record->context.profile_fingerprint_crc32 >> 16U);
+    header[index++] = (u8)(record->context.profile_fingerprint_crc32 >> 8U);
+    header[index++] = (u8)record->context.profile_fingerprint_crc32;
+    header[index++] = (u8)(record->context.calibration_voltage_01v >> 8U);
+    header[index++] = (u8)record->context.calibration_voltage_01v;
+    header[index++] = (u8)(record->context.configured_rated_current_ma >> 8U);
+    header[index++] = (u8)record->context.configured_rated_current_ma;
+    header[index++] = (u8)(record->context.calibrated_max_current_ma >> 8U);
+    header[index++] = (u8)record->context.calibrated_max_current_ma;
+    header[index++] = (u8)(record->context.table_crc32 >> 24U);
+    header[index++] = (u8)(record->context.table_crc32 >> 16U);
+    header[index++] = (u8)(record->context.table_crc32 >> 8U);
+    header[index++] = (u8)record->context.table_crc32;
     header[index++] = (u8)(record->payload_crc32 >> 24U);
     header[index++] = (u8)(record->payload_crc32 >> 16U);
     header[index++] = (u8)(record->payload_crc32 >> 8U);
@@ -66,13 +80,16 @@ u32 sys_calibration_storage_crc32(const u8 *data, u32 length)
 boolean_en sys_calibration_storage_record_build(
     sys_calibration_storage_record_st *record,
     u32 generation,
-    u8 mid,
-    u16 rs3_mohm,
+    const sys_calibration_context_st *context,
     const u8 *payload,
     u16 payload_length)
 {
-    if (record == NULL || payload == NULL || payload_length == 0U ||
-        payload_length > SYS_CALIBRATION_STORAGE_PAYLOAD_MAX)
+    if (record == NULL || context == NULL || payload == NULL ||
+        payload_length == 0U ||
+        payload_length > SYS_CALIBRATION_STORAGE_PAYLOAD_MAX ||
+        sys_product_profile_context_validate(context, BOOL_TRUE) != BOOL_TRUE ||
+        context->table_crc32 !=
+            sys_calibration_storage_crc32(payload, payload_length))
     {
         return BOOL_FALSE;
     }
@@ -82,9 +99,7 @@ boolean_en sys_calibration_storage_record_build(
     record->format_version = SYS_CALIBRATION_STORAGE_FORMAT_VERSION;
     record->payload_length = payload_length;
     record->generation = generation;
-    record->mid = mid;
-    record->reserved = 0U;
-    record->rs3_mohm = rs3_mohm;
+    record->context = *context;
     memcpy(record->payload, payload, payload_length);
     record->payload_crc32 = sys_calibration_storage_crc32(payload, payload_length);
     record->record_crc32 = sys_calibration_storage_record_crc(record);
@@ -108,9 +123,11 @@ boolean_en sys_calibration_storage_record_validate(
         record->format_version != SYS_CALIBRATION_STORAGE_FORMAT_VERSION ||
         record->payload_length == 0U ||
         record->payload_length > SYS_CALIBRATION_STORAGE_PAYLOAD_MAX ||
+        sys_product_profile_context_validate(&record->context, BOOL_TRUE) != BOOL_TRUE ||
         sys_calibration_storage_record_is_committed(record) != BOOL_TRUE ||
         sys_calibration_storage_crc32(record->payload, record->payload_length) !=
             record->payload_crc32 ||
+        record->context.table_crc32 != record->payload_crc32 ||
         sys_calibration_storage_record_crc(record) != record->record_crc32)
     {
         return BOOL_FALSE;

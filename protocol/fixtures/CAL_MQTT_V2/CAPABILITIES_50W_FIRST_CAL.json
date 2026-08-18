@@ -1,0 +1,53 @@
+{
+  "fixtureVersion": 1,
+  "name": "CAPABILITIES_50W_FIRST_CAL",
+  "requestTopic": "MS/TEST50W0000001/plt2dev",
+  "responseTopic": "MS/TEST50W0000001/dev2plt",
+  "request": {
+    "SN": "TEST50W0000001",
+    "TM": "2026-08-17 10:00:00",
+    "SV": "cal",
+    "ID": "C001",
+    "CT": "R",
+    "DT": {
+      "op": "CAPABILITIES",
+      "protocolVersion": 2
+    }
+  },
+  "expectedResponse": {
+    "DT": {
+      "op": "CAPABILITIES",
+      "protocolVersion": 2,
+      "protocolFrozen": true,
+      "driverProtocolVersion": 1,
+      "tablePoints": 11,
+      "levelStep": 20,
+      "profilesCodec": "PROFILE_CSV_V1",
+      "profilesCsv": "50,DL-50Z-56T-MXG,1,50,890,120,1680,1680,1,1,OK;75,DL-75Z-56T-MXG,2,75,1380,50,2150,0,0,0,DEFAULT_GT_IV56+ABS_MISSING;100,DL-100Z-56T-MXG,3,100,1780,50,2800,0,0,0,ABS_MISSING+PROTECTION_REVIEW;150,DL-150W-UNFROZEN,4,150,2700,30,4500,0,0,0,IV_MISSING+ABS_MISSING+POWER_TOL;200,DL-200W-UNFROZEN,5,200,3600,15,6000,0,0,0,IV_MISSING+ABS_MISSING+POWER_TOL;240,DL-240W-UNFROZEN,6,240,4300,15,7000,0,0,0,IV_MISSING+ABS_MISSING+POWER_TOL",
+      "activeProfile": {
+        "profileId": 50,
+        "modelCode": "DL-50Z-56T-MXG",
+        "profileVersion": 1,
+        "profileFingerprint": 2809625630,
+        "mid": 1,
+        "ratedPowerW": 50,
+        "rs3Mohm": 120,
+        "hwMaxCurrentMa": 1680,
+        "absoluteFailCurrentMa": 1680,
+        "boundOutputVoltage01V": 560,
+        "maxCurrentAtVoltageMa": 892,
+        "configuredRatedCurrentMa": 890,
+        "calibratedMaxCurrentMa": 0,
+        "buildEnabled": true
+      },
+      "firstCalibrationAllowed": true,
+      "runtimeNonzeroOutputAllowed": false,
+      "calibrationNonzeroOutputAllowed": true,
+      "configuredRatedCurrentWriteReadbackAvailable": true,
+      "validationPercentOutputAvailable": true,
+      "commitAvailable": true,
+      "safetyReady": true,
+      "blockCode": "FIRST_CALIBRATION_REQUIRED"
+    }
+  }
+}

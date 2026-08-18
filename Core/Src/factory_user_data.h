@@ -2,20 +2,23 @@
 #define FACTORY_DATA_H
 
 #include "common.h"
+#include "sys_product_profile.h"
 
 extern u8  factory_user_buff[128];
 extern u16 SET_OUTCUR_temp;
 extern u16 HWMAX_OUTCUR_temp;
 extern u16 OUTPUT_CUR_SENSOR_temp;
 extern u16 OP_PWM_OFFSET_temp;
+extern u16 BOUND_OUTPUT_VOLTAGE_01V_temp;
 
 #define FACTORY_OUTCUR_MAX_MA 10000U
 
-/* 50W product factory fallback profile. */
-#define FACTORY_DEFAULT_MID                       1U
-#define FACTORY_DEFAULT_SET_OUTCUR_MA             890U
-#define FACTORY_DEFAULT_HWMAX_OUTCUR_MA           1680U
-#define FACTORY_DEFAULT_OUTPUT_CUR_SENSOR_MOHM    120U
+/* Defaults are selected by the compiled product profile. */
+#define FACTORY_DEFAULT_MID                       SYS_PRODUCT_PROFILE_CURRENT_MID
+#define FACTORY_DEFAULT_SET_OUTCUR_MA             SYS_PRODUCT_PROFILE_CURRENT_DEFAULT_CURRENT_MA
+#define FACTORY_DEFAULT_HWMAX_OUTCUR_MA           SYS_PRODUCT_PROFILE_CURRENT_HW_MAX_CURRENT_MA
+#define FACTORY_DEFAULT_OUTPUT_CUR_SENSOR_MOHM    SYS_PRODUCT_PROFILE_CURRENT_RS3_MOHM
+#define FACTORY_DEFAULT_BOUND_VOLTAGE_01V         SYS_PRODUCT_PROFILE_CURRENT_MAX_VOLTAGE_01V
 #define FACTORY_DEFAULT_PWM_OFFSET_PERMILLE       0U
 #define FACTORY_DEFAULT_TEMP_PROTECT_ENABLE       1U
 #define FACTORY_DEFAULT_TEMP_PROTECT_C            85
@@ -45,6 +48,9 @@ typedef struct
 #define MID                  (*((u8*)(factory_user_buff+0x05)))      //产品型号；50W产品使用型号值1
 #define DRV_VERSION          (*((u8*)(factory_user_buff+0x06)))      //驱动器版本
 #define Protocol_version     (*((u8*)(factory_user_buff+0x07)))      //协议版本号	0是初始旧协议，1是新协议
+
+/* Per-device operating setting; distinct from calibrationVoltage01V. */
+#define BOUND_OUTPUT_VOLTAGE_01V BOUND_OUTPUT_VOLTAGE_01V_temp
 
 #define  SET_OUTCUR          SET_OUTCUR_temp                         // 额定电流，需要大小端转换  
 #define  HWMAX_OUTCUR        HWMAX_OUTCUR_temp                       // 硬件最大电流，需要大小端转换      
@@ -80,6 +86,14 @@ typedef struct
 extern void factory_user_load_data(void);
 
 extern void fac_128_data_default(void);
+extern sys_product_current_validation_en factory_user_validate_runtime_current(
+    u16 bound_voltage_01v,
+    u32 configured_current_ma);
+extern sys_product_current_validation_en factory_user_set_runtime_current(
+    u32 configured_current_ma);
+extern u16 factory_user_get_bound_output_voltage_01v(void);
+extern sys_product_current_validation_en factory_user_validate_candidate(
+    const u8 *factory_buffer);
 
 
 #endif

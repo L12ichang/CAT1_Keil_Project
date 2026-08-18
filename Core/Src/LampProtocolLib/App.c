@@ -126,20 +126,14 @@ u8 onSettemp_protectc_value( u32 intValue )
 
 u8 onSethwmax_outcur_value( u32 intValue )
 {
-  //硬件最大输出电流设置
-    if(intValue>0)
-    {
-        HWMAX_OUTCUR=intValue;
-        sys_data_store();
-    }
-    return DOWNLOAD_SUCCESS;
+    /* HWMAX belongs to the compiled hardware profile, not normal runtime control. */
+    (void)intValue;
+    return DOWNLOAD_PARAM_ERROR;
 }
 u8 onSet_setcur_value( u32 intValue )
 {
-    //额定输出电流设置
-    SET_OUTCUR=intValue;
-    sys_data_store();
-    return DOWNLOAD_SUCCESS;
+    return (factory_user_set_runtime_current(intValue) ==
+            SYS_PRODUCT_CURRENT_VALID) ? DOWNLOAD_SUCCESS : DOWNLOAD_PARAM_ERROR;
 }
 u8 onSet_fa_test_value( u8 intValue )
 {     
@@ -253,16 +247,26 @@ uint8 onSetTimingDimmingParam(TIMING_DIMMING_PARAM *timingDimmingParam)
 
  //uint8 factoryParam[128] = {0};
 
-uint8 onSetFactoryParam(unsigned char *buf, unsigned char length) 
+uint8 onSetFactoryParam(unsigned char *buf, unsigned char length)
 {
-    //TODO 检查参数是否合法，如果不合法，则返回DOWNLOAD_PARAM_ERROR
-    //TODO 保存工厂参数
+    u8 candidate[128];
+
+	if (buf == NULL || length == 0U)
+    {
+        return DOWNLOAD_PARAM_ERROR;
+    }
 	if(length > 128)
     {
 		length = 128;
 	}
    
-	memcpy(sys_data.fa_Parambuf, buf, length);
+    memcpy(candidate, sys_data.fa_Parambuf, sizeof(candidate));
+	memcpy(candidate, buf, length);
+    if (factory_user_validate_candidate(candidate) != SYS_PRODUCT_CURRENT_VALID)
+    {
+        return DOWNLOAD_PARAM_ERROR;
+    }
+	memcpy(sys_data.fa_Parambuf, candidate, sizeof(candidate));
     factory_user_load_data();
     sys_data_store();
     printf_buf(sys_data.fa_Parambuf,128);

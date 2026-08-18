@@ -682,32 +682,6 @@ void sys_bl0942_process(void)
                     //UPDATE_AC_FREQ((ac_freq+50)/100);
                     //printf("f=%d\n", ac_freq);
                    
-/*
-                 
-                  if(MID==3) //100W 输入功率和电流偏大 的处理
-                  {
-                       ac_powerpa=(u16)( (float)ac_powerpa*(1.0f-0.03));
-                     if(ac_powerpa>500&&ac_powerpa<5000)    //小于50W 电流减10mA 
-                     {
-                         ac_current-=7;
-                     }
-//                     if(ac_voltage_8209>250)//如 果电压高于250V，电流再减去7mA
-//                     {
-//                         ac_current-=7;
-//                     }
-                 }
-                  if(MID==2) //75W 输入功率和电流偏大 的处理
-                  {
-                       ac_powerpa=(u16)( (float)ac_powerpa*(1.0f-0.03));
-                     if(ac_powerpa>500&&ac_powerpa<5000)    //小于12W大于5W 电流减20mA 
-                     {
-                         ac_current-=7;
-                     }
-                   
-                      
-  
-                 }*/
-
                   if(ac_power_S == 0)
                   {
                       Z_ac_current = 0;
@@ -757,38 +731,9 @@ void sys_bl0942_process(void)
                      
                      
                      
-                  if(MID==3) //100W 输入功率和电流偏大 的处理
-                  {
-                     ac_powerpa=(u16)((u32)ac_powerpa*97U/100U);
-                     if(ac_powerpa>500&&ac_powerpa<5000)    //小于50W 电流减10mA
-                     {
-                         if(Z_ac_current > 7)
-                         {
-                             Z_ac_current-=7;
-                         }
-                         else
-                         {
-                             Z_ac_current=0;
-                         }
-                     }
-
-                  }
-                 if(MID==2) //75W 输入功率和电流偏大 的处理
-                 {
-                       ac_powerpa=(u16)((u32)ac_powerpa*97U/100U);
-                     if(ac_powerpa>500&&ac_powerpa<5000)    //小于12W大于5W 电流减20mA
-                     {
-                         if(Z_ac_current > 7)
-                         {
-                             Z_ac_current-=7;
-                         }
-                         else
-                         {
-                             Z_ac_current=0;
-                         }
-                     }
-
-                 }
+                    /* No MID-specific magic correction: all product images
+                       use the same BL0942 algorithm.  Any approved scaling
+                       difference must be an explicit profile/calibration field. */
 
 #endif
                   }

@@ -70,6 +70,9 @@ int main(void)
     sys_calibration_boot_inhibit_record_st inhibit_first;
     sys_calibration_boot_inhibit_record_st inhibit_second;
     sys_calibration_boot_inhibit_state_en inhibit_state;
+    sys_calibration_context_st calibration_context;
+    const sys_product_profile_st *profile;
+    const sys_product_profile_st *candidate_profile;
     u8 encoded[SYS_CALIBRATION_DRIVER_TABLE_FRAME_LENGTH];
     u8 simple_frame[SYS_CALIBRATION_DRIVER_FRAME_OVERHEAD + 8U];
     u16 simple_length;
@@ -83,9 +86,91 @@ int main(void)
     u16 pwm[SYS_CALIBRATION_CURVE_POINT_COUNT] =
         {0U, 100U, 200U, 300U, 400U, 500U, 600U, 700U, 800U, 900U, 1000U};
     u16 interpolated;
+    u16 scaled_pwm;
     u16 encoded_length;
     u8 safe_percent;
+    u32 profile_index;
+    static const u16 expected_75w_iv_ma[9] =
+        {2100U, 2100U, 2100U, 2100U, 1870U, 1700U, 1560U, 1440U, 1340U};
+    static const u16 expected_100w_iv_ma[9] =
+        {2800U, 2800U, 2800U, 2800U, 2500U, 2270U, 2080U, 1920U, 1780U};
     int failures = 0;
+
+    profile = sys_product_profile_current();
+    failures += expect_true(
+        profile != NULL && profile->profile_id == SYS_PRODUCT_PROFILE_ID_50W &&
+        profile->fingerprint_crc32 == SYS_PRODUCT_PROFILE_50W_FINGERPRINT_CRC32 &&
+        sys_product_profile_calculate_fingerprint(profile) ==
+            profile->fingerprint_crc32 &&
+        sys_product_profile_is_complete(profile) == BOOL_TRUE,
+        "selected 50W profile fingerprint is complete");
+    candidate_profile = sys_product_profile_find(SYS_PRODUCT_PROFILE_ID_75W);
+    failures += expect_true(
+        candidate_profile != NULL && candidate_profile->rated_power_w == 75U &&
+        candidate_profile->mid == SYS_PRODUCT_PROFILE_75W_MID &&
+        candidate_profile->default_runtime_current_ma == 1380U &&
+        candidate_profile->rs3_mohm == 50U &&
+        candidate_profile->hw_max_current_ma == 2150U &&
+        candidate_profile->power_limit_tolerance_permille == 50U &&
+        candidate_profile->iv_limits[0].current_ma == 2100U &&
+        candidate_profile->iv_limits[8].current_ma == 1340U &&
+        candidate_profile->build_enabled == BOOL_FALSE &&
+        candidate_profile->absolute_fail_current_ma == 0U,
+        "75W confirmed fields and I-V conflict are retained fail-closed");
+    for (profile_index = 0U; profile_index < 9U; ++profile_index)
+    {
+        failures += expect_true(
+            candidate_profile->iv_limits[profile_index].current_ma ==
+                expected_75w_iv_ma[profile_index],
+            "75W specification I-V point matches");
+    }
+    candidate_profile = sys_product_profile_find(SYS_PRODUCT_PROFILE_ID_100W);
+    failures += expect_true(
+        candidate_profile != NULL && candidate_profile->rated_power_w == 100U &&
+        candidate_profile->mid == SYS_PRODUCT_PROFILE_100W_MID &&
+        candidate_profile->default_runtime_current_ma == 1780U &&
+        candidate_profile->rs3_mohm == 50U &&
+        candidate_profile->hw_max_current_ma == 2800U &&
+        candidate_profile->iv_limits[0].current_ma == 2800U &&
+        candidate_profile->iv_limits[8].current_ma == 1780U &&
+        candidate_profile->build_enabled == BOOL_FALSE &&
+        candidate_profile->absolute_fail_current_ma == 0U,
+        "100W confirmed fields are retained while safety review stays disabled");
+    for (profile_index = 0U; profile_index < 9U; ++profile_index)
+    {
+        failures += expect_true(
+            candidate_profile->iv_limits[profile_index].current_ma ==
+                expected_100w_iv_ma[profile_index],
+            "100W specification I-V point matches");
+    }
+    candidate_profile = sys_product_profile_find(SYS_PRODUCT_PROFILE_ID_150W);
+    failures += expect_true(
+        candidate_profile != NULL && candidate_profile->mid == 4U &&
+        candidate_profile->default_runtime_current_ma == 2700U &&
+        candidate_profile->rs3_mohm == 30U &&
+        candidate_profile->hw_max_current_ma == 4500U &&
+        candidate_profile->iv_limits == NULL &&
+        candidate_profile->build_enabled == BOOL_FALSE,
+        "150W confirmed fields stay disabled without I-V and absolute fail");
+    candidate_profile = sys_product_profile_find(SYS_PRODUCT_PROFILE_ID_200W);
+    failures += expect_true(
+        candidate_profile != NULL && candidate_profile->mid == 5U &&
+        candidate_profile->default_runtime_current_ma == 3600U &&
+        candidate_profile->rs3_mohm == 15U &&
+        candidate_profile->hw_max_current_ma == 6000U &&
+        candidate_profile->iv_limits == NULL &&
+        candidate_profile->build_enabled == BOOL_FALSE,
+        "200W confirmed fields stay disabled without I-V and absolute fail");
+    candidate_profile = sys_product_profile_find(SYS_PRODUCT_PROFILE_ID_240W);
+    failures += expect_true(
+        candidate_profile != NULL && candidate_profile->mid == 6U &&
+        candidate_profile->default_runtime_current_ma == 4300U &&
+        candidate_profile->rs3_mohm == 15U &&
+        candidate_profile->hw_max_current_ma == 7000U &&
+        candidate_profile->default_runtime_current_ma <
+            candidate_profile->hw_max_current_ma &&
+        candidate_profile->build_enabled == BOOL_FALSE,
+        "240W final 7000mA HWMAX is retained while remaining safety fields stay disabled");
 
     static const u8 dc_query_candidate_3c[SYS_CALIBRATION_DC5200_QUERY_FRAME_LENGTH] =
         {0xAA, 0xBB, 0xCC, 0x01, 0x01, 0x01, 0x00, 0x02,
@@ -243,15 +328,6 @@ int main(void)
     failures += expect_true(sys_calibration_curve_validate_pwm(
                                 pwm, SYS_CALIBRATION_CURVE_POINT_COUNT) == BOOL_FALSE,
                             "non-monotonic curve is rejected");
-    failures += expect_true(sys_calibration_curve_validate_context(
-                                SYS_CALIBRATION_50W_MID,
-                                SYS_CALIBRATION_50W_RS3_MOHM,
-                                SYS_CALIBRATION_50W_RATED_CURRENT_MA) == BOOL_TRUE,
-                            "50W context validates");
-    failures += expect_true(sys_calibration_curve_validate_context(
-                                3U, 50U, 1780U) == BOOL_FALSE,
-                            "100W context remains disabled");
-
     failures += expect_true(sys_calibration_safety_limit_current_ma(250U) == 1400U &&
                                 sys_calibration_safety_limit_current_ma(360U) == 1388U &&
                                 sys_calibration_safety_limit_current_ma(560U) == 892U &&
@@ -266,6 +342,41 @@ int main(void)
                                 sys_calibration_safety_is_absolute_overcurrent(1679U) ==
                                 BOOL_FALSE,
                             "1.68A absolute current fail-off threshold");
+    failures += expect_true(
+        sys_product_profile_validate_runtime_current(profile, 560U, 890U) ==
+            SYS_PRODUCT_CURRENT_VALID &&
+        sys_product_profile_validate_runtime_current(profile, 560U, 893U) ==
+            SYS_PRODUCT_CURRENT_POWER_LIMIT &&
+        sys_product_profile_validate_runtime_current(profile, 360U, 1388U) ==
+            SYS_PRODUCT_CURRENT_VALID &&
+        sys_product_profile_validate_runtime_current(profile, 360U, 1389U) ==
+            SYS_PRODUCT_CURRENT_POWER_LIMIT &&
+        sys_product_profile_validate_runtime_current(profile, 250U, 1400U) ==
+            SYS_PRODUCT_CURRENT_VALID &&
+        sys_product_profile_validate_runtime_current(profile, 250U, 1401U) ==
+            SYS_PRODUCT_CURRENT_IV_LIMIT &&
+        sys_product_profile_validate_runtime_current(profile, 560U, 0U) ==
+            SYS_PRODUCT_CURRENT_ZERO &&
+        sys_product_profile_validate_runtime_current(profile, 560U, 1680U) ==
+            SYS_PRODUCT_CURRENT_ABSOLUTE_FAIL &&
+        sys_product_profile_validate_runtime_current(profile, 580U, 890U) ==
+            SYS_PRODUCT_CURRENT_VOLTAGE_UNBOUND,
+        "writable SET_OUTCUR is bounded by voltage, power and special-test gates");
+    failures += expect_true(
+        sys_product_profile_scale_percent_to_pwm(
+            profile, 560U, 45U, 1000U, &scaled_pwm) == BOOL_TRUE &&
+        scaled_pwm == 238U,
+        "lower SET table level reuses the profile I100 PWM scale without double scaling");
+    failures += expect_true(
+        sys_product_profile_validate_calibrated_current(
+            800U, BOOL_FALSE, 0U) ==
+            SYS_PRODUCT_CURRENT_CALIBRATION_MAX_UNAVAILABLE &&
+        sys_product_profile_validate_calibrated_current(
+            890U, BOOL_TRUE, 890U) == SYS_PRODUCT_CURRENT_VALID &&
+        sys_product_profile_validate_calibrated_current(
+            891U, BOOL_TRUE, 890U) ==
+            SYS_PRODUCT_CURRENT_EXCEEDS_CALIBRATED_MAX,
+        "runtime SET_OUTCUR also stays within the committed calibrated maximum");
     failures += expect_true(
         sys_calibration_safety_arbitrate_pwm(
             1000U, SYS_CALIBRATION_OUTPUT_SOURCE_NORMAL, BOOL_FALSE,
@@ -290,16 +401,23 @@ int main(void)
             BOOL_TRUE, BOOL_FALSE) == 0U,
         "normal/offline/direct inhibit, emergency, invalid and stale feedback gates");
 
+    failures += expect_true(sys_product_profile_context_build(
+                                560U,
+                                890U,
+                                890U,
+                                sys_calibration_storage_crc32(payload,
+                                                              sizeof(payload)),
+                                &calibration_context) == BOOL_TRUE &&
+                                calibration_context.calibrated_max_current_ma == 890U,
+                            "calibration context binds table-derived maximum and CRC");
     failures += expect_true(sys_calibration_storage_record_build(
-                                &first_record, 1U, SYS_CALIBRATION_50W_MID,
-                                SYS_CALIBRATION_50W_RS3_MOHM, payload,
+                                &first_record, 1U, &calibration_context, payload,
                                 sizeof(payload)) == BOOL_TRUE &&
                                 sys_calibration_storage_record_validate(&first_record) ==
                                 BOOL_TRUE,
                             "A record builds and validates");
     failures += expect_true(sys_calibration_storage_record_build(
-                                &second_record, 2U, SYS_CALIBRATION_50W_MID,
-                                SYS_CALIBRATION_50W_RS3_MOHM, payload,
+                                &second_record, 2U, &calibration_context, payload,
                                 sizeof(payload)) == BOOL_TRUE,
                             "B record builds");
     failures += expect_true(sys_calibration_storage_select_newest(
@@ -317,6 +435,11 @@ int main(void)
     failures += expect_true(sys_calibration_storage_record_validate(&first_record) ==
                                 BOOL_FALSE,
                             "torn commit is not valid");
+    first_record.commit_word = SYS_CALIBRATION_STORAGE_COMMIT_WORD;
+    first_record.context.profile_fingerprint_crc32 ^= 1U;
+    failures += expect_true(sys_calibration_storage_record_validate(&first_record) ==
+                                BOOL_FALSE,
+                            "foreign profile fingerprint is rejected fail-closed");
 
     failures += expect_true(sys_calibration_boot_inhibit_record_build(
                                 &inhibit_first, 1U,

@@ -1,5 +1,5 @@
 /*************************************************************
-程序功能：50W校准运行时输出限幅与绝对过流门禁
+程序功能：当前编译产品的运行时输出限幅与绝对过流门禁
 开发环境：keil 5.37
 芯片型号：STM32F103CBT6/HK32F103CCT6A
 开发人员：Codex
@@ -11,11 +11,16 @@
 
 static u16 sys_calibration_safety_table_current_ma(u16 voltage_01v)
 {
+    const sys_product_profile_st *profile = sys_product_profile_current();
     u32 index;
     sys_calibration_iv_limit_st limit;
     u16 current_ma = 0U;
 
-    for (index = 0U; index < SYS_CALIBRATION_IV_POINT_COUNT; ++index)
+    if (sys_product_profile_is_complete(profile) != BOOL_TRUE)
+    {
+        return 0U;
+    }
+    for (index = 0U; index < profile->iv_limit_count; ++index)
     {
         if (sys_calibration_curve_get_iv_limit(index, &limit) != BOOL_TRUE)
         {
@@ -35,25 +40,27 @@ static u16 sys_calibration_safety_table_current_ma(u16 voltage_01v)
 
 u16 sys_calibration_safety_limit_current_ma(u16 voltage_01v)
 {
+    const sys_product_profile_st *profile = sys_product_profile_current();
     u32 power_current_ma;
     u16 table_current_ma;
 
-    if (voltage_01v < SYS_CALIBRATION_50W_MIN_VOLTAGE_01V ||
-        voltage_01v > SYS_CALIBRATION_50W_MAX_VOLTAGE_01V)
+    if (sys_product_profile_is_complete(profile) != BOOL_TRUE ||
+        voltage_01v < profile->minimum_voltage_01v ||
+        voltage_01v > profile->maximum_voltage_01v ||
+        voltage_01v == profile->special_test_voltage_01v)
     {
         return 0U;
     }
 
     table_current_ma = sys_calibration_safety_table_current_ma(voltage_01v);
-    power_current_ma = ((u32)SYS_CALIBRATION_50W_POWER_LIMIT_01W * 1000U) /
-                       voltage_01v;
+    power_current_ma = ((u32)profile->rated_power_w * 10000UL) / voltage_01v;
     if (power_current_ma < table_current_ma)
     {
         table_current_ma = (u16)power_current_ma;
     }
-    if (table_current_ma > SYS_CALIBRATION_50W_CURRENT_LIMIT_MA)
+    if (table_current_ma > profile->hw_max_current_ma)
     {
-        table_current_ma = SYS_CALIBRATION_50W_CURRENT_LIMIT_MA;
+        table_current_ma = profile->hw_max_current_ma;
     }
     return table_current_ma;
 }
@@ -95,7 +102,12 @@ boolean_en sys_calibration_safety_limit_percent(
 
 boolean_en sys_calibration_safety_is_absolute_overcurrent(u32 current_ma)
 {
-    return (current_ma >= SYS_CALIBRATION_ABSOLUTE_FAIL_CURRENT_MA) ?
+    const sys_product_profile_st *profile = sys_product_profile_current();
+    if (sys_product_profile_is_complete(profile) != BOOL_TRUE)
+    {
+        return BOOL_TRUE;
+    }
+    return (current_ma >= profile->absolute_fail_current_ma) ?
            BOOL_TRUE : BOOL_FALSE;
 }
 

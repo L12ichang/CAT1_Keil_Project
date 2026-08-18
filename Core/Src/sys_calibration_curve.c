@@ -1,5 +1,5 @@
 /*************************************************************
-程序功能：50W量产校准固定曲线与上下文校验
+程序功能：当前编译产品的11点曲线与上下文校验
 开发环境：keil 5.37
 芯片型号：STM32F103CBT6/HK32F103CCT6A
 开发人员：Codex
@@ -7,20 +7,6 @@
 编辑日期：2026.8.4
 *************************************************************/
 #include "sys_calibration_curve.h"
-
-static const sys_calibration_iv_limit_st _50w_iv_limit[
-    SYS_CALIBRATION_IV_POINT_COUNT] =
-{
-    {250U, 1400U, 350U},
-    {290U, 1400U, 406U},
-    {320U, 1400U, 448U},
-    {360U, 1400U, 500U},
-    {400U, 1250U, 500U},
-    {440U, 1140U, 500U},
-    {480U, 1040U, 500U},
-    {520U,  960U, 500U},
-    {560U,  900U, 500U}
-};
 
 boolean_en sys_calibration_curve_validate_level(u16 level)
 {
@@ -91,25 +77,10 @@ boolean_en sys_calibration_curve_interpolate(
     return BOOL_TRUE;
 }
 
-boolean_en sys_calibration_curve_validate_context(
-    u8 mid,
-    u16 rs3_mohm,
-    u16 rated_current_ma)
-{
-    return (mid == SYS_CALIBRATION_50W_MID &&
-            rs3_mohm == SYS_CALIBRATION_50W_RS3_MOHM &&
-            rated_current_ma == SYS_CALIBRATION_50W_RATED_CURRENT_MA) ?
-           BOOL_TRUE : BOOL_FALSE;
-}
-
 boolean_en sys_calibration_curve_get_iv_limit(
     u32 index,
     sys_calibration_iv_limit_st *limit)
 {
-    if (limit == NULL || index >= SYS_CALIBRATION_IV_POINT_COUNT)
-    {
-        return BOOL_FALSE;
-    }
-    *limit = _50w_iv_limit[index];
-    return BOOL_TRUE;
+    return sys_product_profile_get_iv_limit(sys_product_profile_current(),
+                                            index, limit);
 }

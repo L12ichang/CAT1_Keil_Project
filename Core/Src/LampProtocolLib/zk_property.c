@@ -19,6 +19,17 @@ static zk_device_config_t zk_dev_cfg;
 #define ZK_PROPERTY_FLASH_MAIN_ADDR CAT1_FLASH_PROPERTY_MAIN_START
 #define ZK_PROPERTY_FLASH_BACKUP_ADDR CAT1_FLASH_PROPERTY_BACKUP_START
 #define ZK_RUNTIME_FLASH_OFFSET 0x200UL
+#define ZK_FACTORY_PROFILE_PROTECTED_ERROR 20
+#define ZK_FACTORY_BOUND_VOLTAGE_ERROR     21
+#define ZK_FACTORY_CURRENT_ZERO_ERROR      22
+#define ZK_FACTORY_CURRENT_IV_ERROR        23
+#define ZK_FACTORY_CURRENT_POWER_ERROR     24
+#define ZK_FACTORY_CURRENT_HWMAX_ERROR     25
+#define ZK_FACTORY_CURRENT_ABSOLUTE_ERROR  26
+#define ZK_FACTORY_PROFILE_MISMATCH_ERROR  27
+#define ZK_FACTORY_CALIBRATION_ACTIVE_ERROR 28
+#define ZK_FACTORY_CALIBRATED_MAX_MISSING_ERROR 29
+#define ZK_FACTORY_EXCEEDS_CALIBRATED_MAX_ERROR 30
 
 #define ZK_STATIC_ASSERT_CONCAT_(a, b) a##b
 #define ZK_STATIC_ASSERT_CONCAT(a, b) ZK_STATIC_ASSERT_CONCAT_(a, b)
@@ -504,6 +515,8 @@ static void zk_add_factory_prop(cJSON *dt_root)
         return;
     }
     cJSON_AddNumberToObject(item, "MID", MID);
+    cJSON_AddNumberToObject(item, "BOUND_OUTPUT_VOLTAGE_01V",
+                            BOUND_OUTPUT_VOLTAGE_01V);
     cJSON_AddNumberToObject(item, "SET_OUTCUR", SET_OUTCUR);
     cJSON_AddNumberToObject(item, "HWMAX_OUTCUR", HWMAX_OUTCUR);
     cJSON_AddNumberToObject(item, "OUTPUT_CUR_SENSOR", OUTPUT_CUR_SENSOR);
@@ -648,12 +661,45 @@ static void zk_factory_buf_set_u16be(u8 *factory_buf, u16 offset, u16 value)
     factory_buf[offset + 1] = (u8)(value & 0xFFu);
 }
 
+static int zk_factory_current_validation_error(
+    sys_product_current_validation_en result)
+{
+    switch (result)
+    {
+        case SYS_PRODUCT_CURRENT_VALID:
+            return 0;
+        case SYS_PRODUCT_CURRENT_VOLTAGE_UNBOUND:
+            return ZK_FACTORY_BOUND_VOLTAGE_ERROR;
+        case SYS_PRODUCT_CURRENT_ZERO:
+            return ZK_FACTORY_CURRENT_ZERO_ERROR;
+        case SYS_PRODUCT_CURRENT_IV_LIMIT:
+            return ZK_FACTORY_CURRENT_IV_ERROR;
+        case SYS_PRODUCT_CURRENT_POWER_LIMIT:
+            return ZK_FACTORY_CURRENT_POWER_ERROR;
+        case SYS_PRODUCT_CURRENT_HW_MAX:
+            return ZK_FACTORY_CURRENT_HWMAX_ERROR;
+        case SYS_PRODUCT_CURRENT_ABSOLUTE_FAIL:
+            return ZK_FACTORY_CURRENT_ABSOLUTE_ERROR;
+        case SYS_PRODUCT_CURRENT_CALIBRATION_ACTIVE:
+            return ZK_FACTORY_CALIBRATION_ACTIVE_ERROR;
+        case SYS_PRODUCT_CURRENT_CALIBRATION_MAX_UNAVAILABLE:
+            return ZK_FACTORY_CALIBRATED_MAX_MISSING_ERROR;
+        case SYS_PRODUCT_CURRENT_EXCEEDS_CALIBRATED_MAX:
+            return ZK_FACTORY_EXCEEDS_CALIBRATED_MAX_ERROR;
+        default:
+            return ZK_FACTORY_PROFILE_MISMATCH_ERROR;
+    }
+}
+
 static int zk_apply_factory_config(cJSON *factory, u8 *factory_buf, int *changed)
 {
+    const sys_product_profile_st *profile = sys_product_profile_current();
+    sys_product_current_validation_en current_result;
     int value;
     int err;
 
-    if (factory == NULL || factory_buf == NULL || changed == NULL)
+    if (factory == NULL || factory_buf == NULL || changed == NULL ||
+        sys_product_profile_is_complete(profile) != BOOL_TRUE)
     {
         return 4;
     }
@@ -670,11 +716,23 @@ static int zk_apply_factory_config(cJSON *factory, u8 *factory_buf, int *changed
         {
             return err;
         }
-        if (value <= 0 || value >= 0xFF)
+        if (value != (int)profile->mid)
         {
-            return 3;
+            return ZK_FACTORY_PROFILE_PROTECTED_ERROR;
         }
-        factory_buf[0x05] = (u8)value;
+    }
+    if (zk_json_pick_config_number(factory, "BOUND_OUTPUT_VOLTAGE_01V",
+                                   &value, &err) == BOOL_TRUE)
+    {
+        if (err != 0)
+        {
+            return err;
+        }
+        if (value < 0 || value > 65535)
+        {
+            return ZK_FACTORY_BOUND_VOLTAGE_ERROR;
+        }
+        zk_factory_buf_set_u16be(factory_buf, 0x08, (u16)value);
         *changed = 1;
     }
     if (zk_json_pick_config_number(factory, "SET_OUTCUR", &value, &err) == BOOL_TRUE)
@@ -685,7 +743,7 @@ static int zk_apply_factory_config(cJSON *factory, u8 *factory_buf, int *changed
         }
         if (value <= 0 || value > FACTORY_OUTCUR_MAX_MA)
         {
-            return 3;
+            return ZK_FACTORY_CURRENT_ZERO_ERROR;
         }
         zk_factory_buf_set_u16be(factory_buf, 0x10, (u16)value);
         *changed = 1;
@@ -696,12 +754,10 @@ static int zk_apply_factory_config(cJSON *factory, u8 *factory_buf, int *changed
         {
             return err;
         }
-        if (value <= 0 || value > FACTORY_OUTCUR_MAX_MA)
+        if (value != (int)profile->hw_max_current_ma)
         {
-            return 3;
+            return ZK_FACTORY_PROFILE_PROTECTED_ERROR;
         }
-        zk_factory_buf_set_u16be(factory_buf, 0x12, (u16)value);
-        *changed = 1;
     }
     if (zk_json_pick_config_number(factory, "OUTPUT_CUR_SENSOR", &value, &err) == BOOL_TRUE)
     {
@@ -709,12 +765,10 @@ static int zk_apply_factory_config(cJSON *factory, u8 *factory_buf, int *changed
         {
             return err;
         }
-        if (value <= 0 || value >= 0xFFFF)
+        if (value != (int)profile->rs3_mohm)
         {
-            return 3;
+            return ZK_FACTORY_PROFILE_PROTECTED_ERROR;
         }
-        zk_factory_buf_set_u16be(factory_buf, 0x14, (u16)value);
-        *changed = 1;
     }
     if (zk_json_pick_config_number(factory, "OP_PWM_OFFSET", &value, &err) == BOOL_TRUE)
     {
@@ -772,6 +826,12 @@ static int zk_apply_factory_config(cJSON *factory, u8 *factory_buf, int *changed
     if (*changed == 0)
     {
         return 1;
+    }
+
+    current_result = factory_user_validate_candidate(factory_buf);
+    if (current_result != SYS_PRODUCT_CURRENT_VALID)
+    {
+        return zk_factory_current_validation_error(current_result);
     }
     return 0;
 }

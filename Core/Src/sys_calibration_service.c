@@ -27,7 +27,8 @@ typedef enum
     SYS_CALIBRATION_OP_READBACK,
     SYS_CALIBRATION_OP_COMMIT,
     SYS_CALIBRATION_OP_ABORT,
-    SYS_CALIBRATION_OP_RELEASE
+    SYS_CALIBRATION_OP_RELEASE,
+    SYS_CALIBRATION_OP_SET_VALIDATION_PERCENT
 } sys_calibration_operation_en;
 
 typedef struct
@@ -43,10 +44,12 @@ typedef struct
     sys_calibration_set_level_fn set_level;
     sys_calibration_set_inhibit_fn set_inhibit;
     sys_calibration_commit_fn commit;
+    sys_calibration_bound_voltage_fn get_bound_voltage;
     boolean_en safety_ready;
     boolean_en boot_inhibit_active;
     boolean_en persistence_ready;
     u8 committed_payload[SYS_CALIBRATION_STAGE_LENGTH];
+    sys_calibration_context_st committed_context;
 } sys_calibration_service_context_st;
 
 static sys_calibration_service_context_st _service;
@@ -60,6 +63,7 @@ static boolean_en sys_calibration_service_copy_status(
     }
     _service.status.safety_ready = _service.safety_ready;
     _service.status.boot_inhibit_active = _service.boot_inhibit_active;
+    _service.status.persistence_ready = _service.persistence_ready;
     memcpy(status, &_service.status, sizeof(*status));
     return BOOL_TRUE;
 }
@@ -214,6 +218,24 @@ static sys_calibration_result_en sys_calibration_service_require_session(
                                        status);
         return SYS_CALIBRATION_RESULT_INVALID_ARGUMENT;
     }
+    if (_service.status.context_valid != BOOL_TRUE ||
+        sys_product_profile_context_validate(
+            &_service.status.context,
+            (_service.status.state == SYS_CALIBRATION_STATE_STAGED ||
+             _service.status.state == SYS_CALIBRATION_STATE_APPLIED) ?
+                BOOL_TRUE : BOOL_FALSE) != BOOL_TRUE ||
+        _service.get_bound_voltage == NULL ||
+        _service.status.context.calibration_voltage_01v !=
+            _service.get_bound_voltage())
+    {
+        sys_calibration_service_safe_off();
+        _service.status.state = SYS_CALIBRATION_STATE_FAULT;
+        _service.boot_inhibit_active = BOOL_TRUE;
+        sys_calibration_service_finish(session_id, seq, operation,
+                                       SYS_CALIBRATION_RESULT_CONTEXT_MISMATCH,
+                                       status);
+        return SYS_CALIBRATION_RESULT_CONTEXT_MISMATCH;
+    }
     if (sys_calibration_service_lease_expired(now_ms) == BOOL_TRUE)
     {
         sys_calibration_service_safe_off();
@@ -234,12 +256,24 @@ static boolean_en sys_calibration_service_validate_lease(u32 lease_ms)
             lease_ms <= SYS_CALIBRATION_LEASE_MAX_MS) ? BOOL_TRUE : BOOL_FALSE;
 }
 
-static boolean_en sys_calibration_service_validate_table_50w(
-    const sys_calibration_driver_table_st *table)
+static boolean_en sys_calibration_service_validate_table(
+    const sys_calibration_driver_table_st *table,
+    u16 *calibrated_max_current_ma)
 {
+    const sys_product_profile_st *profile = sys_product_profile_current();
+    u16 profile_max_current_ma;
+    u16 derived_max_current_ma;
+    u32 minimum_span_current_ma;
     u8 index;
 
-    if (table == NULL)
+    if (table == NULL || calibrated_max_current_ma == NULL ||
+        sys_product_profile_is_complete(profile) != BOOL_TRUE ||
+        sys_product_profile_context_validate(&_service.status.context,
+            (_service.status.context.table_crc32 != 0U) ?
+                BOOL_TRUE : BOOL_FALSE) != BOOL_TRUE ||
+        sys_product_profile_compute_i100_ma(
+            profile, _service.status.context.calibration_voltage_01v,
+            &profile_max_current_ma) != BOOL_TRUE)
     {
         return BOOL_FALSE;
     }
@@ -263,19 +297,34 @@ static boolean_en sys_calibration_service_validate_table_50w(
             return BOOL_FALSE;
         }
     }
+    minimum_span_current_ma =
+        ((u32)profile_max_current_ma *
+         (1000U - profile->calibration_span_tolerance_permille)) / 1000U;
     if (table->point[SYS_CALIBRATION_DRIVER_POINT_COUNT - 1U]
-            .instrument_output_current_ma > SYS_CALIBRATION_ABSOLUTE_FAIL_CURRENT_MA ||
+            .instrument_output_current_ma >=
+                profile->absolute_fail_current_ma ||
         table->point[SYS_CALIBRATION_DRIVER_POINT_COUNT - 1U]
-            .device_output_current_ma > SYS_CALIBRATION_ABSOLUTE_FAIL_CURRENT_MA ||
+            .device_output_current_ma >=
+                profile->absolute_fail_current_ma ||
         table->point[SYS_CALIBRATION_DRIVER_POINT_COUNT - 1U]
             .instrument_output_current_ma <
-                (SYS_CALIBRATION_50W_RATED_CURRENT_MA * 8U) / 10U ||
+                minimum_span_current_ma ||
         table->point[SYS_CALIBRATION_DRIVER_POINT_COUNT - 1U]
             .device_output_current_ma <
-                (SYS_CALIBRATION_50W_RATED_CURRENT_MA * 8U) / 10U)
+                minimum_span_current_ma)
     {
         return BOOL_FALSE;
     }
+    derived_max_current_ma =
+        table->point[SYS_CALIBRATION_DRIVER_POINT_COUNT - 1U]
+            .instrument_output_current_ma;
+    /* The external instrument is the calibration reference.  Device-side
+       current may differ by the sensor error that this table corrects. */
+    if (derived_max_current_ma > profile_max_current_ma)
+    {
+        derived_max_current_ma = profile_max_current_ma;
+    }
+    *calibrated_max_current_ma = derived_max_current_ma;
     return BOOL_TRUE;
 }
 
@@ -284,7 +333,9 @@ static boolean_en sys_calibration_service_get_runtime_table(
 {
     const u8 *payload;
 
-    if (table == NULL)
+    if (table == NULL || _service.status.context_valid != BOOL_TRUE ||
+        sys_product_profile_context_validate(&_service.status.context,
+                                             BOOL_TRUE) != BOOL_TRUE)
     {
         return BOOL_FALSE;
     }
@@ -352,6 +403,12 @@ void sys_calibration_service_bind_platform(
                                        BOOL_TRUE : BOOL_FALSE;
 }
 
+void sys_calibration_service_bind_bound_voltage(
+    sys_calibration_bound_voltage_fn get_bound_voltage)
+{
+    _service.get_bound_voltage = get_bound_voltage;
+}
+
 void sys_calibration_service_restore_boot(boolean_en inhibited,
                                           boolean_en persistence_ready)
 {
@@ -367,16 +424,32 @@ void sys_calibration_service_restore_boot(boolean_en inhibited,
 }
 
 boolean_en sys_calibration_service_load_committed(
+    const sys_calibration_context_st *context,
     const u8 *payload,
     u16 length,
     u32 generation)
 {
     sys_calibration_driver_table_st table;
+    u16 derived_max_current_ma;
 
-    if (payload == NULL || length != SYS_CALIBRATION_STAGE_LENGTH ||
-        sys_calibration_driver_table_decode(payload, length, &table) != BOOL_TRUE ||
-        sys_calibration_service_validate_table_50w(&table) != BOOL_TRUE)
+    if (context == NULL || payload == NULL ||
+        length != SYS_CALIBRATION_STAGE_LENGTH ||
+        sys_product_profile_context_validate(context, BOOL_TRUE) != BOOL_TRUE ||
+        context->table_crc32 != sys_calibration_storage_crc32(payload, length))
     {
+        return BOOL_FALSE;
+    }
+    _service.status.context = *context;
+    _service.status.context_valid = BOOL_TRUE;
+    _service.committed_context = *context;
+    if (
+        sys_calibration_driver_table_decode(payload, length, &table) != BOOL_TRUE ||
+        sys_calibration_service_validate_table(
+            &table, &derived_max_current_ma) != BOOL_TRUE ||
+        derived_max_current_ma != context->calibrated_max_current_ma)
+    {
+        memset(&_service.status.context, 0, sizeof(_service.status.context));
+        _service.status.context_valid = BOOL_FALSE;
         return BOOL_FALSE;
     }
     memcpy(_service.committed_payload, payload, length);
@@ -384,6 +457,22 @@ boolean_en sys_calibration_service_load_committed(
     _service.status.committed_generation = generation;
     _service.status.committed_valid = BOOL_TRUE;
     return BOOL_TRUE;
+}
+
+static void sys_calibration_service_restore_committed_context(void)
+{
+    if (_service.status.committed_valid == BOOL_TRUE &&
+        sys_product_profile_context_validate(&_service.committed_context,
+                                             BOOL_TRUE) == BOOL_TRUE)
+    {
+        _service.status.context = _service.committed_context;
+        _service.status.context_valid = BOOL_TRUE;
+    }
+    else
+    {
+        memset(&_service.status.context, 0, sizeof(_service.status.context));
+        _service.status.context_valid = BOOL_FALSE;
+    }
 }
 
 void sys_calibration_service_set_safety_ready(boolean_en ready)
@@ -451,6 +540,30 @@ boolean_en sys_calibration_service_get_staged_payload(
     return BOOL_TRUE;
 }
 
+boolean_en sys_calibration_service_get_context(
+    sys_calibration_context_st *context)
+{
+    if (context == NULL || _service.status.context_valid != BOOL_TRUE)
+    {
+        return BOOL_FALSE;
+    }
+    *context = _service.status.context;
+    return BOOL_TRUE;
+}
+
+boolean_en sys_calibration_service_get_committed_context(
+    sys_calibration_context_st *context)
+{
+    if (context == NULL || _service.status.committed_valid != BOOL_TRUE ||
+        sys_product_profile_context_validate(&_service.committed_context,
+                                             BOOL_TRUE) != BOOL_TRUE)
+    {
+        return BOOL_FALSE;
+    }
+    *context = _service.committed_context;
+    return BOOL_TRUE;
+}
+
 boolean_en sys_calibration_service_is_boot_inhibited(void)
 {
     return _service.boot_inhibit_active;
@@ -466,12 +579,49 @@ boolean_en sys_calibration_service_is_output_authorized(void)
             _service.boot_inhibit_active == BOOL_TRUE) ? BOOL_TRUE : BOOL_FALSE;
 }
 
+boolean_en sys_calibration_service_runtime_context_matches_voltage(
+    u16 bound_voltage_01v)
+{
+    boolean_en require_table_crc;
+    if (_service.status.context_valid != BOOL_TRUE)
+    {
+        return BOOL_TRUE;
+    }
+    require_table_crc =
+        (_service.status.state == SYS_CALIBRATION_STATE_STAGED ||
+         _service.status.state == SYS_CALIBRATION_STATE_APPLIED ||
+         (_service.status.state == SYS_CALIBRATION_STATE_IDLE &&
+          _service.status.committed_valid == BOOL_TRUE)) ? BOOL_TRUE : BOOL_FALSE;
+    return (sys_product_profile_context_validate(
+                &_service.status.context, require_table_crc) == BOOL_TRUE &&
+            _service.status.context.calibration_voltage_01v ==
+                bound_voltage_01v) ? BOOL_TRUE : BOOL_FALSE;
+}
+
+boolean_en sys_calibration_service_get_calibrated_max_current_ma(
+    u16 bound_voltage_01v,
+    u16 *calibrated_max_current_ma)
+{
+    if (calibrated_max_current_ma == NULL ||
+        _service.status.context_valid != BOOL_TRUE ||
+        _service.status.context.calibrated_max_current_ma == 0U ||
+        sys_calibration_service_runtime_context_matches_voltage(
+            bound_voltage_01v) != BOOL_TRUE)
+    {
+        return BOOL_FALSE;
+    }
+    *calibrated_max_current_ma =
+        _service.status.context.calibrated_max_current_ma;
+    return BOOL_TRUE;
+}
+
 boolean_en sys_calibration_service_correct_output_percent(
     u8 requested_percent,
     u16 rated_current_ma,
     u8 *corrected_percent)
 {
     sys_calibration_driver_table_st table;
+    u16 calibrated_max_current_ma;
     u16 target_ma;
     u16 level;
     u8 index;
@@ -484,7 +634,9 @@ boolean_en sys_calibration_service_correct_output_percent(
     *corrected_percent = requested_percent;
     if (requested_percent == 0U ||
         sys_calibration_service_get_runtime_table(&table) != BOOL_TRUE ||
-        sys_calibration_service_validate_table_50w(&table) != BOOL_TRUE)
+        sys_calibration_service_validate_table(
+            &table, &calibrated_max_current_ma) != BOOL_TRUE ||
+        rated_current_ma > calibrated_max_current_ma)
     {
         return BOOL_FALSE;
     }
@@ -516,6 +668,7 @@ boolean_en sys_calibration_service_correct_output_current(
     u16 *corrected_current_ma)
 {
     sys_calibration_driver_table_st table;
+    u16 calibrated_max_current_ma;
     u8 index;
 
     if (corrected_current_ma == NULL)
@@ -524,7 +677,8 @@ boolean_en sys_calibration_service_correct_output_current(
     }
     *corrected_current_ma = device_current_ma;
     if (sys_calibration_service_get_runtime_table(&table) != BOOL_TRUE ||
-        sys_calibration_service_validate_table_50w(&table) != BOOL_TRUE)
+        sys_calibration_service_validate_table(
+            &table, &calibrated_max_current_ma) != BOOL_TRUE)
     {
         return BOOL_FALSE;
     }
@@ -552,11 +706,12 @@ boolean_en sys_calibration_service_correct_output_current(
     return BOOL_TRUE;
 }
 
-sys_calibration_result_en sys_calibration_service_begin_seq(
+sys_calibration_result_en sys_calibration_service_begin_context_seq(
     u32 session_id,
     u32 now_ms,
     u32 lease_ms,
     u32 seq,
+    const sys_calibration_context_st *context,
     sys_calibration_service_status_st *status)
 {
     sys_calibration_result_en replay_result;
@@ -567,13 +722,17 @@ sys_calibration_result_en sys_calibration_service_begin_seq(
     {
         return replay_result;
     }
-    if (session_id == 0U ||
+    if (session_id == 0U || context == NULL || context->table_crc32 != 0U ||
+        sys_product_profile_context_validate(context, BOOL_FALSE) != BOOL_TRUE ||
+        _service.get_bound_voltage == NULL ||
+        context->calibration_voltage_01v != _service.get_bound_voltage() ||
         sys_calibration_service_validate_lease(lease_ms) != BOOL_TRUE)
     {
+        sys_calibration_service_safe_off();
         sys_calibration_service_finish(session_id, seq, SYS_CALIBRATION_OP_BEGIN,
-                                       SYS_CALIBRATION_RESULT_INVALID_ARGUMENT,
+                                       SYS_CALIBRATION_RESULT_CONTEXT_MISMATCH,
                                        status);
-        return SYS_CALIBRATION_RESULT_INVALID_ARGUMENT;
+        return SYS_CALIBRATION_RESULT_CONTEXT_MISMATCH;
     }
     if (_service.status.state == SYS_CALIBRATION_STATE_ACTIVE &&
         _service.status.session_id != session_id)
@@ -612,10 +771,23 @@ sys_calibration_result_en sys_calibration_service_begin_seq(
     _service.status.current_level = 0U;
     _service.status.staged_valid = BOOL_FALSE;
     _service.status.staged_length = 0U;
+    _service.status.context = *context;
+    _service.status.context_valid = BOOL_TRUE;
     _service.boot_inhibit_active = BOOL_TRUE;
     sys_calibration_service_finish(session_id, seq, SYS_CALIBRATION_OP_BEGIN,
                                    SYS_CALIBRATION_RESULT_OK, status);
     return SYS_CALIBRATION_RESULT_OK;
+}
+
+sys_calibration_result_en sys_calibration_service_begin_seq(
+    u32 session_id,
+    u32 now_ms,
+    u32 lease_ms,
+    u32 seq,
+    sys_calibration_service_status_st *status)
+{
+    return sys_calibration_service_begin_context_seq(
+        session_id, now_ms, lease_ms, seq, NULL, status);
 }
 
 sys_calibration_result_en sys_calibration_service_heartbeat_seq(
@@ -712,6 +884,70 @@ sys_calibration_result_en sys_calibration_service_set_point_seq(
     return SYS_CALIBRATION_RESULT_OK;
 }
 
+sys_calibration_result_en sys_calibration_service_set_validation_percent_seq(
+    u32 session_id,
+    u32 now_ms,
+    u32 seq,
+    u8 target_percent,
+    sys_calibration_service_status_st *status)
+{
+    sys_calibration_result_en result;
+    u8 calibrated_percent;
+    u16 output_level;
+
+    if (sys_calibration_service_check_replay(
+            session_id, seq, SYS_CALIBRATION_OP_SET_VALIDATION_PERCENT,
+            &result, status) == BOOL_TRUE)
+    {
+        return result;
+    }
+    if (target_percent == 0U || target_percent >= 100U)
+    {
+        sys_calibration_service_finish(
+            session_id, seq, SYS_CALIBRATION_OP_SET_VALIDATION_PERCENT,
+            SYS_CALIBRATION_RESULT_PROTOCOL_ERROR, status);
+        return SYS_CALIBRATION_RESULT_PROTOCOL_ERROR;
+    }
+    result = sys_calibration_service_require_session(
+        session_id, now_ms, SYS_CALIBRATION_OP_SET_VALIDATION_PERCENT,
+        seq, status);
+    if (result != SYS_CALIBRATION_RESULT_OK)
+    {
+        return result;
+    }
+    if (_service.status.state != SYS_CALIBRATION_STATE_APPLIED ||
+        _service.status.context_valid != BOOL_TRUE ||
+        _service.status.staged_valid != BOOL_TRUE ||
+        _service.safety_ready != BOOL_TRUE || _service.set_level == NULL ||
+        sys_calibration_service_correct_output_percent(
+            target_percent,
+            _service.status.context.configured_rated_current_ma,
+            &calibrated_percent) != BOOL_TRUE)
+    {
+        sys_calibration_service_safe_off();
+        sys_calibration_service_finish(
+            session_id, seq, SYS_CALIBRATION_OP_SET_VALIDATION_PERCENT,
+            SYS_CALIBRATION_RESULT_INVALID_STATE, status);
+        return SYS_CALIBRATION_RESULT_INVALID_STATE;
+    }
+    output_level = (u16)calibrated_percent * 2U;
+    if (_service.set_level(output_level) != BOOL_TRUE)
+    {
+        sys_calibration_service_safe_off();
+        _service.status.state = SYS_CALIBRATION_STATE_FAULT;
+        _service.boot_inhibit_active = BOOL_TRUE;
+        sys_calibration_service_finish(
+            session_id, seq, SYS_CALIBRATION_OP_SET_VALIDATION_PERCENT,
+            SYS_CALIBRATION_RESULT_HARDWARE_FAULT, status);
+        return SYS_CALIBRATION_RESULT_HARDWARE_FAULT;
+    }
+    _service.status.current_level = output_level;
+    sys_calibration_service_finish(
+        session_id, seq, SYS_CALIBRATION_OP_SET_VALIDATION_PERCENT,
+        SYS_CALIBRATION_RESULT_OK, status);
+    return SYS_CALIBRATION_RESULT_OK;
+}
+
 sys_calibration_result_en sys_calibration_service_raw_seq(
     u32 session_id,
     u32 now_ms,
@@ -781,16 +1017,18 @@ sys_calibration_result_en sys_calibration_service_snapshot_seq(
     return SYS_CALIBRATION_RESULT_OK;
 }
 
-sys_calibration_result_en sys_calibration_service_stage_config_seq(
+sys_calibration_result_en sys_calibration_service_stage_config_context_seq(
     u32 session_id,
     u32 now_ms,
     u32 seq,
+    const sys_calibration_context_st *context,
     const u8 *payload,
     u16 length,
     sys_calibration_service_status_st *status)
 {
     sys_calibration_driver_table_st table;
     sys_calibration_result_en result;
+    u16 derived_max_current_ma;
 
     if (sys_calibration_service_check_replay(
             session_id, seq, SYS_CALIBRATION_OP_STAGE, &result, status) ==
@@ -799,26 +1037,25 @@ sys_calibration_result_en sys_calibration_service_stage_config_seq(
         return result;
     }
 
-    if (payload == NULL || length != SYS_CALIBRATION_STAGE_LENGTH ||
+    if (context == NULL || payload == NULL ||
+        length != SYS_CALIBRATION_STAGE_LENGTH ||
+        sys_product_profile_context_validate(context, BOOL_TRUE) != BOOL_TRUE ||
+        sys_product_profile_context_equal(
+            context, &_service.status.context, BOOL_FALSE) != BOOL_TRUE ||
+        context->table_crc32 != sys_calibration_storage_crc32(payload, length) ||
         sys_calibration_driver_table_decode(payload, length, &table) != BOOL_TRUE ||
-        sys_calibration_service_validate_table_50w(&table) != BOOL_TRUE)
+        sys_calibration_service_validate_table(
+            &table, &derived_max_current_ma) != BOOL_TRUE ||
+        context->calibrated_max_current_ma != derived_max_current_ma)
     {
+        sys_calibration_service_safe_off();
+        _service.status.state = SYS_CALIBRATION_STATE_FAULT;
+        _service.boot_inhibit_active = BOOL_TRUE;
         sys_calibration_service_finish(session_id, seq,
                                        SYS_CALIBRATION_OP_STAGE,
-                                       SYS_CALIBRATION_RESULT_PROTOCOL_ERROR,
+                                       SYS_CALIBRATION_RESULT_CONTEXT_MISMATCH,
                                        status);
-        return SYS_CALIBRATION_RESULT_PROTOCOL_ERROR;
-    }
-    if (sys_calibration_curve_validate_context(
-            SYS_CALIBRATION_50W_MID,
-            SYS_CALIBRATION_50W_RS3_MOHM,
-            SYS_CALIBRATION_50W_RATED_CURRENT_MA) != BOOL_TRUE)
-    {
-        sys_calibration_service_finish(session_id, seq,
-                                       SYS_CALIBRATION_OP_STAGE,
-                                       SYS_CALIBRATION_RESULT_INVALID_ARGUMENT,
-                                       status);
-        return SYS_CALIBRATION_RESULT_INVALID_ARGUMENT;
+        return SYS_CALIBRATION_RESULT_CONTEXT_MISMATCH;
     }
     result = sys_calibration_service_require_session(
         session_id, now_ms, SYS_CALIBRATION_OP_STAGE, seq, status);
@@ -829,11 +1066,25 @@ sys_calibration_result_en sys_calibration_service_stage_config_seq(
     memcpy(_service.staged_payload, payload, length);
     _service.status.staged_length = length;
     _service.status.staged_crc32 = sys_calibration_storage_crc32(payload, length);
+    _service.status.context = *context;
+    _service.status.context_valid = BOOL_TRUE;
     _service.status.staged_valid = BOOL_TRUE;
     _service.status.state = SYS_CALIBRATION_STATE_STAGED;
     sys_calibration_service_finish(session_id, seq, SYS_CALIBRATION_OP_STAGE,
                                    SYS_CALIBRATION_RESULT_OK, status);
     return SYS_CALIBRATION_RESULT_OK;
+}
+
+sys_calibration_result_en sys_calibration_service_stage_config_seq(
+    u32 session_id,
+    u32 now_ms,
+    u32 seq,
+    const u8 *payload,
+    u16 length,
+    sys_calibration_service_status_st *status)
+{
+    return sys_calibration_service_stage_config_context_seq(
+        session_id, now_ms, seq, NULL, payload, length, status);
 }
 
 sys_calibration_result_en sys_calibration_service_apply_seq(
@@ -858,6 +1109,18 @@ sys_calibration_result_en sys_calibration_service_apply_seq(
                                        status);
         return SYS_CALIBRATION_RESULT_INVALID_STATE;
     }
+    if (sys_product_profile_context_validate(&_service.status.context,
+                                             BOOL_TRUE) != BOOL_TRUE ||
+        _service.status.context.table_crc32 != _service.status.staged_crc32)
+    {
+        sys_calibration_service_safe_off();
+        _service.status.state = SYS_CALIBRATION_STATE_FAULT;
+        sys_calibration_service_finish(session_id, seq,
+                                       SYS_CALIBRATION_OP_APPLY,
+                                       SYS_CALIBRATION_RESULT_CONTEXT_MISMATCH,
+                                       status);
+        return SYS_CALIBRATION_RESULT_CONTEXT_MISMATCH;
+    }
     /* 198字节为正式校准测量表；APPLY只切换候选状态，不伪造额外系数。 */
     _service.status.state = SYS_CALIBRATION_STATE_APPLIED;
     sys_calibration_service_finish(session_id, seq,
@@ -867,14 +1130,29 @@ sys_calibration_result_en sys_calibration_service_apply_seq(
     return SYS_CALIBRATION_RESULT_OK;
 }
 
-sys_calibration_result_en sys_calibration_service_commit_seq(
+sys_calibration_result_en sys_calibration_service_commit_context_seq(
     u32 session_id,
     u32 now_ms,
     u32 seq,
+    const sys_calibration_context_st *context,
     sys_calibration_service_status_st *status)
 {
     sys_calibration_result_en result;
 
+    if (context == NULL ||
+        sys_product_profile_context_validate(context, BOOL_TRUE) != BOOL_TRUE ||
+        sys_product_profile_context_equal(context, &_service.status.context,
+                                          BOOL_TRUE) != BOOL_TRUE)
+    {
+        sys_calibration_service_safe_off();
+        _service.status.state = SYS_CALIBRATION_STATE_FAULT;
+        _service.boot_inhibit_active = BOOL_TRUE;
+        sys_calibration_service_finish(session_id, seq,
+                                       SYS_CALIBRATION_OP_COMMIT,
+                                       SYS_CALIBRATION_RESULT_CONTEXT_MISMATCH,
+                                       status);
+        return SYS_CALIBRATION_RESULT_CONTEXT_MISMATCH;
+    }
     result = sys_calibration_service_require_session(
         session_id, now_ms, SYS_CALIBRATION_OP_COMMIT, seq, status);
     if (result != SYS_CALIBRATION_RESULT_OK)
@@ -890,7 +1168,8 @@ sys_calibration_result_en sys_calibration_service_commit_seq(
         return SYS_CALIBRATION_RESULT_INVALID_STATE;
     }
     if (_service.commit == NULL ||
-        _service.commit(_service.staged_payload, _service.status.staged_length,
+        _service.commit(&_service.status.context, _service.staged_payload,
+                        _service.status.staged_length,
                         &_service.status.committed_generation) != BOOL_TRUE)
     {
         sys_calibration_service_finish(session_id, seq,
@@ -901,6 +1180,7 @@ sys_calibration_result_en sys_calibration_service_commit_seq(
     }
     memcpy(_service.committed_payload, _service.staged_payload,
            _service.status.staged_length);
+    _service.committed_context = _service.status.context;
     _service.status.committed_crc32 = _service.status.staged_crc32;
     _service.status.committed_valid = BOOL_TRUE;
     sys_calibration_service_finish(session_id, seq,
@@ -908,6 +1188,19 @@ sys_calibration_result_en sys_calibration_service_commit_seq(
                                    SYS_CALIBRATION_RESULT_OK,
                                    status);
     return SYS_CALIBRATION_RESULT_OK;
+}
+
+sys_calibration_result_en sys_calibration_service_commit_seq(
+    u32 session_id,
+    u32 now_ms,
+    u32 seq,
+    sys_calibration_service_status_st *status)
+{
+    (void)now_ms;
+    sys_calibration_service_finish(session_id, seq, SYS_CALIBRATION_OP_COMMIT,
+                                   SYS_CALIBRATION_RESULT_CONTEXT_MISMATCH,
+                                   status);
+    return SYS_CALIBRATION_RESULT_CONTEXT_MISMATCH;
 }
 
 sys_calibration_result_en sys_calibration_service_readback_seq(
@@ -985,6 +1278,7 @@ sys_calibration_result_en sys_calibration_service_abort_seq(
     _service.status.state = SYS_CALIBRATION_STATE_IDLE;
     _service.status.staged_valid = BOOL_FALSE;
     _service.status.staged_length = 0U;
+    sys_calibration_service_restore_committed_context();
     _service.boot_inhibit_active = BOOL_FALSE;
     sys_calibration_service_finish(session_id, seq, SYS_CALIBRATION_OP_ABORT,
                                    SYS_CALIBRATION_RESULT_OK, status);
@@ -1042,6 +1336,9 @@ sys_calibration_result_en sys_calibration_service_release_seq(
     _service.status.state = SYS_CALIBRATION_STATE_IDLE;
     _service.status.session_id = 0U;
     _service.status.current_level = 0U;
+    _service.status.staged_valid = BOOL_FALSE;
+    _service.status.staged_length = 0U;
+    sys_calibration_service_restore_committed_context();
     sys_calibration_service_finish(session_id, seq,
                                    SYS_CALIBRATION_OP_RELEASE,
                                    SYS_CALIBRATION_RESULT_OK,

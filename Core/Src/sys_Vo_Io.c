@@ -502,39 +502,8 @@ void error_report_process(void)
                    Io_value = ((u32)ADC_Value4*100000U)/((u32)OUTPUT_CUR_SENSOR*834U);      //  电流单位mA     参考电压3.3V    50毫欧/8.3333倍    100W以下
                }
 
-  
-        
-        
-              /* if(MID==3) //100W 输入功率和电流偏大 的处理
-               {
-                   if(Vo_value>25)
-                   {
-                      Vo_value-=5;
-                   }
-                   else if(Vo_value>10)
-                   {
-                     Vo_value-=10;
-                   }
-                   if(Io_value>10)
-                   {
-                     Io_value-=15;
-                   }
-
-                }
-
-                
-                if(MID==2) //75W 输入功率和电流偏大 的处理
-                {
-                   if(Vo_value>25)
-                   {
-                      Vo_value-=5;
-                   }
-                   else if(Vo_value>10)
-                   {
-                     Vo_value-=10;
-                   }
-                }*/
-               if (MID == SYS_CALIBRATION_50W_MID)
+               if (sys_product_profile_runtime_matches(
+                       MID, OUTPUT_CUR_SENSOR, HWMAX_OUTCUR) == BOOL_TRUE)
                {
                    u16 calibrated_current_ma;
                    if (sys_calibration_service_correct_output_current(
@@ -545,11 +514,15 @@ void error_report_process(void)
                }
                Po_value = ((u32)Vo_value*Io_value)/1000U;   //单位0.1W
 
-               /* 50W固件的额定功率和绝对过流均为锁存式fail-off门禁。 */
-               if (MID == SYS_CALIBRATION_50W_MID &&
-                   (Po_value > SYS_CALIBRATION_50W_POWER_LIMIT_01W ||
+               /* Current compiled profile owns maximum power and fail current. */
+               if (sys_product_profile_runtime_matches(
+                       MID, OUTPUT_CUR_SENSOR, HWMAX_OUTCUR) != BOOL_TRUE ||
+                   Po_value >
+                       ((u32)sys_product_profile_current()->rated_power_w * 10U *
+                        (1000U + sys_product_profile_current()->
+                                     power_limit_tolerance_permille)) / 1000U ||
                     sys_calibration_safety_is_absolute_overcurrent(Io_value) ==
-                        BOOL_TRUE))
+                        BOOL_TRUE)
                {
                    Error_1_OL = 1U;
                    sys_calibration_service_force_fault();
