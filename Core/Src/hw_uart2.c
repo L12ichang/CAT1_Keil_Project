@@ -12,23 +12,21 @@
 #include "hw_uart2.h"
 #include "hw_uart1.h"
 
-
-
 UART_HandleTypeDef huart2;
-
-
 
 #ifdef  _4G_CAT_1
 
-
+/*
+ * BL0942 is a fixed-frame request/response device.  Keep one UART transaction
+ * active for the whole frame instead of re-arming RX for every byte.  This
+ * removes the software receive gaps that can turn normal interrupt latency
+ * into ORE/lost-byte failures during long-term operation.
+ */
 static u8 * volatile _buffer;
-u8 rx3_buffer[1];// HAL_UART_Receive_IT(&huart2, (uint8_t*)rx3_buffer, 1);中断需要，可能是_buffer指针在初始下是空，无法正常产生中断
-//uint8_t u8_buffer[1024];
-static volatile u8 _index;
-static volatile u8 _tx_length;
 static volatile u8 _rx_length;
-static volatile hw_bl0942_state_en _bl0942_state =  BL0942_STATE_IDLE;
+static volatile hw_bl0942_state_en _bl0942_state = BL0942_STATE_IDLE;
 static volatile u32 hw_uart2_error_count = 0;
+static u8 _tx_shadow[6];
 
 #if BL0942_REPRO_TEST_ENABLE
 volatile u8  g_bl0942_repro_inject_once = 0;
@@ -47,191 +45,166 @@ volatile u32 g_bl0942_repro_rx_fail_count = 0;
 volatile u32 g_bl0942_repro_force_recover_count = 0;
 #endif
 
-static void hw_bl0942_uart_abort_rx(void)
+static void hw_bl0942_uart_clear_transaction(void)
 {
-    (void)HAL_UART_AbortReceive(&huart2);
-    (void)__HAL_UART_FLUSH_DRREGISTER(&huart2);
+    _buffer = 0;
+    _rx_length = 0;
 }
-
-static void hw_bl0942_uart_start_rx(void)
-{
-    if(_rx_length == 0 || _buffer == 0)
-    {
-        _bl0942_state = BL0942_STATE_READ_READY;
-        return;
-    }
-
-    (void)HAL_UART_Receive_IT(&huart2, (uint8_t*)_buffer, 1);
-}
-
-
 
 hw_bl0942_state_en hw_bl0942_get_state(void)
 {
     return (_bl0942_state);
 }
 
-
 void hw_bl0942_uart_write(u8 * buf, u8 length)
 {
-    _bl0942_state = BL0942_STATE_WRITE;
-    _buffer = buf;
-    _index = 1;
-    _tx_length = length;    
-    HAL_UART_Transmit_IT(&huart2, (uint8_t*)_buffer, 1);
-}
-
-
-//buf放发送的两个字节，接收到的数据也放里面。length 接收的数据长度，包括校验值
-void hw_bl0942_uart_read(u8 * buf, u8 length)
-{
-#if BL0942_REPRO_TEST_ENABLE
     HAL_StatusTypeDef uart_ret;
-#endif
+    u8 i;
 
-    _bl0942_state = BL0942_STATE_READ_TX;
-    _buffer = buf;
-    _index = 1;
-    _tx_length = 2;
-    _rx_length = length;
-    hw_bl0942_uart_abort_rx();
-#if BL0942_REPRO_TEST_ENABLE
-    uart_ret = HAL_UART_Transmit_IT(&huart2, (uint8_t*)_buffer, 1);
+    if(buf == 0 || length == 0U || length > sizeof(_tx_shadow))
+    {
+        hw_uart2_error_count++;
+        _bl0942_state = BL0942_STATE_IDLE;
+        return;
+    }
+
+    for(i = 0U; i < length; ++i)
+    {
+        _tx_shadow[i] = buf[i];
+    }
+
+    _bl0942_state = BL0942_STATE_WRITE;
+    uart_ret = HAL_UART_Transmit_IT(&huart2, (uint8_t*)_tx_shadow, length);
     if(uart_ret != HAL_OK)
     {
+#if BL0942_REPRO_TEST_ENABLE
         g_bl0942_repro_tx_fail_count++;
-    }
-#else
-    HAL_UART_Transmit_IT(&huart2, (uint8_t*)_buffer, 1);
 #endif
-
+        hw_uart2_error_count++;
+        _bl0942_state = BL0942_STATE_IDLE;
+    }
 }
 
+/* buf的前两个字节为读命令，接收完成后buf保存完整回复帧。 */
+void hw_bl0942_uart_read(u8 * buf, u8 length)
+{
+    HAL_StatusTypeDef rx_ret;
+    HAL_StatusTypeDef tx_ret;
+
+    if(buf == 0 || length == 0U)
+    {
+        hw_uart2_error_count++;
+        _bl0942_state = BL0942_STATE_IDLE;
+        return;
+    }
+
+    /*
+     * The caller reuses one buffer for request and response.  Copy the two-byte
+     * request first so RX can be armed for the complete frame before TX starts.
+     */
+    _tx_shadow[0] = buf[0];
+    _tx_shadow[1] = buf[1];
+    _buffer = buf;
+    _rx_length = length;
+    _bl0942_state = BL0942_STATE_READ_TX;
+
+    /* BL0942 has no unsolicited traffic; clear stale UART error state before a new transaction. */
+    __HAL_UART_CLEAR_OREFLAG(&huart2);
+    huart2.ErrorCode = HAL_UART_ERROR_NONE;
+
+    rx_ret = HAL_UART_Receive_IT(&huart2, (uint8_t*)_buffer, _rx_length);
+    if(rx_ret != HAL_OK)
+    {
+#if BL0942_REPRO_TEST_ENABLE
+        g_bl0942_repro_rx_fail_count++;
+#endif
+        hw_uart2_error_count++;
+        hw_bl0942_uart_clear_transaction();
+        _bl0942_state = BL0942_STATE_IDLE;
+        return;
+    }
+
+    tx_ret = HAL_UART_Transmit_IT(&huart2, (uint8_t*)_tx_shadow, 2U);
+    if(tx_ret != HAL_OK)
+    {
+#if BL0942_REPRO_TEST_ENABLE
+        g_bl0942_repro_tx_fail_count++;
+#endif
+        hw_uart2_error_count++;
+        (void)HAL_UART_AbortReceive(&huart2);
+        hw_bl0942_uart_clear_transaction();
+        _bl0942_state = BL0942_STATE_IDLE;
+        return;
+    }
+
+    _bl0942_state = BL0942_STATE_READ_RX;
+}
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-  if (huart->Instance == USART2)
-  {
+    if (huart->Instance == USART2)
+    {
 #if BL0942_REPRO_TEST_ENABLE
-          g_bl0942_repro_rx_cplt_count++;
+        g_bl0942_repro_rx_cplt_count++;
 #endif
-
-          if(_bl0942_state == BL0942_STATE_READ_RX)
-            {
-                if(_index < _rx_length)
-                {
-                    ++_index;
-                }
-
-#if BL0942_REPRO_TEST_ENABLE
-                /*
-                 * One-shot real ORE injection: after the fourth received
-                 * byte, deliberately leave RX unarmed.  BL0942 continues
-                 * transmitting, so USART2 hardware can assert ORE.
-                 */
-                if((g_bl0942_repro_inject_once != 0U) && (_index == 4U))
-                {
-                    g_bl0942_repro_inject_once = 0U;
-                    g_bl0942_repro_inject_count++;
-                    return;
-                }
-#endif
-
-                if(_index >= _rx_length)
-                {
-                    _bl0942_state = BL0942_STATE_READ_READY;
-                }
-                else
-                {
-#if BL0942_REPRO_TEST_ENABLE
-                    if(HAL_UART_Receive_IT(&huart2,
-                                           (uint8_t*)_buffer + _index,
-                                           1) != HAL_OK)
-                    {
-                        g_bl0942_repro_rx_fail_count++;
-                    }
-#else
-                    HAL_UART_Receive_IT(&huart2, (uint8_t*)_buffer + _index, 1);
-#endif
-                }
-            }
-          else
-            {
-#if BL0942_REPRO_TEST_ENABLE
-                g_bl0942_repro_dummy_rx_count++;
-#endif
-            }
-  }
-  HAL_UART_Rx1CpltCallback(huart);
+        if(_bl0942_state == BL0942_STATE_READ_RX)
+        {
+            _bl0942_state = BL0942_STATE_READ_READY;
+        }
+    }
+    HAL_UART_Rx1CpltCallback(huart);
 }
 
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
-  if (huart->Instance == USART2)
-  {
-       if(_index < _tx_length)
+    if (huart->Instance == USART2)
     {
-     
-        HAL_UART_Transmit_IT(&huart2, (uint8_t*)_buffer + _index, 1);
-        ++_index;
-    }
-    else
-    {
-        if(_bl0942_state == BL0942_STATE_READ_TX)
-        {
-            _bl0942_state = BL0942_STATE_READ_RX;
-            _index = 0;
-            hw_bl0942_uart_start_rx();
-        }
-        else
+        if(_bl0942_state == BL0942_STATE_WRITE)
         {
             _bl0942_state = BL0942_STATE_IDLE;
         }
-        
     }
 
-}
-  
-  HAL_UART_Tx1CpltCallback(huart);
- 
+    HAL_UART_Tx1CpltCallback(huart);
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
-  if (huart->Instance == USART2)
-  {
+    if (huart->Instance == USART2)
+    {
 #if BL0942_REPRO_TEST_ENABLE
-      g_bl0942_repro_error_count++;
-      g_bl0942_repro_last_error = huart->ErrorCode;
+        g_bl0942_repro_error_count++;
+        g_bl0942_repro_last_error = huart->ErrorCode;
 
-      if((huart->ErrorCode & HAL_UART_ERROR_ORE) != 0U)
-      {
-          g_bl0942_repro_ore_count++;
-      }
-      if((huart->ErrorCode & HAL_UART_ERROR_FE) != 0U)
-      {
-          g_bl0942_repro_fe_count++;
-      }
-      if((huart->ErrorCode & HAL_UART_ERROR_NE) != 0U)
-      {
-          g_bl0942_repro_ne_count++;
-      }
+        if((huart->ErrorCode & HAL_UART_ERROR_ORE) != 0U)
+        {
+            g_bl0942_repro_ore_count++;
+        }
+        if((huart->ErrorCode & HAL_UART_ERROR_FE) != 0U)
+        {
+            g_bl0942_repro_fe_count++;
+        }
+        if((huart->ErrorCode & HAL_UART_ERROR_NE) != 0U)
+        {
+            g_bl0942_repro_ne_count++;
+        }
 #endif
 
-      hw_uart2_error_count++;
-      _bl0942_state = BL0942_STATE_IDLE;
-      _index = 0;
-      hw_bl0942_uart_abort_rx();
-      /* F1上ORE/FE/NE共用"读SR再读DR"序列清除，一次调用即清全部 */
-      __HAL_UART_CLEAR_OREFLAG(&huart2);
-      (void)HAL_UART_Receive_IT(&huart2, (uint8_t*)rx3_buffer, 1);
-  }
-  else if (huart->Instance == USART1)
-  {
-      /* USART1(4G模组口)发生ORE/FE/NE错误后，HAL会关闭RXNEIE/EIE中断（阻塞性ORE走UART_EndRxTransfer）。
-         必须清除错误标志并重新挂起接收，否则USART1将永久收不到模组数据（假在线）。 */
-      hw_uart1_resume_rx();
-  }
+        hw_uart2_error_count++;
+        (void)HAL_UART_AbortReceive(&huart2);
+        (void)HAL_UART_AbortTransmit(&huart2);
+        /* F1上ORE/FE/NE共用"读SR再读DR"序列清除，一次调用即清全部。 */
+        __HAL_UART_CLEAR_OREFLAG(&huart2);
+        huart2.ErrorCode = HAL_UART_ERROR_NONE;
+        hw_bl0942_uart_clear_transaction();
+        _bl0942_state = BL0942_STATE_IDLE;
+    }
+    else if (huart->Instance == USART1)
+    {
+        /* USART1(4G模组口)发生ORE/FE/NE错误后，HAL会关闭RXNEIE/EIE中断（阻塞性ORE走UART_EndRxTransfer）。
+           必须清除错误标志并重新挂起接收，否则USART1将永久收不到模组数据（假在线）。 */
+        hw_uart1_resume_rx();
+    }
 }
 
 u32 hw_uart2_get_error_count(void)
@@ -246,17 +219,12 @@ void hw_bl0942_repro_force_recover(void)
     __HAL_UART_CLEAR_OREFLAG(&huart2);
     huart2.ErrorCode = HAL_UART_ERROR_NONE;
 
+    hw_bl0942_uart_clear_transaction();
     _bl0942_state = BL0942_STATE_IDLE;
-    _index = 0;
-    _tx_length = 0;
-    _rx_length = 0;
-    _buffer = 0;
 
     g_bl0942_repro_force_recover_count++;
 }
 #endif
-
-
 
 
 #else
@@ -396,9 +364,7 @@ void hw_uart2_init(void)
     HAL_NVIC_EnableIRQ(USART2_IRQn);
   /* USER CODE BEGIN USART2_MspInit 1 */
    
-  #ifdef  _4G_CAT_1  
-  HAL_UART_Receive_IT(&huart2, (uint8_t*)rx3_buffer, 1);// HAL_UART_Receive_IT(&huart2, (uint8_t*)rx3_buffer, 1);中断需要，可能是_buffer指针在初始下是空，无法正常产生中断
-  #else
+  #ifndef  _4G_CAT_1
    HAL_UART_Receive_IT(&huart2, (uint8_t*)rx2_buffer, 1);
   #endif
   
@@ -486,7 +452,6 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* huart)
 }
 
 #endif
-
 
 
 
