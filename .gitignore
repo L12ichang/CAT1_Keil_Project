@@ -13,6 +13,7 @@ RTE/
 # 把测试文件中的文件不进行上报git
 tests/
 *.json
+!protocol/fixtures/CAL_MQTT_V2/RAW_50W_SNAPSHOT.json
 out/
 *.jsonl
 

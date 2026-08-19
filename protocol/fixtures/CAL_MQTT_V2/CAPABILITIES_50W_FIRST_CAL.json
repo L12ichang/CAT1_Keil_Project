@@ -45,6 +45,9 @@
       "calibrationNonzeroOutputAllowed": true,
       "configuredRatedCurrentWriteReadbackAvailable": true,
       "validationPercentOutputAvailable": true,
+      "rawMeasurementSupported": true,
+      "rawSchemaVersion": 1,
+      "rawMaxAgeMs": 500,
       "commitAvailable": true,
       "safetyReady": true,
       "blockCode": "FIRST_CALIBRATION_REQUIRED"

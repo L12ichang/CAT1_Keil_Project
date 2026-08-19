@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "sys_calibration_mqtt.h"
+#include "sys_calibration_snapshot.h"
 #include "sys_calibration_service.h"
 #include "sys_calibration_storage.h"
 #include "sys_product_profile.h"
@@ -35,10 +36,85 @@ u32 bl0942_uart_error_count;
 u32 bl0942_compat_frame_count;
 
 static cJSON *captured_response;
+static char captured_response_text[ZK_JSON_BUF_SIZE];
 static u32 test_tick = 1000U;
 static u16 last_level;
 static u32 set_level_calls;
 static u8 committed_payload[SYS_CALIBRATION_DRIVER_TABLE_PAYLOAD_LENGTH];
+
+#define TEST_TARGET_CJSON_NODE_SIZE 40U
+#define TEST_TX_ALLOCATION_LIMIT    512U
+
+static void *test_tx_allocations[TEST_TX_ALLOCATION_LIMIT];
+static size_t test_tx_allocation_count;
+static size_t test_tx_pool_offset;
+static size_t test_tx_pool_peak;
+static size_t test_tx_capacity = ZK_CJSON_TX_POOL_SIZE;
+static boolean_en test_tx_exhausted;
+
+static size_t test_align8(size_t size)
+{
+    return (size + 7U) & ~(size_t)7U;
+}
+
+static void test_tx_release(void)
+{
+    size_t index;
+    cJSON_InitHooks(NULL);
+    for (index = 0U; index < test_tx_allocation_count; ++index)
+    {
+        free(test_tx_allocations[index]);
+    }
+    test_tx_allocation_count = 0U;
+    test_tx_pool_offset = 0U;
+}
+
+static void *test_tx_malloc(size_t size)
+{
+    size_t charged = (size == sizeof(cJSON)) ?
+                     TEST_TARGET_CJSON_NODE_SIZE : test_align8(size);
+    void *allocation;
+
+    if (charged > test_tx_capacity - test_tx_pool_offset ||
+        test_tx_allocation_count >= TEST_TX_ALLOCATION_LIMIT)
+    {
+        test_tx_exhausted = BOOL_TRUE;
+        return NULL;
+    }
+    allocation = malloc(size);
+    if (allocation == NULL)
+    {
+        test_tx_exhausted = BOOL_TRUE;
+        return NULL;
+    }
+    test_tx_allocations[test_tx_allocation_count++] = allocation;
+    test_tx_pool_offset += charged;
+    if (test_tx_pool_offset > test_tx_pool_peak)
+    {
+        test_tx_pool_peak = test_tx_pool_offset;
+    }
+    return allocation;
+}
+
+static void test_tx_free(void *pointer)
+{
+    (void)pointer;
+}
+
+static void test_tx_begin(void)
+{
+    cJSON_Hooks hooks;
+    test_tx_release();
+    test_tx_exhausted = BOOL_FALSE;
+    hooks.malloc_fn = test_tx_malloc;
+    hooks.free_fn = test_tx_free;
+    cJSON_InitHooks(&hooks);
+}
+
+boolean_en zk_cjson_tx_allocation_ok(void)
+{
+    return test_tx_exhausted == BOOL_TRUE ? BOOL_FALSE : BOOL_TRUE;
+}
 
 int dma_printf(const char *format, ...)
 {
@@ -69,6 +145,7 @@ cJSON *zk_create_root_from_header(const zk_message_header_t *header,
     {
         return NULL;
     }
+    test_tx_begin();
     root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "SN", header->sn);
     cJSON_AddStringToObject(root, "TM", "2026-08-17 10:00:00");
@@ -85,9 +162,9 @@ cJSON *zk_create_root_from_header(const zk_message_header_t *header,
 int zk_send_json_root(cJSON *root, const char *topic)
 {
     (void)topic;
-    cJSON_Delete(captured_response);
-    captured_response = cJSON_Duplicate(root, 1);
-    return captured_response == NULL ? -1 : 0;
+    memset(captured_response_text, 0, sizeof(captured_response_text));
+    return cJSON_PrintPreallocated(root, captured_response_text,
+                                  (int)sizeof(captured_response_text), 0) ? 0 : -1;
 }
 
 sys_product_current_validation_en factory_user_validate_runtime_current(
@@ -158,6 +235,31 @@ static void setup_service(void)
     sys_calibration_service_bind_bound_voltage(bound_voltage);
     sys_calibration_service_restore_boot(BOOL_FALSE, BOOL_TRUE);
     sys_calibration_service_set_safety_ready(BOOL_TRUE);
+}
+
+static void prepare_raw_snapshot(void)
+{
+    static const u8 meter_frame[SYS_CALIBRATION_METER_RAW_FRAME_LENGTH] = {0};
+
+    Vo_value = 560U;
+    Io_value = 445U;
+    Po_value = 249U;
+    ac_voltage_8209 = 2300U;
+    Z_ac_current = 25U;
+    ac_powerpa = 120U;
+    sys_calibration_snapshot_init();
+    sys_calibration_snapshot_publish_meter(
+        test_tick, 11U, 22U, 33U, 44, 55U, 5000U, 0U, meter_frame,
+        SYS_CALIBRATION_METER_FRAME_VALID |
+            SYS_CALIBRATION_METER_HEAD_VALID |
+            SYS_CALIBRATION_METER_CHECKSUM_VALID,
+        0U);
+    sys_calibration_snapshot_publish_adc(
+        test_tick, 111U, 222U, 333U, 777U,
+        SYS_CALIBRATION_ADC_SAMPLE_VALID);
+    sys_calibration_snapshot_prepare_pwm(50U, 50U);
+    sys_calibration_snapshot_publish_pwm(
+        1U, 100U, 100U, 1U, SYS_CALIBRATION_PWM_SAMPLE_VALID);
 }
 
 static int expect_true(int condition, const char *name)
@@ -266,10 +368,20 @@ static int run_exchange(cJSON *request, cJSON *expected_response,
     copy_header_string(request, "CT", header.ct, sizeof(header.ct));
     cJSON_Delete(captured_response);
     captured_response = NULL;
+    captured_response_text[0] = '\0';
     if (sys_calibration_mqtt_handle(request, &header) != BOOL_TRUE ||
-        captured_response == NULL)
+        captured_response_text[0] == '\0')
     {
+        test_tx_release();
         fprintf(stderr, "FAIL: %s produced no response\n", name);
+        return 1;
+    }
+    test_tx_release();
+    captured_response = cJSON_Parse(captured_response_text);
+    if (captured_response == NULL)
+    {
+        fprintf(stderr, "FAIL: %s response is not valid JSON: %s\n",
+                name, captured_response_text);
         return 1;
     }
     actual_text = cJSON_PrintUnformatted(captured_response);
@@ -426,6 +538,69 @@ static int validate_percent_boundaries(void)
     return failures;
 }
 
+static int validate_stale_raw_rejected(void)
+{
+    static const char request_text[] =
+        "{\"SN\":\"TEST50W0000001\",\"TM\":\"2026-08-19 06:50:44\","
+        "\"SV\":\"cal\",\"ID\":\"W009\",\"CT\":\"R\",\"DT\":{"
+        "\"op\":\"RAW\",\"protocolVersion\":2,"
+        "\"sessionId\":1234,\"seq\":9}}";
+    static const char expected_text[] =
+        "{\"DT\":{\"op\":\"RAW\",\"protocolVersion\":2,\"seq\":9,"
+        "\"result\":1,\"ack\":false,\"readback\":{"
+        "\"sessionId\":1234,\"lastSeq\":9}}}";
+    cJSON *request = cJSON_Parse(request_text);
+    cJSON *expected = cJSON_Parse(expected_text);
+    cJSON *dt;
+    int failures;
+
+    sys_calibration_snapshot_init();
+    sys_calibration_snapshot_publish_adc(
+        0U, 1U, 2U, 3U, 4U, SYS_CALIBRATION_ADC_SAMPLE_VALID);
+    sys_calibration_snapshot_prepare_pwm(50U, 50U);
+    sys_calibration_snapshot_publish_pwm(
+        0U, 100U, 100U, 1U, SYS_CALIBRATION_PWM_SAMPLE_VALID);
+    failures = run_exchange(request, expected, "stale RAW fails closed");
+    dt = captured_response == NULL ? NULL :
+         cJSON_GetObjectItemCaseSensitive(captured_response, "DT");
+    failures += expect_true(
+        dt != NULL && cJSON_GetObjectItemCaseSensitive(dt, "raw") == NULL,
+        "stale RAW does not emit placeholder measurements");
+    cJSON_Delete(request);
+    cJSON_Delete(expected);
+    return failures;
+}
+
+static int validate_tx_exhaustion_raw_rejected(void)
+{
+    static const char request_text[] =
+        "{\"SN\":\"TEST50W0000001\",\"TM\":\"2026-08-19 06:50:45\","
+        "\"SV\":\"cal\",\"ID\":\"W010\",\"CT\":\"R\",\"DT\":{"
+        "\"op\":\"RAW\",\"protocolVersion\":2,"
+        "\"sessionId\":1234,\"seq\":10}}";
+    static const char expected_text[] =
+        "{\"DT\":{\"op\":\"RAW\",\"protocolVersion\":2,\"seq\":10,"
+        "\"result\":1,\"ack\":false}}";
+    cJSON *request = cJSON_Parse(request_text);
+    cJSON *expected = cJSON_Parse(expected_text);
+    cJSON *dt;
+    int failures;
+
+    prepare_raw_snapshot();
+    test_tx_capacity = 1024U;
+    failures = run_exchange(request, expected,
+                            "TX exhaustion rebuilds RAW as NOT_AVAILABLE");
+    test_tx_capacity = ZK_CJSON_TX_POOL_SIZE;
+    dt = captured_response == NULL ? NULL :
+         cJSON_GetObjectItemCaseSensitive(captured_response, "DT");
+    failures += expect_true(
+        dt != NULL && cJSON_GetObjectItemCaseSensitive(dt, "raw") == NULL,
+        "TX exhaustion never emits a partial RAW object");
+    cJSON_Delete(request);
+    cJSON_Delete(expected);
+    return failures;
+}
+
 static int validate_rejected_wire_shapes(void)
 {
     static const char flat_begin_text[] =
@@ -444,9 +619,18 @@ static int validate_rejected_wire_shapes(void)
         "\"sessionId\":999,\"seq\":1,\"payloadHex\":[0]}}";
     static const char expected_text[] =
         "{\"DT\":{\"protocolVersion\":2,\"result\":11,\"ack\":false}}";
+    static const char legacy_raw_text[] =
+        "{\"SN\":\"TEST50W0000001\",\"TM\":\"2026-08-19 06:50:43\","
+        "\"SV\":\"cal\",\"ID\":\"X003\",\"CT\":\"R\",\"DT\":{"
+        "\"op\":\"RAW\",\"protocolVersion\":2,\"sessionId\":999,"
+        "\"seq\":1,\"frame\":\"AABBCC01\",\"direction\":0}}";
+    static const char protocol_error_text[] =
+        "{\"DT\":{\"protocolVersion\":2,\"result\":6,\"ack\":false}}";
     cJSON *flat_begin = cJSON_Parse(flat_begin_text);
     cJSON *array_stage = cJSON_Parse(array_stage_text);
     cJSON *expected = cJSON_Parse(expected_text);
+    cJSON *legacy_raw = cJSON_Parse(legacy_raw_text);
+    cJSON *protocol_error = cJSON_Parse(protocol_error_text);
     int failures = 0;
 
     setup_service();
@@ -455,9 +639,14 @@ static int validate_rejected_wire_shapes(void)
     setup_service();
     failures += run_exchange(array_stage, expected,
                              "payloadHex array is rejected fail-closed");
+    setup_service();
+    failures += run_exchange(legacy_raw, protocol_error,
+                             "RAW rejects the unrelated DC5200 frame");
     cJSON_Delete(flat_begin);
     cJSON_Delete(array_stage);
     cJSON_Delete(expected);
+    cJSON_Delete(legacy_raw);
+    cJSON_Delete(protocol_error);
     return failures;
 }
 
@@ -478,11 +667,18 @@ int main(int argc, char **argv)
     failures += run_fixture(argv[1], "BEGIN_50W_56V.json");
     failures += run_fixture(argv[1], "STAGE_50W_56V_198B.json");
     failures += run_fixture(argv[1], "COMMIT_READBACK_50W_56V.json");
+    prepare_raw_snapshot();
+    failures += run_fixture(argv[1], "RAW_50W_SNAPSHOT.json");
+    failures += expect_true(test_tx_pool_peak <= ZK_CJSON_TX_POOL_SIZE,
+                            "all V2 responses fit the production 4 KiB TX pool");
+    failures += validate_stale_raw_rejected();
+    failures += validate_tx_exhaustion_raw_rejected();
     failures += expect_true(last_level == 100U && set_level_calls == 1U,
                             "SET_VALIDATION_PERCENT 50 is temporary and bounded");
     failures += validate_percent_boundaries();
     cJSON_Delete(captured_response);
     if (failures != 0) return 1;
-    printf("CAL_MQTT_V2 shared fixture host tests: PASS\n");
+    printf("CAL_MQTT_V2 shared fixture host tests: PASS (TX peak %lu/%u bytes)\n",
+           (unsigned long)test_tx_pool_peak, (unsigned)ZK_CJSON_TX_POOL_SIZE);
     return 0;
 }

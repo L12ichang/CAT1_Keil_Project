@@ -23,6 +23,9 @@
 #include <stdio.h>
 #include <string.h>
 
+#define SYS_CALIBRATION_RAW_SCHEMA_VERSION 1U
+#define SYS_CALIBRATION_RAW_MAX_AGE_MS     500U
+
 #define SYS_CALIBRATION_MQTT_PROTOCOL_VERSION 2U
 
 static const char *sys_calibration_mqtt_result_reason(
@@ -438,18 +441,67 @@ static void sys_calibration_mqtt_add_status(
     cJSON_AddItemToObject(dt, "readback", readback);
 }
 
-static void sys_calibration_mqtt_add_raw(cJSON *dt, u32 now_ms)
+static boolean_en sys_calibration_mqtt_add_raw_readback(
+    cJSON *dt,
+    const sys_calibration_service_status_st *status)
 {
-    sys_calibration_snapshot_aggregate_st snapshot;
+    cJSON *readback;
+
+    if (dt == NULL || status == NULL)
+    {
+        return BOOL_FALSE;
+    }
+    readback = zk_cjson_create_tx_object("cal.raw.readback");
+    if (readback == NULL)
+    {
+        return BOOL_FALSE;
+    }
+    cJSON_AddNumberToObject(readback, "sessionId", status->session_id);
+    cJSON_AddNumberToObject(readback, "lastSeq", status->last_request_seq);
+    cJSON_AddNumberToObject(readback, "currentLevel", status->current_level);
+    cJSON_AddItemToObject(dt, "readback", readback);
+    return (zk_cjson_tx_allocation_ok() == BOOL_TRUE &&
+            cJSON_GetObjectItem(dt, "readback") == readback) ?
+           BOOL_TRUE : BOOL_FALSE;
+}
+
+static boolean_en sys_calibration_mqtt_raw_snapshot_ready(
+    u32 now_ms,
+    const sys_calibration_service_status_st *status,
+    sys_calibration_snapshot_aggregate_st *snapshot)
+{
+    if (status == NULL || snapshot == NULL)
+    {
+        return BOOL_FALSE;
+    }
+    /* Meter diagnostics are best-effort; ADC/PWM are the required RAW sources. */
+    (void)sys_calibration_snapshot_read_aggregate(now_ms, snapshot);
+    if (status->current_level > 200U ||
+        (status->current_level % 2U) != 0U ||
+        (snapshot->valid_flags & SYS_CALIBRATION_AGGREGATE_ADC_PRESENT) == 0U ||
+        (snapshot->valid_flags & SYS_CALIBRATION_AGGREGATE_PWM_PRESENT) == 0U ||
+        (snapshot->adc.valid_flags & SYS_CALIBRATION_ADC_SAMPLE_VALID) == 0U ||
+        (snapshot->pwm.valid_flags & SYS_CALIBRATION_PWM_SAMPLE_VALID) == 0U ||
+        snapshot->adc_age_ms > SYS_CALIBRATION_RAW_MAX_AGE_MS ||
+        snapshot->pwm.requested_percent != (status->current_level / 2U))
+    {
+        return BOOL_FALSE;
+    }
+    return BOOL_TRUE;
+}
+
+static boolean_en sys_calibration_mqtt_add_raw(
+    cJSON *dt,
+    const sys_calibration_snapshot_aggregate_st *snapshot)
+{
     cJSON *raw;
     cJSON *meter;
     cJSON *adc;
     cJSON *pwm;
 
-    if (dt == NULL ||
-        sys_calibration_snapshot_read_aggregate(now_ms, &snapshot) != BOOL_TRUE)
+    if (dt == NULL || snapshot == NULL)
     {
-        return;
+        return BOOL_FALSE;
     }
     raw = zk_cjson_create_tx_object("cal.raw");
     meter = zk_cjson_create_tx_object("cal.raw.meter");
@@ -461,51 +513,56 @@ static void sys_calibration_mqtt_add_raw(cJSON *dt, u32 now_ms)
         cJSON_Delete(meter);
         cJSON_Delete(adc);
         cJSON_Delete(pwm);
-        return;
+        return BOOL_FALSE;
     }
-    cJSON_AddNumberToObject(raw, "validFlags", snapshot.valid_flags);
-    cJSON_AddNumberToObject(raw, "meterAdcSkewMs", snapshot.meter_adc_skew_ms);
-    cJSON_AddNumberToObject(raw, "meterPwmSkewMs", snapshot.meter_pwm_skew_ms);
+    cJSON_AddNumberToObject(raw, "schemaVersion",
+                            SYS_CALIBRATION_RAW_SCHEMA_VERSION);
+    cJSON_AddBoolToObject(raw, "available", 1);
+    cJSON_AddNumberToObject(raw, "validFlags", snapshot->valid_flags);
+    cJSON_AddNumberToObject(raw, "meterAdcSkewMs", snapshot->meter_adc_skew_ms);
+    cJSON_AddNumberToObject(raw, "meterPwmSkewMs", snapshot->meter_pwm_skew_ms);
     cJSON_AddNumberToObject(raw, "inputVoltage01V", ac_voltage_8209);
     cJSON_AddNumberToObject(raw, "inputCurrentMa", Z_ac_current);
     cJSON_AddNumberToObject(raw, "inputPower001W", ac_powerpa);
     cJSON_AddNumberToObject(raw, "outputVoltage01V", Vo_value);
     cJSON_AddNumberToObject(raw, "outputCurrentMa", Io_value);
     cJSON_AddNumberToObject(raw, "outputPower01W", Po_value);
-    cJSON_AddNumberToObject(meter, "seq", snapshot.meter.seq);
-    cJSON_AddNumberToObject(meter, "ageMs", snapshot.meter_age_ms);
-    cJSON_AddNumberToObject(meter, "validFlags", snapshot.meter.valid_flags);
-    cJSON_AddNumberToObject(meter, "iRmsRaw", snapshot.meter.i_rms_raw);
-    cJSON_AddNumberToObject(meter, "vRmsRaw", snapshot.meter.v_rms_raw);
-    cJSON_AddNumberToObject(meter, "iFastRmsRaw", snapshot.meter.i_fast_rms_raw);
-    cJSON_AddNumberToObject(meter, "wattRaw", snapshot.meter.watt_raw);
-    cJSON_AddNumberToObject(meter, "cfCntRaw", snapshot.meter.cf_cnt_raw);
-    cJSON_AddNumberToObject(meter, "freqRaw", snapshot.meter.freq_raw);
-    cJSON_AddNumberToObject(meter, "statusRaw", snapshot.meter.status_raw);
+    cJSON_AddNumberToObject(meter, "seq", snapshot->meter.seq);
+    cJSON_AddNumberToObject(meter, "ageMs", snapshot->meter_age_ms);
+    cJSON_AddNumberToObject(meter, "validFlags", snapshot->meter.valid_flags);
+    cJSON_AddNumberToObject(meter, "iRmsRaw", snapshot->meter.i_rms_raw);
+    cJSON_AddNumberToObject(meter, "vRmsRaw", snapshot->meter.v_rms_raw);
+    cJSON_AddNumberToObject(meter, "iFastRmsRaw", snapshot->meter.i_fast_rms_raw);
+    cJSON_AddNumberToObject(meter, "wattRaw", snapshot->meter.watt_raw);
+    cJSON_AddNumberToObject(meter, "cfCntRaw", snapshot->meter.cf_cnt_raw);
+    cJSON_AddNumberToObject(meter, "freqRaw", snapshot->meter.freq_raw);
+    cJSON_AddNumberToObject(meter, "statusRaw", snapshot->meter.status_raw);
     cJSON_AddNumberToObject(meter, "frameErrors", bl0942_checksum_error_count);
     cJSON_AddNumberToObject(meter, "timeoutErrors", bl0942_timeout_count);
     cJSON_AddNumberToObject(meter, "uartErrors", bl0942_uart_error_count);
     cJSON_AddNumberToObject(meter, "compatFrames", bl0942_compat_frame_count);
-    cJSON_AddNumberToObject(adc, "seq", snapshot.adc.seq);
-    cJSON_AddNumberToObject(adc, "ageMs", snapshot.adc_age_ms);
-    cJSON_AddNumberToObject(adc, "validFlags", snapshot.adc.valid_flags);
-    cJSON_AddNumberToObject(adc, "ntcRaw", snapshot.adc.ntc_raw);
-    cJSON_AddNumberToObject(adc, "voutRaw", snapshot.adc.vout_raw);
-    cJSON_AddNumberToObject(adc, "leakRaw", snapshot.adc.leak_raw);
-    cJSON_AddNumberToObject(adc, "ioutRaw", snapshot.adc.iout_raw);
-    cJSON_AddNumberToObject(pwm, "seq", snapshot.pwm.seq);
-    cJSON_AddNumberToObject(pwm, "ageMs", snapshot.pwm_age_ms);
+    cJSON_AddNumberToObject(adc, "seq", snapshot->adc.seq);
+    cJSON_AddNumberToObject(adc, "ageMs", snapshot->adc_age_ms);
+    cJSON_AddNumberToObject(adc, "validFlags", snapshot->adc.valid_flags);
+    cJSON_AddNumberToObject(adc, "ntcRaw", snapshot->adc.ntc_raw);
+    cJSON_AddNumberToObject(adc, "voutRaw", snapshot->adc.vout_raw);
+    cJSON_AddNumberToObject(adc, "leakRaw", snapshot->adc.leak_raw);
+    cJSON_AddNumberToObject(adc, "ioutRaw", snapshot->adc.iout_raw);
+    cJSON_AddNumberToObject(pwm, "seq", snapshot->pwm.seq);
+    cJSON_AddNumberToObject(pwm, "ageMs", snapshot->pwm_age_ms);
     cJSON_AddNumberToObject(pwm, "requestedPercent",
-                            snapshot.pwm.requested_percent);
+                            snapshot->pwm.requested_percent);
     cJSON_AddNumberToObject(pwm, "protectedPercent",
-                            snapshot.pwm.protected_percent);
-    cJSON_AddNumberToObject(pwm, "logicalPwm", snapshot.pwm.logical_pwm);
-    cJSON_AddNumberToObject(pwm, "ccr", snapshot.pwm.ccr);
-    cJSON_AddNumberToObject(pwm, "ocoOn", snapshot.pwm.oco_on);
+                            snapshot->pwm.protected_percent);
+    cJSON_AddNumberToObject(pwm, "logicalPwm", snapshot->pwm.logical_pwm);
+    cJSON_AddNumberToObject(pwm, "ccr", snapshot->pwm.ccr);
+    cJSON_AddNumberToObject(pwm, "ocoOn", snapshot->pwm.oco_on);
     cJSON_AddItemToObject(raw, "meter", meter);
     cJSON_AddItemToObject(raw, "adc", adc);
     cJSON_AddItemToObject(raw, "pwm", pwm);
     cJSON_AddItemToObject(dt, "raw", raw);
+    return (zk_cjson_tx_allocation_ok() == BOOL_TRUE &&
+            cJSON_GetObjectItem(dt, "raw") == raw) ? BOOL_TRUE : BOOL_FALSE;
 }
 
 static void sys_calibration_mqtt_add_active_profile(
@@ -571,8 +628,20 @@ static int sys_calibration_mqtt_send_response(
     const char *block_code;
     cJSON *root;
     cJSON *dt;
+    sys_calibration_snapshot_aggregate_st raw_snapshot;
+    boolean_en raw_operation;
     int send_result;
 
+    raw_operation = (operation != NULL && strcmp(operation, "RAW") == 0) ?
+                    BOOL_TRUE : BOOL_FALSE;
+    if (raw_operation == BOOL_TRUE && result == SYS_CALIBRATION_RESULT_OK &&
+        sys_calibration_mqtt_raw_snapshot_ready(
+            HAL_GetTick(), status, &raw_snapshot) != BOOL_TRUE)
+    {
+        result = SYS_CALIBRATION_RESULT_NOT_AVAILABLE;
+    }
+
+rebuild_response:
     root = zk_create_root_from_header(request, 1, (int)result);
     if (root == NULL)
     {
@@ -652,6 +721,11 @@ static int sys_calibration_mqtt_send_response(
             runtime_profile_valid == BOOL_TRUE);
         cJSON_AddBoolToObject(dt, "validationPercentOutputAvailable",
                               SYS_CALIBRATION_CODEC_AVAILABLE != 0U);
+        cJSON_AddBoolToObject(dt, "rawMeasurementSupported", 1);
+        cJSON_AddNumberToObject(dt, "rawSchemaVersion",
+                                SYS_CALIBRATION_RAW_SCHEMA_VERSION);
+        cJSON_AddNumberToObject(dt, "rawMaxAgeMs",
+                                SYS_CALIBRATION_RAW_MAX_AGE_MS);
         cJSON_AddBoolToObject(dt, "commitAvailable",
                               commit_available == BOOL_TRUE);
         cJSON_AddBoolToObject(dt, "safetyReady",
@@ -706,15 +780,30 @@ static int sys_calibration_mqtt_send_response(
     }
     if (capabilities != BOOL_TRUE)
     {
-        sys_calibration_mqtt_add_status(
-            dt, status,
-            (operation != NULL &&
-             strcmp(operation, "READBACK") == 0) ? BOOL_TRUE : BOOL_FALSE);
+        if (raw_operation == BOOL_TRUE)
+        {
+            if (sys_calibration_mqtt_add_raw_readback(dt, status) != BOOL_TRUE)
+            {
+                cJSON_Delete(root);
+                return -1;
+            }
+        }
+        else
+        {
+            sys_calibration_mqtt_add_status(
+                dt, status,
+                (operation != NULL &&
+                 strcmp(operation, "READBACK") == 0) ? BOOL_TRUE : BOOL_FALSE);
+        }
     }
-    if (operation != NULL && strcmp(operation, "RAW") == 0 &&
-        result == SYS_CALIBRATION_RESULT_OK)
+    if (raw_operation == BOOL_TRUE && result == SYS_CALIBRATION_RESULT_OK)
     {
-        sys_calibration_mqtt_add_raw(dt, HAL_GetTick());
+        if (sys_calibration_mqtt_add_raw(dt, &raw_snapshot) != BOOL_TRUE)
+        {
+            cJSON_Delete(root);
+            result = SYS_CALIBRATION_RESULT_NOT_AVAILABLE;
+            goto rebuild_response;
+        }
     }
     send_result = zk_send_json_root(root, NULL);
     cJSON_Delete(root);
@@ -848,8 +937,16 @@ boolean_en sys_calibration_mqtt_handle(
     }
     else if (strcmp(operation, "RAW") == 0)
     {
-        result = sys_calibration_service_snapshot_seq(
-            session_id, HAL_GetTick(), seq, &status);
+        if (cJSON_GetObjectItem(dt, "frame") != NULL ||
+            cJSON_GetObjectItem(dt, "direction") != NULL)
+        {
+            result = SYS_CALIBRATION_RESULT_PROTOCOL_ERROR;
+        }
+        else
+        {
+            result = sys_calibration_service_snapshot_seq(
+                session_id, HAL_GetTick(), seq, &status);
+        }
     }
     else if (strcmp(operation, "STAGE_CONFIG") == 0)
     {

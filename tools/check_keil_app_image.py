@@ -201,6 +201,12 @@ def check_project(project_path: Path, report: CheckReport) -> str:
         report.errors.append("Wrong Keil project: use MDK-ARM-8008000/project.uvprojx for the app image")
     if not re.search(r"<Define>[^<]*\bAPROM_OFFSET\b[^<]*</Define>", project_text):
         report.errors.append("APROM_OFFSET is not defined; the app would not use VTOR 0x08008000")
+    if project_text.count("IROM(0x08000000,0x00040000)") != 2:
+        report.errors.append("Both Keil targets must declare the 256 KiB physical IROM range")
+    if project_text.count("-FS08000000 -FL040000") != 2:
+        report.errors.append("Both Keil Flash download algorithms must stop at 0x08040000")
+    if "-FS08000000 -FL080000" in project_text:
+        report.errors.append("Keil Flash download range still exposes 512 KiB on the 256 KiB HK32 target")
     for required in (
         "../core/src/lampprotocollib/mqtt_zk_protocol.c",
         "../core/src/gateway/net_dim.c",
@@ -248,21 +254,28 @@ def check_source_contracts(report: CheckReport) -> None:
 
     rx_max = parse_c_define_int(mqtt_header, "ZK_JSON_RX_MAX")
     tx_size = parse_c_define_int(mqtt_header, "ZK_JSON_BUF_SIZE")
-    pool_size = parse_c_define_int(mqtt_header, "ZK_CJSON_POOL_SIZE")
+    legacy_pool_size = parse_c_define_int(mqtt_header, "ZK_CJSON_POOL_SIZE")
+    rx_pool_size = parse_c_define_int(mqtt_header, "ZK_CJSON_RX_POOL_SIZE")
+    tx_pool_size = parse_c_define_int(mqtt_header, "ZK_CJSON_TX_POOL_SIZE")
     report.details["zk_json_rx_max"] = rx_max
     report.details["zk_json_tx_size"] = tx_size
-    report.details["zk_cjson_pool_size"] = pool_size
+    report.details["zk_cjson_legacy_pool_size"] = legacy_pool_size
+    report.details["zk_cjson_rx_pool_size"] = rx_pool_size
+    report.details["zk_cjson_tx_pool_size"] = tx_pool_size
     if rx_max is None or rx_max < ZK_JSON_RX_MIN:
         report.errors.append(f"ZK_JSON_RX_MAX must be at least {ZK_JSON_RX_MIN}: {rx_max}")
     if tx_size is None or tx_size < ZK_JSON_TX_MIN:
         report.errors.append(f"ZK_JSON_BUF_SIZE must be at least {ZK_JSON_TX_MIN}: {tx_size}")
-    if pool_size is None or pool_size < 4096:
-        report.errors.append(f"ZK_CJSON_POOL_SIZE must be at least 4096: {pool_size}")
+    if rx_pool_size != 4096:
+        report.errors.append(f"ZK_CJSON_RX_POOL_SIZE must remain 4096: {rx_pool_size}")
+    if tx_pool_size != 4096:
+        report.errors.append(f"ZK_CJSON_TX_POOL_SIZE must remain 4096: {tx_pool_size}")
 
     for required in (
         "cJSON_InitHooks(&hooks);",
         "void zk_cjson_prepare_parse(void)",
         "zk_cjson_pool_offset = 0;",
+        "boolean_en zk_cjson_tx_allocation_ok(void)",
         "zk_parse_message_header_from_root",
         "zk_message_header_matches_device",
     ):

@@ -6,6 +6,7 @@
 
 cJSON *zk_cjson_create_tx_object(const char *context);
 cJSON *zk_cjson_create_tx_array(const char *context);
+boolean_en zk_cjson_tx_allocation_ok(void);
 cJSON *zk_create_root_from_header(const zk_message_header_t *header, int with_er, int er_code);
 int zk_send_json_root(cJSON *root, const char *topic);
 int zk_publish_simple_response(const zk_message_header_t *request, int err_code);

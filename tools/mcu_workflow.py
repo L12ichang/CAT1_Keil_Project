@@ -414,10 +414,15 @@ def jlink_resume_target(config: dict) -> None:
     jlink_commander(["connect", "g", "exit"], config, timeout=30)
 
 
+def jlink_reset_type_commands(config: dict) -> list[str]:
+    return ["RSetType 2"] if config.get("jlink", {}).get("reset_type") == "reset-pin" else []
+
+
 def release_bootloader_to_app(config: dict, app_base: int, app_limit: int = FLASH_LIMIT) -> dict[str, object]:
     first_output = jlink_commander(
         [
             "connect",
+            *jlink_reset_type_commands(config),
             "r",
             "g",
             "sleep 500",
@@ -439,6 +444,7 @@ def release_bootloader_to_app(config: dict, app_base: int, app_limit: int = FLAS
     second_output = jlink_commander(
         [
             "connect",
+            *jlink_reset_type_commands(config),
             "h",
             f"w1 0x{BOOTLOADER_APP_RELEASE_FLAG:08X} 0x01",
             "g",
@@ -708,6 +714,7 @@ def flash_firmware(config: dict, firmware_path: Path, dry_run: bool = False) -> 
             f"si {config['jlink']['interface']}",
             f"speed {config['jlink']['speed_khz']}",
             "connect",
+            *jlink_reset_type_commands(config),
             "r",
             "h",
             f"loadbin {jlink_file_arg(normalized_bin)},{base_address}",
@@ -725,6 +732,7 @@ def flash_firmware(config: dict, firmware_path: Path, dry_run: bool = False) -> 
                     f"si {config['jlink']['interface']}",
                     f"speed {config['jlink']['speed_khz']}",
                     "connect",
+                    *jlink_reset_type_commands(config),
                     "r",
                     "h",
                     f"savebin {jlink_file_arg(verify_file)},{base_address},0x{size:X}",

@@ -6,11 +6,17 @@
 /*
  * CAT1 Flash ownership map.
  *
- * STM32F103RC erase granularity is 2 KiB. The calibration addresses below
+ * The production target is HK32F103CCT6A with 256 KiB Flash and 2 KiB erase
+ * pages. Keil/J-Link currently use an STM32F103RC compatibility description;
+ * that description must never widen the physical 0x08000000-0x0803FFFF range.
+ * The calibration addresses below
  * are provisional candidates only. A fresh Keil MAP/HEX audit and shared-page
  * power-loss test are required before they can become a released contract.
  */
 #define CAT1_FLASH_ERASE_PAGE_SIZE                 ((u32)0x800U)
+#define CAT1_FLASH_PHYSICAL_START                  ((u32)0x08000000U)
+#define CAT1_FLASH_PHYSICAL_END                    ((u32)0x08040000U)
+#define CAT1_FLASH_PHYSICAL_SIZE                   ((u32)0x00040000U)
 #define CAT1_FLASH_BOOT_START                     ((u32)0x08000000U)
 #define CAT1_FLASH_BOOT_END                       ((u32)0x08005000U)
 #define CAT1_FLASH_SYSTEM_DATA_MAIN_START         ((u32)0x08005000U)
@@ -62,6 +68,9 @@
     typedef char CAT1_FLASH_STATIC_ASSERT_CONCAT(cat1_flash_layout_assert_, __LINE__)[(condition) ? 1 : -1]
 
 CAT1_FLASH_STATIC_ASSERT((CAT1_FLASH_BOOT_START + 0x5000U) == CAT1_FLASH_BOOT_END);
+CAT1_FLASH_STATIC_ASSERT(CAT1_FLASH_BOOT_START == CAT1_FLASH_PHYSICAL_START);
+CAT1_FLASH_STATIC_ASSERT((CAT1_FLASH_PHYSICAL_END - CAT1_FLASH_PHYSICAL_START) ==
+                         CAT1_FLASH_PHYSICAL_SIZE);
 CAT1_FLASH_STATIC_ASSERT((CAT1_FLASH_SYSTEM_DATA_MAIN_START + CAT1_FLASH_ERASE_PAGE_SIZE) ==
                          CAT1_FLASH_SYSTEM_DATA_MAIN_END);
 CAT1_FLASH_STATIC_ASSERT((CAT1_FLASH_SYSTEM_DATA_BACKUP_START + CAT1_FLASH_ERASE_PAGE_SIZE) ==
@@ -76,5 +85,6 @@ CAT1_FLASH_STATIC_ASSERT(CAT1_FLASH_CALIBRATION_A_CANDIDATE_END == CAT1_FLASH_PL
 CAT1_FLASH_STATIC_ASSERT(CAT1_FLASH_CALIBRATION_B_CANDIDATE_END == CAT1_FLASH_PLAN_BACKUP_START);
 CAT1_FLASH_STATIC_ASSERT(CAT1_FLASH_APP_START == CAT1_FLASH_PLAN_BACKUP_END);
 CAT1_FLASH_STATIC_ASSERT(CAT1_FLASH_OTA_BACKUP_START == CAT1_FLASH_APP_END);
+CAT1_FLASH_STATIC_ASSERT(CAT1_FLASH_OTA_BACKUP_END == CAT1_FLASH_PHYSICAL_END);
 
 #endif

@@ -14,3 +14,10 @@ The response objects intentionally contain the frozen fields that a consumer
 must validate. Firmware may include additional diagnostic fields outside
 those objects, but it must not emit the removed flat context fields or the
 ambiguous `nonzeroOutputAllowed` capability.
+
+`RAW_50W_SNAPSHOT.json` freezes the device-snapshot exchange separately from
+the local DC5200 serial protocol. A RAW request carries no DC5200 frame or
+direction. `outputCurrentMa` is mA, `outputPower01W` is 0.1 W, and
+`adc.ioutRaw` is the device output-current ADC count. `available=true` is valid
+only with a fresh ADC/PWM snapshot; unavailable or stale data must return a
+nonzero result and `ack=false` rather than placeholder zero measurements.

@@ -27,6 +27,7 @@ def build_config(args: argparse.Namespace) -> dict:
             "device": args.jlink_device,
             "interface": args.interface,
             "speed_khz": args.speed,
+            "reset_type": "reset-pin",
         },
     }
 

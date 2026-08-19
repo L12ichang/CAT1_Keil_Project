@@ -1,0 +1,50 @@
+{
+  "fixtureVersion": 1,
+  "name": "RAW_50W_SNAPSHOT",
+  "requestTopic": "MS/TEST50W0000001/plt2dev",
+  "responseTopic": "MS/TEST50W0000001/dev2plt",
+  "request": {
+    "SN": "TEST50W0000001",
+    "TM": "2026-08-19 06:50:43",
+    "SV": "cal",
+    "ID": "W008",
+    "CT": "R",
+    "DT": {
+      "op": "RAW",
+      "protocolVersion": 2,
+      "sessionId": 1234,
+      "seq": 8
+    }
+  },
+  "expectedResponse": {
+    "DT": {
+      "op": "RAW",
+      "protocolVersion": 2,
+      "seq": 8,
+      "result": 0,
+      "ack": true,
+      "readback": {
+        "sessionId": 1234,
+        "lastSeq": 8,
+        "currentLevel": 100
+      },
+      "raw": {
+        "schemaVersion": 1,
+        "available": true,
+        "outputVoltage01V": 560,
+        "outputCurrentMa": 445,
+        "outputPower01W": 249,
+        "adc": {
+          "seq": 1,
+          "validFlags": 1,
+          "ioutRaw": 777
+        },
+        "pwm": {
+          "seq": 1,
+          "requestedPercent": 50,
+          "protectedPercent": 50
+        }
+      }
+    }
+  }
+}

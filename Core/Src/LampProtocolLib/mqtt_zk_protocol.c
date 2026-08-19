@@ -635,6 +635,12 @@ cJSON *zk_cjson_create_tx_array(const char *context)
     return array;
 }
 
+boolean_en zk_cjson_tx_allocation_ok(void)
+{
+    return (zk_cjson_active_pool == static_tx_pool &&
+            zk_cjson_tx_exhausted_logged != BOOL_TRUE) ? BOOL_TRUE : BOOL_FALSE;
+}
+
 static void zk_copy_digits(char *dst, int dst_size, const char *src, int max_digits)
 {
     int i;
