@@ -1,6 +1,8 @@
-# 量产校准 Flash 地址与擦写门禁
+# 量产校准 Flash 地址与擦写门禁（历史实现快照）
 
-状态：`SOURCE_ENABLED / MAP_HIL_PENDING`。源码已接入 A/B 事务，候选地址仍未作为量产发布合同冻结。
+状态：`LEGACY_IMPLEMENTATION_SNAPSHOT / MAP_HIL_PENDING`。本文记录 V2 时代源码的 A/B 事务与候选地址，不再定义目标 Calibration Record。目标结构、协议和验收以 `done/cat1-product-profile-cal-context-20260817` 上的两份 CAT1 50W 权威文档及 `docs/CAT1_50W文档口径说明.md` 为准。
+
+下文出现的 Flash record v3、`configuredRatedCurrentMa` 或 `calibratedMaxCurrentMa` 均为历史实现证据，不得与目标 MQTT Protocol V3 混为同一版本，也不得继续作为普通运行授权设计。
 
 ## 当前源码所有者表
 

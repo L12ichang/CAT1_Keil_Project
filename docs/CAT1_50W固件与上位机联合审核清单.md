@@ -5,8 +5,13 @@
 > 上位机仓库：`L12ichang/tc-desktop-client`  
 > 上位机基线分支：`main`  
 > 本文定位：**两个项目修改完成后的最终一致性审核基线**
+> 规范状态：`TARGET_SPEC_FROZEN / IMPLEMENTATION_ALIGNMENT_PENDING`
+>
+> 口径索引：[`CAT1_50W文档口径说明.md`](CAT1_50W文档口径说明.md)；任何旧文档、V2 fixture 或实现快照均不得覆盖本清单。
 
 ---
+
+本清单中的勾选项默认均为“待证实”。只有代码、Protocol V3 fixture、Keil 产物和 HIL 证据同时满足时才能勾选；不能用现有 `CAL_MQTT_V2` 通过来替代 V3 验收。
 
 ## 1. 审核定位
 

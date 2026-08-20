@@ -3,10 +3,15 @@
 > 项目：`L12ichang/CAT1_Keil_Project`  
 > 基线分支：`done/cat1-product-profile-cal-context-20260817`  
 > 文档定位：**固件侧唯一实施基线**  
+> 规范状态：`TARGET_SPEC_FROZEN / IMPLEMENTATION_ALIGNMENT_PENDING`
+>
+> 口径索引：[`CAT1_50W文档口径说明.md`](CAT1_50W文档口径说明.md)；与旧规划、V2 fixture 或实现证据冲突时，以本文和联合审核清单为准。
 > 配套上位机文档：`L12ichang/tc-desktop-client/docs/CAT1_50W校准上位机修改实施方案.md`  
 > 最终联合审核文档：本仓库 `docs/CAT1_50W固件与上位机联合审核清单.md`
 
 ---
+
+本文定义目标实现，不表示当前源码、Keil 产物或实机已经完成全部条目。`CAL_MQTT_V2`、890mA 默认值和运行上下文绑定只属于历史实现快照，不得反向覆盖本文的 V3/893mA/1400mA 目标口径。
 
 ## 1. 本轮固件修改目标
 
