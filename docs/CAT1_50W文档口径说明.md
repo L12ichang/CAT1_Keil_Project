@@ -1,84 +1,73 @@
 # CAT1 50W 文档口径说明
 
 > 生效日期：2026-08-21  
-> 当前规范分支：`main`  
-> 状态：`V2_CURRENT / V3_TARGET / P0_PARTIALLY_FROZEN`
+> 分支：`main`  
+> 状态：`CURRENT_V2 / TARGET_V3 / FIELD_CONTRACT_FREEZING`
 
-## 1. 当前代码状态必须统一表述
+## 1. 当前唯一权威文档
 
-截至本文更新：
+后续设计、实现和审核只以以下三份文档为目标规范：
+
+1. 固件：`docs/CAT1_50W校准固件基线与上位机对接方案.md`
+2. 上位机：`L12ichang/tc-desktop-client/docs/CAT1_50W校准上位机修改实施方案.md`
+3. 联合审核：`docs/CAT1_50W固件与上位机联合审核清单.md`
+
+旧文档、旧 fixture 和旧源码只用于理解 V2 现状和迁移，不得反向覆盖以上三份目标规范。
+
+## 2. 当前代码状态必须统一理解
 
 ```text
 CAT1_Keil_Project 当前代码 = V2
- tc-desktop-client 当前代码 = V2
-V3 功能实现                  = 尚未开始/尚未形成有效代码提交
-当前开发目标                 = V2 -> V3
+tc-desktop-client 当前代码 = V2
+V3功能代码                  = 尚未实现
+当前工作目标                = 将两端从V2升级到V3
 ```
 
-不得把“已经写入V3设计文档”描述成“代码已经实现V3”。
+当前固件中的 `SYS_CALIBRATION_MQTT_PROTOCOL_VERSION=2`、当前上位机的 `calibration-mqtt-v2.ts`、旧198B表、旧Context都属于真实现状，不代表目标设计。
 
-当前源码中的 `CAL_MQTT_V2`、V2 Profile Context、198B旧表、旧Storage Record等仍是真实现现状，后续要按V3文档逐项替换。
-
-## 2. 当前三份权威目标文档
-
-后续实现只以：
-
-1. 固件：`CAT1_Keil_Project/docs/CAT1_50W校准固件基线与上位机对接方案.md`
-2. 上位机：`tc-desktop-client/docs/CAT1_50W校准上位机修改实施方案.md`
-3. 联合审核：`CAT1_Keil_Project/docs/CAT1_50W固件与上位机联合审核清单.md`
-
-作为目标规范。
-
-旧文档、旧fixture、旧测试只用于理解V2现状和迁移，不能覆盖上述V3目标。
+任何文档中的 V3 内容当前都只是**待实现目标规范**。
 
 ## 3. 版本命名
 
-### 当前 Legacy Wire
-
-```text
-CAL_MQTT_V2
-```
-
-### 目标 Wire
+目标 Wire Protocol：
 
 ```text
 Calibration MQTT Protocol V3
 ```
 
-### 当前旧 Storage
-
-源码：
+旧 Wire Protocol：
 
 ```text
-SYS_CALIBRATION_STORAGE_FORMAT_VERSION = 3
+CAL_MQTT_V2
 ```
 
-它只是V2时代现有Storage实现版本，与MQTT Protocol V3不是同一版本序列。
-
-### 新 Calibration 存储
-
-逐Byte格式冻结前统一称：
+新 Flash 校准记录在最终 Header/Offset/CRC/Golden Vector 冻结前统一称为：
 
 ```text
 Target Calibration Record
 ```
 
-目前禁止使用以下未确认旧叫法作为目标：
+不得再用“Calibration Record V2”作为新目标名称。
+
+当前源码 `SYS_CALIBRATION_STORAGE_FORMAT_VERSION=3` 只是旧 Storage Record 版本，与 MQTT Protocol V3 不是同一个版本空间。
+
+## 4. 已冻结的 V3 P0
+
+### 产品/运行参数
 
 ```text
-Calibration Record V2
-FormatVersion=2
-CAL2
-312B固定长度
+50W Hardware Max       = 1680mA
+50W Default HWMAX      = 1400mA
+50W Default SET_OUTCUR = 893mA
+RS3                    = 120mΩ
+11 points              = Level 0/20/.../200
 ```
 
-新 Storage `formatVersion` 只有在 Header/Offset/Endian/CRC/Golden Vector 全部冻结后才能确定。
+`SET_OUTCUR <= HWMAX <= Hardware Max`。
 
-## 4. 已冻结 V3 P0
+SET_OUTCUR 采用兼容方案 A：Wire 保留 `Factory.SET_OUTCUR`，固件内部迁移到 User Config。
 
-### Operation
-
-正式使用数字 Operation Code：
+### Operation Code
 
 ```text
 0 CAP
@@ -97,43 +86,15 @@ CAL2
 13 DIAG
 ```
 
-示例：
+V3 使用数字 Operation，不用长字符串。
 
-```json
-{"v":3,"o":3,"s":123456,"q":8,"lv":100}
-```
+### RAW
 
-### SET_OUTCUR
-
-采用兼容方案A：
-
-```text
-Wire仍兼容 Factory.SET_OUTCUR
-内部正式归属 User Config
-```
-
-本轮不强制新增 `User.SET_OUTCUR` Wire。
-
-### RAW V3
-
-同一RAW响应提供：
-
-```text
-Raw + Corrected + Freshness/Fault
-```
-
-FITTING只用Raw；APPLY后VERIFY使用Corrected+Reference。
+同包返回 Raw + Corrected；拟合只用 Raw，APPLY 后验收使用 Corrected。
 
 ### PWM
 
-```text
-协议只操作Level/Verification Percent
-Logical PWM = 0..1000
-正式点 logicalPwm = level * 5
-ACK pwm不是TIM CCR
-```
-
-无Calibration Legacy Path保留OP_PWM_OFFSET；SET_POINT和calibrated path不叠加OP_PWM_OFFSET。
+协议只操作 Level；固件逻辑 PWM 域为 0..1000。上位机不写 CCR。OP_PWM_OFFSET 只保留在无 Calibration Legacy/Default Path，Calibration SET_POINT 和有效 Calibration 正常运行不重复叠加 Offset。
 
 ### Wire State
 
@@ -145,62 +106,69 @@ ACK pwm不是TIM CCR
 4 FAULT
 ```
 
-不增加COMMITTED/ABORTED长期Wire State。
+不设置长期 COMMITTED/ABORTED 状态。
 
 ### BL0942 Voltage
 
-第一版：
+第一版由上位机计算 Q24 Gain，各有效点 Gain 取中位数；固件只做定点应用。量产前必须多输入电压 HIL 验证 Gain-only 是否满足 Tolerance。
+
+### Result Code
 
 ```text
-上位机：多个有效点 -> Q24 Gain -> median
-固件：整数定点应用Q24 Gain
+0 OK
+1 NOT_AVAILABLE
+2 INVALID_STATE
+3 INVALID_ARGUMENT
+4 LEASE_EXPIRED
+5 BUSY
+6 PROTOCOL_ERROR
+7 SAFETY_NOT_READY
+8 DUPLICATE
+9 FLASH_ERROR
+10 HARDWARE_FAULT
+11 PROFILE_MISMATCH
+12 DATA_STALE
+13 CRC_ERROR
+14 RANGE_ERROR
 ```
 
-不默认加入Offset；实机多输入电压点验证不达标时重新评审。
+### STAGE / Storage 所有权
 
-## 5. 50W 参数
+STAGE 只传 Target Calibration Payload；上位机不发送完整 Flash Record。
 
-```text
-Hardware Max       = 1680mA
-Default HWMAX      = 1400mA
-Default SET_OUTCUR = 893mA
-RS3                = 120mΩ
-Formal Points      = 11
-Level              = 0/20/.../200
-```
+固件拥有：Generation、A/B Slot、Storage Header、Record CRC、Commit Marker 和掉电事务。
 
-```text
-SET_OUTCUR <= HWMAX <= Hardware Max
-```
+READ_INFO / READ_CHUNK 回读的是已提交 Calibration Payload，用于上位机 CRC/Byte Compare，不要求 MQTT 回传整个 Flash Record。
 
-## 6. 明确废弃的V2业务口径
+## 5. 明确废弃的旧口径
 
-不得继续作为V3目标：
+以下不得继续作为目标设计：
 
-- 默认SET=890mA；
+- SET_OUTCUR=890mA；
 - HWMAX与Hardware Max合并；
-- V2作为最终Wire；
-- Calibration绑定运行SET；
-- Calibration绑定运行输出电压；
-- `calibratedMaxCurrentMa`作为普通运行授权；
-- CAP返回多功率`profilesCsv`；
-- 无Calibration禁止普通非零输出；
-- 21点校准；
-- 校准前使用最终Tolerance直接FAIL；
-- V2大Context/Status每个ACK重复返回；
-- V2完整READBACK一次发送大Calibration内容。
+- V2作为最终协议；
+- Calibration绑定SET/CV/calibratedMax；
+- 缺少Calibration禁止正常输出；
+- 设备CAP返回多型号profilesCsv；
+- 字符串Operation作为V3正式Wire；
+- COMMITTED作为长期V3 Wire State；
+- “Calibration Record V2 / 312B / Q20+Offset”作为目标格式；
+- 上位机发送完整Flash Record；
+- 校准前按最终±1%/±2%精度直接FAIL；
+- BL0942用周期Reset掩盖通信冻结。
 
-## 7. 当前剩余P0
+## 6. 当前仍需继续冻结的 P0
 
-以下仍必须在Codex全面实现前继续冻结：
+在允许 Codex 做完整 V3 跨端实现前，还需冻结：
 
-1. `rc` Result Code 精确数字表；
-2. RAW `vf` / `flt` bit定义；
-3. Target Calibration Record：STAGE Payload还是完整Flash Record；
-4. Target Calibration Record Header/Offset/Size/Endian；
-5. 新 Storage `formatVersion`；
-6. CRC覆盖范围与事务字段所有权；
-7. Golden Vector；
-8. STAGE/READ_CHUNK最大分块长度。
+1. Target Calibration Payload 逐Byte布局；
+2. Endian；
+3. Payload CRC算法与覆盖范围；
+4. RAW `vf` bit表；
+5. RAW `flt` bit表；
+6. 每个Operation完整Request/Response必填字段；
+7. READ_CHUNK最大长度；
+8. Target Calibration Record最终Storage `formatVersion`、Header/CRC/Commit布局；
+9. Golden Vector。
 
-这些内容未冻结前，Codex不得自行拍板。
+这些未冻结项必须先讨论，存在疑问先询问用户，禁止 Codex自行拍板。
