@@ -1,54 +1,105 @@
 # CAT1 50W 文档口径说明
 
-> 生效日期：2026-08-20
->
-> 固件目标分支：`done/cat1-product-profile-cal-context-20260817`
-> 状态：`TARGET_SPEC_FROZEN / IMPLEMENTATION_ALIGNMENT_PENDING`
+> 生效日期：2026-08-21  
+> 当前固件实施分支：`done/cat1-product-profile-cal-context-20260817`  
+> 状态：`TARGET_SPEC_AUTHORITY_FROZEN / FIELD_WIRE_CONTRACT_PENDING`
 
-## 1. 唯一权威文档
+## 1. 当前权威文档
 
-CAT1 50W 后续设计、实现、联调和验收只以以下两份文档为规范依据：
+当前功能修改以以下三份文档为目标规范：
 
-1. [`CAT1_50W校准固件基线与上位机对接方案.md`](CAT1_50W校准固件基线与上位机对接方案.md)；
-2. [`CAT1_50W固件与上位机联合审核清单.md`](CAT1_50W固件与上位机联合审核清单.md)。
+1. 固件：`CAT1_Keil_Project/docs/CAT1_50W校准固件基线与上位机对接方案.md`
+2. 上位机：`tc-desktop-client/docs/CAT1_50W校准上位机修改实施方案.md`
+3. 联合审核：`CAT1_Keil_Project/docs/CAT1_50W固件与上位机联合审核清单.md`
 
-发生数值、协议版本、字段、状态机或安全门禁冲突时，上述两份文档优先；其他文档不得反向覆盖它们。
+具体开发应在各文档标注的目标分支执行。发生参数、协议、状态机、Flash、Calibration 或安全逻辑冲突时，旧历史文档不得覆盖以上三份目标规范。
 
-## 2. 冻结目标口径
+## 2. 版本命名统一规则
 
-| 项目 | 目标口径 |
-|---|---|
-| Hardware Max | 1680mA |
-| 默认 HWMAX | 1400mA |
-| 默认 SET_OUTCUR | 893mA |
-| RS3 | 120mΩ |
-| 正式校准点 | 11 点，Level `0/20/.../200` |
-| 校准 MQTT | Protocol V3 紧凑协议 |
-| Calibration Record | V2；这是 Flash/字节记录版本，与 MQTT Protocol V3 是两个独立版本空间 |
-| 参数关系 | `SET_OUTCUR <= HWMAX <= Hardware Max` |
-| Calibration 绑定 | 不绑定运行 SET_OUTCUR，不以运行输出电压或 `calibratedMaxCurrentMa` 作为普通运行授权 |
-| CAPABILITIES | 不发布 `profilesCsv` 和多型号 Catalog |
+### Target Wire Protocol
 
-## 3. 文档分类
+```text
+Calibration MQTT Protocol V3
+```
 
-| 分类 | 文档 | 使用规则 |
-|---|---|---|
-| 目标规范 | 上述两份权威文档 | 用于后续实现与验收 |
-| 历史规划 | `量产校准固件开发方案.md`、`Codex_量产校准固件任务书.md`、根目录旧执行文档 | 只保留问题来源和历史任务，不得用于冻结新字段或参数 |
-| 实现快照 | `docs/calibration/` 下 V2/890mA/1680mA 相关证据文档 | 只说明当时源码做到了什么，不代表目标规范 |
-| 兼容夹具 | `protocol/fixtures/CAL_MQTT_V2/` | 只用于现有 V2 实现回归；V3 上线前必须建立独立 V3 fixture，不得复用 V2 名义 |
+只表示新的 `SV=cal` 紧凑 MQTT 协议。
 
-## 4. “目标规范”与“当前实现”边界
+### Legacy Wire Protocol
 
-目标分支名称用于确定文档口径，不等于其中每一项已经完成。当前源码、V2 fixture、Keil 产物、设备 ACK/回读和 HIL 证据必须分别核对。
+```text
+CAL_MQTT_V2
+```
 
-`MQTT Protocol V3`、`Calibration Record V2` 和历史源码中的 `Flash record v3` 不属于同一版本序列。文档引用版本号时必须同时写明对象，禁止只写“V2”或“V3”。
+只表示当前旧实现和旧 fixture，不是新目标。
 
-旧文档中出现以下内容时，一律视为历史实现或已废弃设计，不得继续作为新实现依据：
+### Target Calibration Record
 
-- `SET_OUTCUR=890mA`；
-- 默认 `HWMAX=1680mA`；
-- `CAL_MQTT_V2` 是最终冻结协议；
-- Calibration Context 绑定运行 SET_OUTCUR/运行电压；
-- `calibratedMaxCurrentMa` 是普通运行授权；
-- CAPABILITIES 发布 `profilesCsv` 或多型号 Catalog。
+新 Flash 校准记录在最终逐 Byte 布局冻结前统一称为：
+
+```text
+Target Calibration Record
+```
+
+不再使用“Calibration Record V2”作为目标名称。
+
+当前源码中的：
+
+```text
+SYS_CALIBRATION_STORAGE_FORMAT_VERSION = 3
+```
+
+只代表旧 Storage Record 实现版本，与 MQTT Protocol V3 不是同一个版本空间。
+
+最终新 Storage `formatVersion` 必须在联合审核文档冻结 Header、Offset、Endian、CRC 和 Golden Vector 后一次性确定。
+
+## 3. 当前50W参数
+
+```text
+Hardware Max       = 1680mA
+Default HWMAX      = 1400mA
+Default SET_OUTCUR = 893mA
+RS3                = 120mΩ
+Formal Points      = 11
+Level              = 0/20/.../200
+```
+
+关系：
+
+```text
+SET_OUTCUR <= HWMAX <= Hardware Max
+```
+
+## 4. 明确废弃的旧口径
+
+以下内容只属于历史实现：
+
+- `SET_OUTCUR=890mA` 作为新默认值；
+- 默认 `HWMAX=1680mA` 与 Hardware Max 合并；
+- `CAL_MQTT_V2` 作为最终协议；
+- Calibration Context 绑定运行 SET_OUTCUR；
+- Calibration Context 绑定运行输出电压；
+- `calibratedMaxCurrentMa` 作为普通运行授权；
+- CAPABILITIES 发布 `profilesCsv` 或多型号 Catalog；
+- 缺少 Calibration 时禁止普通非零输出；
+- 旧共享擦除页作为最终 Calibration A/B 布局；
+- 21点校准。
+
+## 5. 历史资料规则
+
+`docs/calibration/`、旧量产开发方案、旧 Codex 任务书、旧 F2-F4 文档、根目录旧执行文档以及 `protocol/fixtures/CAL_MQTT_V2/` 只用于历史追溯和 Legacy 回归。
+
+新功能不得因为旧测试仍通过而保留已经废弃的业务规则。
+
+## 6. 当前仍需冻结
+
+在完整跨端实现 Protocol V3 前，还需在联合审核文档冻结：
+
+- 每个 Operation 的 Request/Response 字段；
+- RAW V3 精确 Schema；
+- State / Result Code；
+- Target Calibration Record 逐Byte结构；
+- 新 Storage `formatVersion`；
+- CRC / Endian；
+- SET_POINT Raw PWM 与 OP_PWM_OFFSET 域；
+- BL0942 Voltage Correction 固定点格式；
+- Golden Vector。
