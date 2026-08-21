@@ -1891,3 +1891,80 @@ BL0942根因修复
 ```
 
 **后续 Codex 执行的是 V2→V3 实现任务，不允许再自行把协议切回数字 Operation、分块 READ、重新绑定 SET/CV，或重新设计 CFG1/RUN1 持久化格式。**
+
+# 25. 2026-08-22 补充冻结：Config A/B 页首 4B 与 Boot OTA Flag
+
+本节只追加本轮人工确认的 Flash 物理兼容规则；前文已冻结的 Wire、Payload、Record 内部布局、CRC、Golden Vector、A/B 原子提交、Runtime、Calibration 和上位机 PASS/FAIL 均保持不变。
+
+## 25.1 物理页与 CFG1 起点
+
+六个 2KiB 页仍保持：
+
+```text
+0x08005000~0x080057FF  Config A
+0x08005800~0x08005FFF  Config B
+0x08006000~0x080067FF  Calibration A
+0x08006800~0x08006FFF  Calibration B
+0x08007000~0x080077FF  Runtime A
+0x08007800~0x08007FFF  Runtime B
+```
+
+Config A/B 页内统一保留前 4B：
+
+```text
+0x08005000~0x08005003  Boot OTA Flag / Config A页内保留兼容字段
+0x08005004             Config A CFG1 Record物理起点
+
+0x08005800~0x08005803  Reserved / Config B对称保留
+0x08005804             Config B CFG1 Record物理起点
+```
+
+结论：Config A/B 页仍各为 2048B，CFG1 可用空间为 2044B；CFG1 Record 仍为 1116B，Record 内部 `0x000..0x45B`、CRC、CommitWord 和 G7 Codec 相对 Offset 全部不变。
+
+## 25.2 旧布局首次格式化
+
+发现旧 V2 Persistent 或非法 V3 Persistent 时：
+
+```text
+确认当前不处于 OTA pending
+→ 直接擦除 0x08005000~0x08007FFF 六个2KiB页
+→ 0x08005000恢复0xFFFFFFFF
+→ 从0x08005004/0x08005804建立V3 Config
+→ Calibration A/B空
+→ Runtime A/B空
+```
+
+不迁移旧 Calibration/Config/User/Plan/Runtime；不碰 Bootloader、APP、OTA Backup。合法 V3 Persistent 建立后不得重复格式化。
+
+## 25.3 正常 OTA
+
+Boot 不修改，既有约定保持：
+
+```text
+0x08005000 = 0xAA5555AA  -> Boot进入OTA Copy
+0x08005000 != 0xAA5555AA -> 不触发OTA，走正常APP校验/跳转
+```
+
+正常 OTA 不擦这 12KiB 参数区。APP 完成 OTA Backup 准备后，必须停止后续 Config A/B 提交，写入 `0xAA5555AA` 后立即复位；写 Flag 后到复位前禁止再擦写 Config 页。
+
+## 25.4 新 APP 清 Flag 与验收
+
+新 APP 成功启动后，必须在至少保留一份有效 Config 的前提下清除 OTA Flag：
+
+```text
+读取Config A/B最新有效CFG1
+→ 确保B或另一页至少一份完整有效Config
+→ 擦除Config A页，使0x08005000恢复0xFFFFFFFF
+→ 需要时从0x08005004重建Config A CFG1
+```
+
+新增审核：
+
+- [ ] Config A CFG1物理起点=`0x08005004`；
+- [ ] Config B CFG1物理起点=`0x08005804`；
+- [ ] Config A/B页首4B不被CFG1覆盖；
+- [ ] 旧布局首次格式化后`0x08005000=0xFFFFFFFF`；
+- [ ] 写`0xAA5555AA`后至复位前不再发生Config擦写；
+- [ ] Boot OTA只更新APP，不擦12KiB V3 Persistent；
+- [ ] 新APP清Flag时不丢失唯一有效Config；
+- [ ] 再次复位不会因残留Flag重复进入OTA。
