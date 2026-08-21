@@ -1,55 +1,43 @@
 # CAT1 50W 一体化电源——校准固件修改实施基线
 
 > 项目：`L12ichang/CAT1_Keil_Project`  
-> 基线分支：`done/cat1-product-profile-cal-context-20260817`  
 > 文档定位：**固件侧唯一实施基线**  
-> 配套上位机文档：`L12ichang/tc-desktop-client/docs/CAT1_50W校准上位机修改实施方案.md`  
-> 最终联合审核文档：本仓库 `docs/CAT1_50W固件与上位机联合审核清单.md`
-
-### 版本命名约束
-
-- 目标 MQTT 校准协议只称 **Calibration MQTT Protocol V3**；
-- 当前源码中的 `CAL_MQTT_V2` 仅属于 Legacy 实现；
-- 新 Flash 校准结构在逐 Byte 冻结前统一称 **Target Calibration Record**；
-- 当前源码 `SYS_CALIBRATION_STORAGE_FORMAT_VERSION=3` 仅代表旧 Storage Record 实现版本；
-- 在联合审核文档冻结最终字节布局前，不使用“Calibration Record V2”作为目标名称，也不提前指定新的 Storage `formatVersion`。
+> 规范状态：`TARGET_SPEC_FROZEN / IMPLEMENTATION_ALIGNMENT_PENDING`
+>
+> 本文定义目标实现，不表示当前源码已经完成 V3。旧 `CAL_MQTT_V2`、890mA、Voltage/SET/CalibratedMax Context 绑定只属于历史实现快照，不得覆盖本文。
 
 ---
 
-## 1. 本轮固件修改目标
+## 1. 本轮目标
 
-本轮目标不是重写整个一体化电源，而是把现有 50W 固件整理成一套 **正常业务不依赖校准、可执行 11 点输出校准、可执行 OCO 采样校准、可执行 BL0942 输入 U/I/P 校准、可掉电安全保存校准结果、可与上位机稳定对接** 的固件。
+把现有 50W 固件整理成：
 
-必须同步修复 BL0942 长期运行后停止读取/数据冻结问题，但禁止用周期性状态机 Reset 作为正式根因解决方案。
+- 正常业务不依赖 Calibration；
+- 支持 11 点 Output Calibration；
+- 支持 OCO Calibration；
+- 支持 BL0942 U/I/P Calibration；
+- 每次完整 Calibration 一次性 STAGE / APPLY / COMMIT；
+- 支持 Calibration MQTT Protocol V3；
+- 支持 Config / Calibration / Runtime 三类 A/B 掉电安全存储；
+- BL0942 Raw/Freshness 长期可信；
+- 后续不同功率通过 **Keil Target 切换生成独立固件**，但公共代码和协议不复制。
 
-本轮允许修改的核心范围：
-
-- Product Profile / Factory Config / User Config 参数归属；
-- 正常 PWM 输出链；
-- 11 点校准控制链；
-- OCO Raw/Corrected 分流；
-- BL0942 Raw、Freshness 与校准；
-- Calibration MQTT Protocol V3；
-- Calibration / Config / Runtime Flash A/B；
-- Legacy 参数迁移；
-- 与以上功能直接相关的测试与诊断。
-
-本轮禁止无理由修改 Boot、OTA 大分区、普通 MQTT 业务语义、RTC、计划任务业务逻辑及其他已工作的功能。
+禁止无理由修改 Boot、OTA 大分区、普通 MQTT、RTC、计划任务业务语义及其他已工作的功能。
 
 ---
 
-## 2. 50W 固件冻结参数
+## 2. 50W 冻结参数
 
 | 参数 | 冻结值 | 归属 |
 |---|---:|---|
 | 额定功率 | 50W | Product Profile |
+| MID | 1 | Product Profile |
 | Hardware Max | **1680mA** | Product Profile |
 | 默认 HWMAX | **1400mA** | Factory Config 默认值 |
 | 默认 SET_OUTCUR | **893mA** | User Config 默认值 |
 | RS3 | **120mΩ** | Product Profile |
 | 校准点 | **11 点** | Calibration |
 | Level | `0,20,...,200` | Calibration |
-| 对应百分比 | `0%,10%,...,100%` | Calibration |
 
 固定关系：
 
@@ -57,125 +45,180 @@
 SET_OUTCUR <= HWMAX <= Hardware Max
 ```
 
-定义：
-
-- `SET_OUTCUR`：用户当前 100% 亮度目标电流；
-- `HWMAX`：工厂允许用户调整 SET_OUTCUR 的最大范围；
-- `Hardware Max`：硬件真实最大输出/安全能力上限。
-
-Factory 命令第一版不做身份认证，但固件仍必须做参数合法性检查，例如 `HWMAX > 1680mA` 必须拒绝。
-
 ---
 
-## 3. 后续其他瓦数如何扩展
+## 3. 一个功率段 = 一个独立固件
 
-50W 先做成标准模板。后续 75W/100W/... 只更换产品参数，不复制校准算法。
+这是 V3 的正式架构要求。
 
-建议最终结构：
+### 3.1 禁止多功率参数混入同一个固件
 
-```text
-sys_product_profile.*
-    └─ 编译期只选择一个 Product Profile
+50W 固件中只允许存在 50W Product Profile；75W 固件只允许存在 75W Product Profile，以此类推。
 
-50W Profile
-├─ MID
-├─ Model
-├─ Rated Power
-├─ Hardware Max
-├─ Default HWMAX
-├─ Default SET_OUTCUR
-├─ RS3
-└─ 产品固定硬件保护参数
+禁止继续采用：
+
+```c
+static const profile_t profiles[] = {
+    PROFILE_50W,
+    PROFILE_75W,
+    PROFILE_100W,
+    ...
+};
 ```
 
-后续切瓦数原则上不修改：
+也不允许通过运行时 `find(profileId)` 在一个固件内切换多套功率参数。
 
-- Calibration MQTT V3；
-- 11 点流程；
-- Output Calibration 算法；
-- OCO Calibration 算法；
-- BL0942 U/I/P Calibration 算法；
-- Flash A/B；
-- 上位机状态机。
+### 3.2 推荐使用 Keil 多 Target
 
-50W 二进制最终不得继续携带 75/100/150/200/240W 的 Profile Catalog、字符串和参数表。
+Keil 工程最终建议至少提供：
+
+```text
+CAT1_50W
+CAT1_75W
+CAT1_100W
+CAT1_150W
+CAT1_200W
+CAT1_240W
+```
+
+每个 Target 只定义一个编译期选择，例如：
+
+```text
+CAT1_50W   → PRODUCT_TARGET_50W
+CAT1_75W   → PRODUCT_TARGET_75W
+CAT1_100W  → PRODUCT_TARGET_100W
+```
+
+公共代码完全复用：
+
+```text
+MQTT / Protocol V3
+Calibration Service
+Output / OCO / BL0942 Calibration
+Flash A/B
+PWM
+保护
+OTA
+RTC / Plan
+普通业务
+```
+
+每个 Target 只选择对应的：
+
+```text
+product_profile_50w.*
+product_profile_75w.*
+product_profile_100w.*
+...
+```
+
+目标产物建议固定命名：
+
+```text
+CAT1_50W.bin
+CAT1_75W.bin
+CAT1_100W.bin
+CAT1_150W.bin
+CAT1_200W.bin
+CAT1_240W.bin
+```
+
+### 3.3 编译期要求
+
+- 只能有一个 `PRODUCT_TARGET_xxx` 生效；
+- 未选择或同时选择多个功率必须编译失败；
+- 当前 Target 对应 Profile 参数未冻结时必须编译失败；
+- `CAP` 只返回当前编译 Target 的 Product Profile；
+- 固件中不得生成 `profilesCsv` 或其他多型号 Catalog。
+
+这样从 50W 切换到其他功率时，只需要：
+
+```text
+冻结对应 Product Profile
+→ 选择对应 Keil Target
+→ Build
+→ 得到对应独立固件
+```
+
+不修改 Calibration V3 主流程。
 
 ---
 
-## 4. 参数职责必须拆清
+## 4. 参数职责
 
 ### 4.1 Product Profile
 
-只放产品固定参数：
+只放当前功率固件固定硬件身份与能力：
 
-- MID / Model / Rated Power；
+- Profile ID；
+- MID / Model；
+- Rated Power；
+- Hardware Revision；
 - Hardware Max；
 - RS3；
+- PWM Full Scale / Polarity；
+- OCO Hardware Revision；
 - 固定硬件保护边界；
 - Profile Version / Fingerprint；
-- 默认 HWMAX、默认 SET_OUTCUR 只作为首次初始化默认值。
-
-Product Profile 不允许普通运行配置覆盖。
+- Default HWMAX / SET 仅作为首次初始化默认值。
 
 ### 4.2 Factory Config
-
-放工厂可调、普通用户不可调参数：
 
 - HWMAX；
 - SN/生产信息；
 - 必要每机修调参数；
-- `OP_PWM_OFFSET`（保留用于无校准旧链）。
+- `OP_PWM_OFFSET`；
+- 其他明确属于工厂配置的数据。
 
 ### 4.3 User Config
 
-放客户运行参数：
-
 - SET_OUTCUR；
-- 用户可调温度参数；
+- 温控；
 - 告警；
 - 平台/MQTT；
 - 上报周期；
 - 调光设置；
 - 计划任务。
 
-代码默认值只用于空白/无效 Config 初始化。有效 Config 存在后，重启和 OTA 不得重新覆盖 SET_OUTCUR。
-
 ---
 
-## 5. 删除输出电压绑定
+## 5. Calibration 不绑定运行参数
 
-`BOUND_OUTPUT_VOLTAGE_01V` 不再是正常业务配置，也不再参与：
+以下参数不得参与 Calibration 有效性授权：
 
-- SET_OUTCUR 合法性授权；
-- Calibration Context；
-- Calibration 是否可用；
-- 非零 PWM 输出许可。
+- SET_OUTCUR；
+- 当前 HWMAX；
+- 输出电压 / CV；
+- Tolerance；
+- calibratedMaxCurrent。
 
-实际 `Vo` 是采样/报告状态量。
+`BOUND_OUTPUT_VOLTAGE_01V` 不再作为运行授权或 Calibration Context 条件。
 
-校准上位机可以选择 36V、56V 或其他工况，固件不判断“哪个电压才允许校准”。如果 Target Calibration Record 保存参考电压，只作为 Metadata，不参与运行授权。
+实际 `Vo` 只是采样/报告状态量。
+
+```text
+Calibration = Correction，不是 Permission
+```
 
 ---
 
 ## 6. 正常输出链
 
-### 6.1 无 Output Calibration
-
-必须保留成熟旧链：
+### 6.1 无有效 Output Calibration
 
 ```text
 SET_OUTCUR × Brightness
         ↓
 默认 PWM 模型
         ↓
-OP_PWM_OFFSET 光耦补偿
+OP_PWM_OFFSET
         ↓
 硬件保护仲裁
         ↓
 PWM
 ```
 
-无校准不能导致 PWM=0。
+无 Calibration 不允许导致 PWM 永久为 0。
 
 ### 6.2 有有效 Output Calibration
 
@@ -184,128 +227,133 @@ SET_OUTCUR × Brightness
         ↓
 Target Current
         ↓
-11 点 Output Calibration 反插值
+11点 Output Calibration 反插值
         ↓
-直接得到高精度 u16 PWM
+直接得到 u16 PWM
         ↓
 硬件保护仲裁
         ↓
 PWM
 ```
 
-有有效 Output Calibration 时不再叠加 `OP_PWM_OFFSET`，防止重复补偿。
+有有效 Calibration 时不重复叠加 `OP_PWM_OFFSET`。
 
-### 6.3 Calibration 不绑定 SET_OUTCUR
+### 6.3 校准后修改 SET
 
-校准后客户修改 SET_OUTCUR，只要 `SET_OUTCUR <= HWMAX`，立即生效，Calibration 不失效。
+只要：
 
-Calibration = Correction，不是 Permission。
+```text
+0 < SET_OUTCUR <= HWMAX
+```
+
+新的 SET_OUTCUR 立即进入正常 Target Current 链，已有 Calibration 继续有效。
 
 ---
 
-## 7. 11 点 Calibration 采点基线
+## 7. 正式 11 点采集
 
-正式点固定：
+固定：
 
 ```text
 Level: 0,20,40,60,80,100,120,140,160,180,200
 比例 : 0,10,20,30,40,50,60,70,80,90,100%
 ```
 
-### SET_POINT 行为
+Calibration 模式下 `SET_POINT`：
 
-Calibration 模式下 `SET_POINT` 必须输出已知原始逻辑 PWM 档位：
-
-```text
-Level 20  -> 10%
-Level 100 -> 50%
-Level 200 -> 100%
-```
-
-采点时：
-
-- 不应用已存在 Output Calibration；
+- 输出已知原始逻辑 PWM；
+- 不应用旧 Output Calibration；
 - 不叠加 OP_PWM_OFFSET；
-- 保留真实硬件底线保护。
-
-原因：校准要测量真正的 `PWM -> 实际输出` 传递关系，不能把旧补偿算法混进新曲线。
+- 保留硬件底线保护；
+- 返回 Actual PWM。
 
 ---
 
-## 8. 三类 Calibration
+## 8. 每次必须完成整套 Calibration
 
-### 8.1 Output Calibration
+V3 不支持局部更新。
 
-输入：
+每次完整 Calibration 必须包含：
+
+1. Output Calibration；
+2. OCO Calibration；
+3. BL0942 Voltage Calibration；
+4. BL0942 Current Calibration；
+5. BL0942 Power Calibration。
+
+不设计 UpdateMask，不做 Section Merge。
+
+只有整套 Record 完整、格式正确、CRC 正确，才允许 STAGE。
+
+---
+
+## 9. Calibration 模型
+
+### 9.1 Output
 
 ```text
-Actual PWM <-> 外部仪器 Reference Output Current
+Actual PWM <-> Reference Output Current
 ```
 
-保存 11 点关系，运行时根据 `Target Current` 做分段线性反插值，直接输出 u16 PWM，禁止先四舍五入为整数百分比。
+11 点保存，运行时根据 Target Current 分段线性反插值。
 
-校准表范围外但目标仍合法时：
-
-```text
-回退无校准默认 PWM + OP_PWM_OFFSET
-+ 记录 CAL_OUT_OF_RANGE 诊断
-```
-
-不能 PWM=0。
-
-### 8.2 OCO Calibration
-
-推荐使用：
+### 9.2 OCO
 
 ```text
 OCO ADC Raw <-> Reference Output Current
 ```
 
-运行链必须拆开：
+保护链和业务修正链必须分离：
 
 ```text
-OCO Raw ──> 保守默认换算 ──> Protection
+OCO Raw → 保守默认换算 → Protection
    │
-   └──────> OCO Calibration ──> Corrected Current ──> MQTT
+   └→ OCO Calibration → Corrected Current → MQTT
 ```
 
-禁止把 Calibration 修正后的上报值重新用于硬件过流保护。
+### 9.3 BL0942
 
-### 8.3 BL0942 Calibration
+- Voltage：Gain/Offset Correction；
+- Current：11 点 Raw→Reference；
+- Power：11 点 Raw→Reference。
 
-分别支持：
-
-- Input Voltage；
-- Input Current；
-- Active Power。
-
-Current / Power 使用 11 点负载变化形成 Raw→Reference 曲线。
-
-Voltage 第一版不强行做 11 段量程曲线；在相同市电条件下收集多个有效点，由上位机生成稳定 Voltage Gain/Correction 参数。
-
-无 BL0942 Calibration 时继续使用原默认换算。
+无对应 Calibration 时继续使用默认换算。
 
 ---
 
-## 9. BL0942 长期冻结修复
+## 10. 固件不做最终误差 PASS/FAIL
 
-本轮 BL0942 Calibration 前提是 Raw 数据稳定可信。
+这是 V3 的正式职责边界。
 
-必须检查并修复：
+固件只负责：
 
-- USART2 ORE；
-- FE / NE；
-- `HAL_UART_Transmit_IT` / `Receive_IT` 返回值；
-- HAL `gState / RxState / ErrorCode`；
-- RX 重挂；
-- TX/RX 回调与上层状态失步；
-- timeout 后状态同步；
-- Buffer/Index；
-- 长运行 Tick/计数溢出；
-- BL0942 芯片无响应；
-- BL0942 VDD/供电域问题。
+```text
+完整 STAGE
+→ APPLY 临时生效
+→ SET_OUTPUT 按上位机要求输出
+→ 返回 Actual PWM / RAW
+```
 
-必须新增/明确：
+固件不保存、不计算、不裁决 ±1%、±2% 或其他 Tolerance。
+
+最终：
+
+```text
+上位机 + 外部标准仪器
+→ 计算误差
+→ PASS / FAIL
+
+PASS → COMMIT
+FAIL → ABORT
+```
+
+固件状态机中不增加 VERIFY/PASS/FAIL 状态。
+
+---
+
+## 11. BL0942 Freshness 与长期稳定性
+
+必须明确：
 
 ```text
 last_valid_frame_tick
@@ -313,15 +361,22 @@ dataAge
 fresh/stale
 ```
 
-旧值不得永久当成实时值上报。
+检查并修复：
 
-**禁止正式方案：周期性或连续 Reset BL0942 状态机。**
+- USART2 ORE / FE / NE；
+- HAL TX/RX 返回值；
+- gState / RxState / ErrorCode；
+- RX 重挂；
+- timeout 后状态同步；
+- Buffer / Index；
+- 长运行 Tick / 计数；
+- 芯片无响应与供电域问题。
 
-允许异常后的有限恢复，但必须有明确错误分类、计数、状态快照和恢复成功判断。
+禁止用周期性 Reset 掩盖根因。
 
 ---
 
-## 10. Flash 物理布局
+## 12. Flash 物理布局
 
 保持大分区不变：
 
@@ -332,7 +387,7 @@ fresh/stale
 0x08024000~0x08040000 OTA Backup
 ```
 
-Persistent 12KB 按 2KB 物理擦除页：
+Persistent 12KB 固定按 2KB 页重新划分：
 
 | Page | 地址 | Owner |
 |---|---|---|
@@ -343,203 +398,388 @@ Persistent 12KB 按 2KB 物理擦除页：
 | 4 | `0x08007000~0x08007800` | Runtime A |
 | 5 | `0x08007800~0x08008000` | Runtime B |
 
-原则：**一个物理擦除页只有一个事务 Owner。**
+一个物理擦除页只有一个事务 Owner。
 
-### A/B 统一事务
+统一 A/B 事务：
 
 ```text
 读当前有效页
-→ 构造完整新 Record
+→ 构造新 Record
 → 擦非活动页
-→ 写 Record
+→ 写 Record（CommitMarker暂不写有效值）
 → 回读/CRC
-→ 最后 Commit
+→ 最后写 CommitMarker
 → 新 Generation 生效
 ```
 
-任何阶段掉电都必须至少保留一个旧有效页。
-
-Calibration 11 点采样不逐点写 Flash，只在上位机验证后 COMMIT 一次。
-
 ---
 
-## 11. Target Calibration Record 逻辑结构
+## 13. Calibration Record V2 字节级冻结
 
-最终 Flash 只保存运行真正需要的修正数据，不保存全部产线证据。
+统一 **Little Endian**。
 
-建议结构：
+### 13.1 CRC32 统一定义
 
 ```text
-Header
-├─ Magic
-├─ Format Version
-├─ Generation
-├─ Product Profile ID
-├─ Profile Version/Fingerprint
-├─ Valid Flags
-└─ Metadata
-
-Output Calibration
-└─ 11 × {PWM, Reference Output Current}
-
-OCO Calibration
-└─ 11 × {OCO Raw, Reference Output Current}
-
-BL0942 Current Calibration
-└─ 11 × {Raw Current, Reference Current}
-
-BL0942 Power Calibration
-└─ 11 × {Raw Power, Reference Power}
-
-BL0942 Voltage Calibration
-└─ Gain/Correction Parameters
-
-Footer
-├─ CRC32
-└─ Commit Marker
+Name       = CRC-32/ISO-HDLC（CRC32/IEEE）
+Poly       = 0x04C11DB7
+RefIn      = true
+RefOut     = true
+Init       = 0xFFFFFFFF
+XorOut     = 0xFFFFFFFF
+Check      = 0xCBF43926  （ASCII "123456789"）
 ```
 
-最终字节级结构由联合审核文档冻结后实现；在此之前不指定新的 Storage `formatVersion`。
+反射实现可使用等价多项式 `0xEDB88320`。
+
+### 13.2 Header，固定 32B
+
+| Offset | Size | 字段 | 说明 |
+|---:|---:|---|---|
+| 0x00 | 4 | Magic | `0x324C4143`，Little Endian 字节为 `43 41 4C 32`，ASCII `CAL2` |
+| 0x04 | 2 | FormatVersion | 固定 2 |
+| 0x06 | 2 | RecordLength | 固定 `0x0138` = 312B |
+| 0x08 | 4 | Generation | Flash COMMIT 时由固件填写 |
+| 0x0C | 2 | ProfileId | 当前编译 Target 对应 Profile ID |
+| 0x0E | 2 | ProfileVersion | 当前 Profile 版本 |
+| 0x10 | 4 | ProfileFingerprint | 固定工厂/硬件身份 CRC32 |
+| 0x14 | 4 | ValidFlags | V3 完整校准固定 `0x0000001F` |
+| 0x18 | 4 | Reserved0 | 0 |
+| 0x1C | 4 | Reserved1 | 0 |
+
+ValidFlags：
+
+```text
+bit0 Output
+bit1 OCO
+bit2 BL0942 Voltage
+bit3 BL0942 Current
+bit4 BL0942 Power
+```
+
+V3 当前只接受 `0x1F`，不用于局部更新。
+
+### 13.3 Payload
+
+```text
+0x20  Output Calibration
+      11 × {u16 pwm, u16 refCurrentMa} = 44B
+
+0x4C  OCO Calibration
+      11 × {u16 raw, u16 refCurrentMa} = 44B
+
+0x78  BL0942 Current Calibration
+      11 × {u32 raw, u16 refCurrentMa, u16 reserved} = 88B
+
+0xD0  BL0942 Power Calibration
+      11 × {u32 raw, u32 refPowerMw} = 88B
+
+0x128 BL0942 Voltage Calibration
+      s32 gainQ20
+      s32 offsetMv
+      = 8B
+```
+
+### 13.4 Footer
+
+```text
+0x130 u32 crc32
+0x134 u32 commitMarker
+```
+
+最终已提交 Record：
+
+```text
+commitMarker = 0xA55AA55A
+RecordLength = 0x138 = 312B
+```
+
+最终 Record CRC 覆盖 `[0x00,0x130)`，不包含 `crc32` 自身和 CommitMarker。
 
 ---
 
-## 12. Calibration MQTT Protocol V3——固件侧要求
+## 14. Product Fingerprint 字节级冻结
 
-### 12.1 为什么必须瘦身
+Fingerprint 只绑定固定工厂/硬件身份。
 
-当前固件：
+按以下顺序生成字节流：
 
-- `ZK_JSON_BUF_SIZE = 2048B`；
-- `ZK_CJSON_TX_POOL_SIZE = 4096B`；
-- TX cJSON 使用线性静态池，单报文构建中节点删除不回收；
-- 代码已经存在 `TX Pool Exhausted` 诊断。
+```text
+profileVersion      u16 LE
+profileId           u16 LE
+mid                 u8
+hardwareRevision    u16 LE
+ratedPowerW         u16 LE
+rs3Mohm             u16 LE
+hardwareMaxMa       u16 LE
+pwmFullScale        u16 LE
+pwmPolarity         u8   （0=Normal，1=Inverted）
+ocoHardwareRevision u16 LE
+```
 
-因此 V3 必须减少字段数、重复状态和大对象。
+然后按第 13.1 节 CRC32 算法计算 Fingerprint。
 
-### 12.2 只修改 `SV=cal` 的 `DT`
+禁止使用：
 
-外层中科/MQTT Envelope 保持兼容：
+- C 结构体内存直接 CRC；
+- 编译器 padding；
+- JSON 文本；
+- 字符串拼接。
+
+明确不参与 Fingerprint：
+
+- SET_OUTCUR；
+- 当前 HWMAX；
+- CV；
+- Tolerance；
+- 计划任务；
+- MQTT/平台参数；
+- 运行历史。
+
+---
+
+## 15. STAGE / COMMIT / READ Record 所有权
+
+### 15.1 STAGE 线上格式
+
+第一版 `STAGE` 仍发送完整 312B staging image，以便上下位机统一一个编码器/解码器。
+
+STAGE payload 中：
+
+```text
+Generation   = 0
+CommitMarker = 0xFFFFFFFF
+```
+
+`crc32` 字段必须是**staging image** 对 `[0x00,0x130)` 计算得到的 CRC；JSON 外层 `crc` 必须等于该 `crc32` 字段。
+
+固件验证：
+
+- Magic / Version / Length；
+- ProfileId / ProfileVersion / Fingerprint；
+- ValidFlags = 0x1F；
+- Generation = 0；
+- CommitMarker = 0xFFFFFFFF；
+- staging CRC；
+- 五类 Calibration 数据完整性和基本格式。
+
+STAGE 成功后只存 RAM，不写为有效 Flash Calibration。
+
+### 15.2 COMMIT 所有权
+
+只有上位机外部验证 PASS 后调用 COMMIT。
+
+COMMIT 时由**固件**完成：
+
+```text
+读取当前有效 Generation
+→ newGeneration = current + 1
+→ 将 Staged Record 的 Generation 改为 newGeneration
+→ 重算最终 Record crc32
+→ CommitMarker保持擦除态/无效态
+→ 写入非活动 Calibration Slot
+→ 回读并校验最终 CRC
+→ 最后写 CommitMarker = 0xA55AA55A
+→ 切换为新有效 Generation
+```
+
+上位机不得决定：
+
+- Generation；
+- A/B Slot；
+- 最终 Flash Record CRC；
+- CommitMarker 写入时机。
+
+### 15.3 READ
+
+READ 返回当前最终已提交 312B Record：
+
+```text
+gen + len + crc + payloadHex
+```
+
+上位机必须验证：
+
+- len=312；
+- payload 内 Generation == gen；
+- payload 内 crc32 == JSON crc；
+- CommitMarker == 0xA55AA55A；
+- 最终 CRC 正确；
+- Profile Fingerprint 正确。
+
+---
+
+## 16. Calibration MQTT Protocol V3
+
+### 16.1 外层 Envelope 保持现有协议
 
 ```json
-{"SN":"...","TM":"...","SV":"cal","ID":"...","CT":"R","DT":{}}
+{"SN":"...","TM":"...","SV":"cal","ID":"...","CT":"R/W","DT":{}}
 ```
 
-普通 `prop/ctrl/rept/alam/ota/plan` 不因本次校准协议瘦身而改变。
+普通 `prop/ctrl/rept/alam/ota/plan` 不改变。
 
-### 12.3 V3 紧凑字段
+### 16.2 Operation 使用字符串
 
-建议公共字段：
-
-| 字段 | 含义 |
-|---|---|
-| `v` | Protocol Version |
-| `o` | Operation Code |
-| `s` | Session ID |
-| `q` | Sequence |
-| `rc` | Result Code |
-| `st` | Calibration State |
-| `lv` | Level |
-| `pwm` | Actual PWM |
-| `gen` | Generation |
-| `len` | Record Length |
-| `crc` | CRC32 |
-
-Operation 使用数字 Code，不再重复长字符串。
-
-建议：
+冻结：
 
 ```text
-0 CAP
-1 BEGIN
-2 HEARTBEAT
-3 SET_POINT
-4 RAW
-5 STAGE
-6 APPLY
-7 SET_VERIFY
-8 COMMIT
-9 READ_INFO
-10 READ_CHUNK
-11 ABORT
-12 RELEASE
-13 DIAG
+CAP
+BEGIN
+HEARTBEAT
+SET_POINT
+RAW
+STAGE
+APPLY
+SET_OUTPUT
+COMMIT
+READ
+ABORT
+RELEASE
+DIAG
 ```
 
-具体 Code 以联合审核文档最终冻结值为唯一真源。
-
-### 12.4 Operation-specific Response
-
-禁止所有 ACK 都返回完整 status/context。
-
-例如 SET_POINT 只需：
-
-```json
-{"v":3,"o":3,"q":12,"rc":0,"lv":100,"pwm":500}
-```
-
-RAW 只返回校准算法真正需要的 Raw/Freshness。
-
-大量 BL0942 诊断计数放入 DIAG，不随 11 个正式点重复发送。
-
-### 12.5 CAP 不再发多 Profile Catalog
-
-50W 固件只返回当前 50W：
+### 16.3 公共字段
 
 ```text
-Profile ID / Fingerprint
-Hardware Max = 1680
-HWMAX = 1400 默认或当前值
-SET_OUTCUR = 当前值
-Point Count = 11
-Level Step = 20
-Calibration Feature Bitmask
-Generation
+v      u8，固定3
+op     string
+sid    u32
+seq    u32
+rc     u8
+st     u8
 ```
 
-删除 `profilesCsv` 和其他瓦数列表。
-
-### 12.6 RAW 精简
-
-正式校准 RAW 原则上只包含：
-
-- level / actual pwm；
-- OCO Raw；
-- BL0942 Voltage Raw；
-- BL0942 Current Raw；
-- BL0942 Power Raw；
-- 必要 Output Voltage；
-- Freshness/Data Age/Valid Flags；
-- 必要硬件 fault flags。
-
-不默认返回 frameErrors、timeoutErrors、UART errors、NTC Raw、Leak Raw、Frequency、CF Count 等诊断数据。
-
-### 12.7 大数据回读
-
-正常 COMMIT/READ_INFO 只回：
+操作专用字段：
 
 ```text
-Generation + Length + CRC + Valid Flags
+lv         u16
+pct        u8
+pwm        u16
+gen        u32
+len        u16
+crc        u32
+payloadHex string
 ```
 
-需要字节级完整核验时用 `READ_CHUNK` 分块，不把整个 Target Calibration Record Hex 一次塞入 TX。
+### 16.4 Result Code
 
-STAGE 第一版可继续使用 Hex，但必须满足 RX 2048B 预算；若最终 Record 超出预算，再升级 STAGE_CHUNK，不优先引入 Base64。
+```text
+0  OK
+1  BAD_REQUEST
+2  BAD_STATE
+3  BUSY
+4  SESSION_EXPIRED
+5  RANGE_ERROR
+6  DATA_STALE
+7  CRC_ERROR
+8  FLASH_ERROR
+9  HARDWARE_FAULT
+10 PROFILE_MISMATCH
+```
 
-### 12.8 报文预算
+### 16.5 State
 
-建议验收门槛：
-
-- 普通 ACK 最终 JSON：目标 `<256B`；
-- RAW：目标 `<512B`；
-- CAP：目标 `<768B`；
-- READ_CHUNK：目标 `<768B`；
-- 所有设备 TX 最终 JSON 必须 `<1536B`；
-- 所有 V3 操作必须实测无 `TX Pool Exhausted`；
-- cJSON TX pool 应保留明显余量，不以 4096B 临界通过为合格。
+```text
+0 IDLE
+1 ACTIVE
+2 STAGED
+3 APPLIED
+4 COMMITTED
+```
 
 ---
 
-## 13. 固件目标状态机
+## 17. Operation 行为
+
+### CAP
+
+只返回当前编译 Target 的：
+
+- protocolVersion=3；
+- calibrationFormatVersion=2；
+- profileId / profileVersion / fingerprint；
+- Rated Power / MID / RS3；
+- Hardware Max；
+- 当前 HWMAX；
+- 当前 SET_OUTCUR；
+- pointCount=11；
+- levelStep=20；
+- generation；
+- persistenceReady / ready / fault。
+
+禁止返回 `profilesCsv`。
+
+### BEGIN / HEARTBEAT
+
+使用 sid/seq 维护独占会话和租约。
+
+### SET_POINT
+
+只接受 `0,20,...,200`，输出原始逻辑 PWM。
+
+### RAW
+
+返回算法需要的 OCO Raw、BL0942 Raw U/I/P、必要 Vo、Freshness、fault、actual pwm。
+
+### STAGE
+
+必须携带：
+
+```text
+len=312
+crc
+payloadHex=624个Hex字符
+```
+
+固件按第 15.1 节验证 staging image。
+
+### APPLY
+
+将 RAM 中 Staged Calibration 临时用于运行，不写有效 Flash Slot。
+
+### SET_OUTPUT
+
+只允许 APPLIED 状态，输入 `pct=1..99`，使用当前临时 Calibration 输出并返回 Actual PWM。
+
+**只负责输出，不判断误差。**
+
+### COMMIT
+
+只在上位机确认 PASS 后调用，固件按第 15.2 节完成最终 A/B 提交。
+
+### READ
+
+直接返回当前已提交 312B Record，不引入 READ_INFO/READ_CHUNK。
+
+### ABORT
+
+丢弃 staged/applied RAM 临时数据并安全关闭校准输出，不修改当前已提交 Record。
+
+### RELEASE
+
+结束会话回 IDLE。
+
+### DIAG
+
+单独返回 BL0942/UART/Flash 诊断，不污染正式 RAW。
+
+---
+
+## 18. 报文预算
+
+- 普通 ACK `<256B`；
+- RAW `<512B`；
+- CAP `<768B`；
+- READ 目标 `<1024B`；
+- 所有设备 TX 最终 JSON `<1536B`；
+- 所有 V3 操作不得出现 `TX Pool Exhausted`。
+
+312B Record 对应 624 个 Hex 字符，满足当前第一版单报文预算目标。
+
+---
+
+## 19. 固件状态机
 
 ```text
 IDLE
@@ -547,163 +787,103 @@ IDLE
   ▼
 ACTIVE
   │ SET_POINT / RAW / HEARTBEAT
-  │
-  │ STAGE
+  │ STAGE完整Record
   ▼
 STAGED
   │ APPLY
   ▼
 APPLIED
-  │ 上位机独立验证
-  │
-  ├─ ABORT ──> ABORTED/IDLE
-  │
+  │ SET_OUTPUT由上位机外部验收
+  ├─ ABORT → IDLE
   └─ COMMIT
        ▼
-     COMMITTED
-       │ READ_INFO / READ_CHUNK
+   COMMITTED
+       │ READ
        │ RELEASE
        ▼
       IDLE
 ```
 
-错误/租约超时必须安全退出校准控制，但不能让正常无校准运行永久被禁止。
+固件不增加 VERIFY / PASS / FAIL 状态。
 
 ---
 
-## 14. Legacy OTA 迁移
+## 20. 历史数据策略：开发阶段不迁移
 
-新固件首次启动：
+当前仍处开发阶段，V3 首次部署不实现 Legacy Migration。
 
-1. 优先读新 Config A/B；
-2. 若无新格式，读取旧 sys_data / Property / Plan；
-3. 提取有效 SET_OUTCUR、合法 HWMAX、温度、平台、告警、计划；
-4. 构造新 Config Snapshot；
-5. 写入新 A/B；
-6. 缺失新 Calibration = 正常“未校准”状态；
-7. 使用旧无校准 PWM + OP_PWM_OFFSET 正常输出。
+首次识别到 Persistent Storage 不是 V3 新格式时：
 
-禁止 OTA 后把用户已修改 SET_OUTCUR 恢复成 893mA。
+1. 只格式化 `0x08005000~0x08008000` 这 12KB Persistent 区；
+2. 不触碰 Boot、APP、OTA Backup；
+3. Config 使用当前 Keil Target 对应 Product Profile 默认值初始化；
+4. Calibration 初始为空；
+5. Runtime 初始为空；
+6. 历史计划、运行统计、旧配置、旧 Calibration 不迁移。
 
----
-
-## 15. 当前固件明确需要纠正的逻辑
-
-- 删除“没有 Calibration / 电压不匹配 => PWM=0”；
-- 删除 Calibration Context 对运行 SET_OUTCUR 和运行输出电压的绑定；
-- `calibratedMaxCurrent` 不再作为运行授权上限；
-- SET_OUTCUR 成为正常 Target Current 核心；
-- OCO Raw 保护链与 Corrected MQTT 链分离；
-- BL0942 Correction 真正进入业务 U/I/P；
-- BL0942 增加 Freshness；
-- `sys_data` / Property 等主备同时写改成真正 A/B；
-- Calibration MQTT 删除多 Profile Catalog 与重复大 Status；
-- RAW Schema 与上位机统一到 V3；
-- 旧 `0x0801E000~0x08020000` 编程器写区必须审计并退出新持久化设计。
+如果开发设备 SN/MAC/平台凭证原本存放在旧 Persistent 区，开发阶段重新写入/重新配网，不增加一次性 Legacy Migration 代码。
 
 ---
 
-## 16. 主要修改文件
+## 21. 推荐实施顺序
 
-重点：
-
-- `sys_product_profile.*`
-- `factory_user_data.*`
-- `sys_data.*`
-- `flash_address_assignment.*`
-- `hw_flash.*`
-- `sys_pwm.*`
-- `sys_calibration_service.*`
-- `sys_calibration_storage.*`
-- `sys_calibration_flash.*`
-- `sys_calibration_driver_protocol.*`
-- `sys_calibration_mqtt.*`
-- `sys_calibration_snapshot.*`
-- `sys_Vo_Io.*`
-- `sys_bl0942.*`
-- `hw_uart2.*`
-
-根据迁移需要：
-
-- `zk_property.*`
-- `zk_work_plan.*`
-
-新增或修改其他模块必须说明与本次校准闭环的直接关系。
+1. 把 Product Profile 重构成单功率编译期 Profile；
+2. 在 Keil 工程建立 50/75/100/150/200/240W Target；
+3. 当前先冻结并启用 50W Target：1680 / 1400 / 893 / RS3=120；
+4. 建立新 6 页 Flash；
+5. 实现 V3 首次格式化初始化；
+6. 恢复无 Calibration 正常输出；
+7. SET_OUTCUR → Target Current；
+8. SET_POINT 原始逻辑 PWM；
+9. V3 RAW；
+10. Output/OCO/BL0942 U/I/P 完整 Calibration；
+11. 312B Calibration Record encode/decode/CRC；
+12. MQTT V3；
+13. APPLY / SET_OUTPUT / COMMIT / READ；
+14. BL0942 Freshness 与长期稳定；
+15. 与上位机联合 HIL；
+16. 掉电/OTA/长稳回归；
+17. 其他功率 Profile 冻结后直接启用对应 Keil Target，不复制 V3 主链。
 
 ---
 
-## 17. 推荐固件实施顺序
+## 22. 固件验收重点
 
-1. 冻结 50W Product Profile：1680 / 1400 / 893 / RS3=120；
-2. 建立 Config / Calibration / Runtime A/B；
-3. 完成 Legacy 读取和迁移；
-4. 恢复正确无 Calibration 输出链；
-5. SET_OUTCUR → Target Current；
-6. Calibration SET_POINT 原始逻辑 PWM；
-7. V3 RAW Snapshot；
-8. Output Calibration；
-9. OCO Calibration Raw/Corrected 分离；
-10. BL0942 根因修复和 Freshness；
-11. BL0942 U/I/P Calibration；
-12. Calibration MQTT V3 紧凑协议；
-13. 与上位机联合 HIL；
-14. OTA/掉电/长稳回归。
-
----
-
-## 18. 必须规避修改的其他功能
-
-### Bootloader / APP / OTA
-
-禁止改变：
-
-- Boot/APP/OTA 地址；
-- APP `0x08008000` 起始；
-- checksum/length/device type 元数据契约；
-- Boot 校验 APP 机制。
-
-### 普通 MQTT
-
-除 `SV=cal` 和必要 Factory 开发命令外，不改普通平台协议语义。
-
-### 计划任务 / RTC
-
-只允许存储迁移，不改原计划语义、RTC 依赖和时间执行逻辑。
-
-### 4G/CAT1
-
-不得误删正常 CAT1 链。USART2 `_4G_CAT_1` 当前用于 BL0942，不恢复旧废弃 485 业务。
-
-### 硬件保护
-
-上位机负责校准业务安全，MCU 仍保留过流、过温、短路等硬件最后保护。
+- [ ] 50W Target 只包含 50W Profile；
+- [ ] 其他 Target 只包含各自 Profile；
+- [ ] 固件中不存在多功率 `_profiles[]` Catalog；
+- [ ] 切换 Keil Target 可直接生成对应独立固件；
+- [ ] 50W 空白 Config 得到 HWMAX=1400、SET=893；
+- [ ] 无 Calibration 可正常输出；
+- [ ] 校准后修改 SET 不使 Calibration 失效；
+- [ ] CV 改变不使 Calibration 失效；
+- [ ] 每次完整校准 Output/OCO/BL0942 U/I/P；
+- [ ] 不支持局部更新；
+- [ ] APPLY 后固件不做 Tolerance PASS/FAIL；
+- [ ] SET_OUTPUT 只负责输出；
+- [ ] Fingerprint 字节顺序、LE、CRC32 与上位机一致；
+- [ ] CRC32 `123456789 -> 0xCBF43926`；
+- [ ] STAGE 使用 Generation=0、CommitMarker=0xFFFFFFFF；
+- [ ] COMMIT 的 Generation / final CRC / CommitMarker 由固件管理；
+- [ ] READ 返回最终已提交 312B Record；
+- [ ] Config/Calibration/Runtime A/B 掉电安全；
+- [ ] V3 首次部署清空旧 12KB Persistent；
+- [ ] Boot/APP/OTA 地址不变；
+- [ ] V3 JSON 无 TX Pool Exhausted；
+- [ ] BL0942 长稳不靠周期 Reset。
 
 ---
 
-## 19. 固件验收重点
+## 23. 最终原则
 
-- 空白设备自动得到 HWMAX=1400、SET=893；
-- 无 Calibration 可正常输出且保留 OP_PWM_OFFSET；
-- SET_OUTCUR 修改/重启/OTA 保持；
-- SET > HWMAX 拒绝；HWMAX >1680 拒绝；
-- 11 点采点不叠加旧 Calibration 和 OP_PWM_OFFSET；
-- Calibration 后改 SET 不失效；
-- 运行 Vo 改变不使 Calibration 失效；
-- Output Calibration 使用高精度 PWM；
-- OCO Protection 使用 Raw/保守链；
-- BL0942 U/I/P 可修正，Freshness 正确；
-- BL0942 长时间运行无永久冻结，且不靠周期 Reset；
-- Config/Calibration/Runtime 掉电安全 A/B；
-- 校准 V3 所有 TX 无 4KiB pool 耗尽，最终 JSON 留足 2KiB buffer 余量；
-- Legacy OTA 参数不丢；
-- Boot/OTA/普通业务无回归。
+> **每个功率段单独固件，优先通过 Keil 切 Target 生成，不把所有功率参数混进同一个二进制。**
 
----
+> **公共固件框架、Protocol V3、Calibration 算法、Flash 结构保持一致；功率差异只通过当前 Target 的 Product Profile 注入。**
 
-## 20. 本文档与其他两份文档的关系
+> **固件负责完整 Calibration 的执行、临时 APPLY、运行 Correction 和持久化。**
 
-本文只回答：**固件应该怎么改。**
+> **固件完成完整一次校准后，不负责判断误差是否满足要求。**
 
-上位机如何改、校准前后算法如何执行、UI/仪器/审计如何调整，以 `tc-desktop-client/docs/CAT1_50W校准上位机修改实施方案.md` 为准。
+> **最终 PASS/FAIL 由上位机结合外部标准仪器判断；PASS→COMMIT，FAIL→ABORT。**
 
-最终开发完成后，不以“某一边单测通过”为结论，必须逐条通过 `CAT1_50W固件与上位机联合审核清单.md`，确认协议、单位、状态机、Target Calibration Record、JSON 大小、算法和回归边界全部一致后才允许进入量产验证。
+> **每次完整校准 Output + OCO + BL0942 U/I/P，不做局部更新。**
