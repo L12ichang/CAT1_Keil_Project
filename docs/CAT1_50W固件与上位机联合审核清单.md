@@ -5,13 +5,16 @@
 > 上位机仓库：`L12ichang/tc-desktop-client`  
 > 上位机基线分支：`main`  
 > 本文定位：**两个项目修改完成后的最终一致性审核基线**
-> 规范状态：`TARGET_SPEC_FROZEN / IMPLEMENTATION_ALIGNMENT_PENDING`
->
-> 口径索引：[`CAT1_50W文档口径说明.md`](CAT1_50W文档口径说明.md)；任何旧文档、V2 fixture 或实现快照均不得覆盖本清单。
+
+### 版本命名约束
+
+- 目标 Wire Protocol：**Calibration MQTT Protocol V3**；
+- 当前 `CAL_MQTT_V2`：Legacy 实现，不是目标协议；
+- 新 Flash 校准结构：在逐 Byte 冻结前统一称 **Target Calibration Record**；
+- 当前源码 `SYS_CALIBRATION_STORAGE_FORMAT_VERSION=3` 只代表旧 Storage Record；
+- 本文不得再使用“Calibration Record V2”作为目标名称。最终 Storage `formatVersion` 只在本文件完成逐Byte冻结时确定。
 
 ---
-
-本清单中的勾选项默认均为“待证实”。只有代码、Protocol V3 fixture、Keil 产物和 HIL 证据同时满足时才能勾选；不能用现有 `CAL_MQTT_V2` 通过来替代 V3 验收。
 
 ## 1. 审核定位
 
@@ -196,7 +199,7 @@ SET_OUTCUR <= HWMAX <= Hardware Max
 - [ ] CV不作为固件Calibration授权条件；
 - [ ] 固件不要求运行Vo等于校准CV；
 - [ ] 36V校准后在其他运行电压下Calibration仍可使用；
-- [ ] Calibration Record若保存Reference Voltage，只作为Metadata。
+- [ ] Target Calibration Record若保存Reference Voltage，只作为Metadata。
 
 ---
 
@@ -355,7 +358,7 @@ fresh/stale
 
 ## 14. Protocol V3 Wire Contract
 
-建议Operation Code：
+当前 Operation Code 为待最终字段级冻结的目标表：
 
 | Code | Operation |
 |---:|---|
@@ -376,7 +379,7 @@ fresh/stale
 
 最终代码必须和本文最终冻结版本一致。
 
-公共字段建议：
+公共字段候选：
 
 ```text
 v,o,s,q,rc,st,lv,pwm,gen,len,crc
@@ -421,12 +424,12 @@ ZK_CJSON_TX_POOL_SIZE = 4096B
 
 ---
 
-## 16. Calibration Record V2 审核
+## 16. Target Calibration Record 审核
 
 最终冻结后逐Byte核对：
 
 - [ ] Magic；
-- [ ] Format Version；
+- [ ] 最终 Storage Format Version；
 - [ ] Record Length；
 - [ ] Generation；
 - [ ] Profile Identity/Fingerprint；
@@ -443,6 +446,8 @@ ZK_CJSON_TX_POOL_SIZE = 4096B
 - [ ] 上位机encode结果与固件decode结果逐Byte一致。
 
 至少提供一组Golden Vector。
+
+在以上逐Byte项正式冻结之前，不使用“Calibration Record V2”作为目标版本名。
 
 ---
 
@@ -583,7 +588,7 @@ ZK_CJSON_TX_POOL_SIZE = 4096B
 
 > **Protocol V3上下位机字段、单位、Code、CRC完全一致。**
 
-> **Calibration Record逐Byte一致。**
+> **Target Calibration Record逐Byte一致。**
 
 > **无校准仍可正常运行。**
 
