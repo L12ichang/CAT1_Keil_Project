@@ -6,6 +6,14 @@
 > 配套上位机文档：`L12ichang/tc-desktop-client/docs/CAT1_50W校准上位机修改实施方案.md`  
 > 最终联合审核文档：本仓库 `docs/CAT1_50W固件与上位机联合审核清单.md`
 
+### 版本命名约束
+
+- 目标 MQTT 校准协议只称 **Calibration MQTT Protocol V3**；
+- 当前源码中的 `CAL_MQTT_V2` 仅属于 Legacy 实现；
+- 新 Flash 校准结构在逐 Byte 冻结前统一称 **Target Calibration Record**；
+- 当前源码 `SYS_CALIBRATION_STORAGE_FORMAT_VERSION=3` 仅代表旧 Storage Record 实现版本；
+- 在联合审核文档冻结最终字节布局前，不使用“Calibration Record V2”作为目标名称，也不提前指定新的 Storage `formatVersion`。
+
 ---
 
 ## 1. 本轮固件修改目标
@@ -145,7 +153,7 @@ Product Profile 不允许普通运行配置覆盖。
 
 实际 `Vo` 是采样/报告状态量。
 
-校准上位机可以选择 36V、56V 或其他工况，固件不判断“哪个电压才允许校准”。如果 Calibration Record 保存参考电压，只作为 Metadata，不参与运行授权。
+校准上位机可以选择 36V、56V 或其他工况，固件不判断“哪个电压才允许校准”。如果 Target Calibration Record 保存参考电压，只作为 Metadata，不参与运行授权。
 
 ---
 
@@ -355,7 +363,7 @@ Calibration 11 点采样不逐点写 Flash，只在上位机验证后 COMMIT 一
 
 ---
 
-## 11. Calibration Record V2 逻辑结构
+## 11. Target Calibration Record 逻辑结构
 
 最终 Flash 只保存运行真正需要的修正数据，不保存全部产线证据。
 
@@ -391,7 +399,7 @@ Footer
 └─ Commit Marker
 ```
 
-最终字节级结构由联合协议文档冻结后实现。
+最终字节级结构由联合审核文档冻结后实现；在此之前不指定新的 Storage `formatVersion`。
 
 ---
 
@@ -457,7 +465,7 @@ Operation 使用数字 Code，不再重复长字符串。
 13 DIAG
 ```
 
-具体 Code 以联合审核文档为唯一真源。
+具体 Code 以联合审核文档最终冻结值为唯一真源。
 
 ### 12.4 Operation-specific Response
 
@@ -513,7 +521,7 @@ Generation
 Generation + Length + CRC + Valid Flags
 ```
 
-需要字节级完整核验时用 `READ_CHUNK` 分块，不把整个 Calibration Record Hex 一次塞入 TX。
+需要字节级完整核验时用 `READ_CHUNK` 分块，不把整个 Target Calibration Record Hex 一次塞入 TX。
 
 STAGE 第一版可继续使用 Hex，但必须满足 RX 2048B 预算；若最终 Record 超出预算，再升级 STAGE_CHUNK，不优先引入 Base64。
 
@@ -698,4 +706,4 @@ APPLIED
 
 上位机如何改、校准前后算法如何执行、UI/仪器/审计如何调整，以 `tc-desktop-client/docs/CAT1_50W校准上位机修改实施方案.md` 为准。
 
-最终开发完成后，不以“某一边单测通过”为结论，必须逐条通过 `CAT1_50W固件与上位机联合审核清单.md`，确认协议、单位、状态机、Calibration Record、JSON 大小、算法和回归边界全部一致后才允许进入量产验证。
+最终开发完成后，不以“某一边单测通过”为结论，必须逐条通过 `CAT1_50W固件与上位机联合审核清单.md`，确认协议、单位、状态机、Target Calibration Record、JSON 大小、算法和回归边界全部一致后才允许进入量产验证。
