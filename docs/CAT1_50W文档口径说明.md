@@ -14,6 +14,8 @@
 
 其中第3份是 **V3 Wire / Fingerprint / Payload / Storage / Golden Vector 唯一字段级真源**。如果三份文档发生字段级冲突，以第3份为准并同步修正前两份，禁止由Codex自行选择。
 
+本《文档口径说明》记录已经由人工最终确认的冻结决策；在三份权威文档尚未同步某一最新冻结项时，以本文最新冻结项为准，随后必须同步回三份权威文档。
+
 旧文档、旧fixture和旧源码只用于理解V2现状，不得覆盖以上目标规范。
 
 ## 2. 当前代码状态
@@ -158,7 +160,7 @@ RAM staged
 
 上位机不构造Flash Record事务字段。
 
-### 4.6 Product Fingerprint
+### 4.6 Product Fingerprint 与 50W 正式硬件值
 
 Fingerprint输入固定为18B Little Endian：
 
@@ -177,7 +179,15 @@ ocoHardwareRevision u16
 
 使用CRC-32/ISO-HDLC。
 
-禁止参与：
+50W E1.1 正式冻结：
+
+```text
+hardwareRevision    = 0x0101   // E1.1
+pwmPolarity         = 1        // Inverted / 负逻辑
+ocoHardwareRevision = 0x0101
+```
+
+禁止参与Fingerprint：
 
 ```text
 SET_OUTCUR
@@ -190,7 +200,84 @@ Plan
 Calibration Generation
 ```
 
-### 4.7 Flash 6×2KiB
+### 4.7 Config A/B、Runtime A/B 职责
+
+Config A/B 只保存“掉电后仍需保留的配置”，包括：
+
+```text
+Factory Config
++ User Config
++ Plan / MQTT / 告警 / 温控 / 调光 / 上报周期等持久配置
+```
+
+Product Profile 不写入 Config A/B，由 Keil Product Target 编译确定。
+
+Calibration 数据不写入 Config A/B，单独属于 Calibration A/B。
+
+Runtime A/B 只保存运行统计和必要的 durable runtime safety 状态。第一版至少包括：
+
+```text
+totalRunTimeSec          u32   总运行时间，秒
+currentRunTimeSec        u32   当前运行时间，秒
+totalLightTimeSec        u32   总亮灯时间，秒
+currentLightTimeSec      u32   当前亮灯时间，秒
+totalEnergy001Wh         u32   总能耗，0.01Wh
+currentEnergy001Wh       u32   当前能耗，0.01Wh
+calibrationInhibit       u8    Calibration durable inhibit
+```
+
+运行统计在 RAM 实时累计，不允许每秒擦写 Flash。正常统计采用周期性 Checkpoint；安全字段 `calibrationInhibit` 按状态转换立即持久化。
+
+Config / Calibration / Runtime 三类 A/B 都采用各自独立的事务 Record；一个物理擦除页一个 Owner，不允许跨 Owner 共用页面。
+
+### 4.8 V3 durable boot/session inhibit
+
+正式冻结：
+
+```text
+Owner   = Calibration Service
+Storage = Runtime A/B
+```
+
+行为：
+
+```text
+BEGIN
+→ calibrationInhibit = 1
+→ 立即持久化 Runtime A/B
+
+ABORT / RELEASE
+→ calibrationInhibit = 0
+→ 立即持久化 Runtime A/B
+```
+
+校准过程中异常掉电/复位：
+
+```text
+启动读取Runtime A/B
+→ 发现calibrationInhibit=1
+→ PWM保持OFF
+→ 丢弃旧RAM session / staged数据
+→ 加载最新有效Committed Calibration
+→ 完成安全恢复
+→ 清calibrationInhibit并持久化
+→ State回IDLE
+→ 再恢复普通业务
+```
+
+明确不持久化：
+
+```text
+sid
+seq
+heartbeat状态
+lease剩余时间
+RAM staged Calibration Payload
+```
+
+HEARTBEAT 不写 Runtime Flash。
+
+### 4.9 Flash 6×2KiB
 
 ```text
 0x08005000 Config A
@@ -203,7 +290,7 @@ Calibration Generation
 
 一个物理擦除页一个Owner。
 
-### 4.8 当前开发阶段初始化策略
+### 4.10 当前开发阶段初始化策略
 
 发现旧Persistent或非V3新布局：
 
@@ -224,7 +311,7 @@ Calibration Generation
 
 合法V3 Persistent建立后不得每次启动重复格式化。
 
-### 4.9 完整Calibration
+### 4.11 完整Calibration
 
 每次必须全部生成：
 
@@ -238,7 +325,7 @@ Output
 
 不做UpdateMask，不做局部更新。
 
-### 4.10 PASS / FAIL
+### 4.12 PASS / FAIL
 
 ```text
 STAGE
@@ -252,7 +339,7 @@ FAIL → ABORT
 
 MCU不判断±1%/±2%，Tolerance只属于上位机。
 
-### 4.11 BL0942 Voltage
+### 4.13 BL0942 Voltage
 
 V3第一版：
 
@@ -273,7 +360,7 @@ Gain-only Q24
 
 禁止Codex在PayloadVersion=1的244B结构中偷偷加入Offset。
 
-### 4.12 Keil单功率Target
+### 4.14 Keil单功率Target
 
 ```text
 CAT1_50W
@@ -312,7 +399,9 @@ CAT1_240W
 - 上位机发送完整Flash Record；
 - 校准前按最终Tolerance直接FAIL；
 - BL0942周期Reset保活；
-- 在244B PayloadVersion=1偷偷增加Voltage Offset。
+- 在244B PayloadVersion=1偷偷增加Voltage Offset；
+- 把sid/seq/heartbeat/staged Payload持久化到Runtime；
+- 每秒写Runtime Flash。
 
 ## 6. 仍然保留、不得因协议重冻而删除的工程设计
 
@@ -331,7 +420,19 @@ CAT1_240W
 - Boot/APP/OTA/普通MQTT/RTC/Plan/CAT1非回归；
 - Windows Keil正式Build + 真实50W HIL。
 
-## 7. 后续问题分类
+## 7. 审计遗留项状态
+
+以下三项已人工确认并关闭：
+
+```text
+Config A/B、Runtime A/B Record职责/字段归属        CLOSED
+V3 durable boot/session inhibit Owner/存放位置    CLOSED
+50W hardwareRevision/pwmPolarity/OCO Revision    CLOSED
+```
+
+Runtime / Config Record 的最终逐 Byte Layout 在实现前必须按上述字段归属机械冻结，但不得改变本节已经确认的 Owner 和语义。
+
+## 8. 后续问题分类
 
 从本版开始，Codex不再自由设计协议。
 
