@@ -52,6 +52,9 @@ Boot、APP、OTA Backup、普通 MQTT、RTC、Plan 业务语义、CAT1 正常业
 | Formal Points | **11** | Calibration |
 | Level | `0,20,...,200` | Calibration |
 | Logical PWM Full Scale | **1000** | Product Profile |
+| Hardware Revision | **0x0101** | Product Profile / E1.1 |
+| PWM Polarity | **1** | Product Profile / Inverted |
+| OCO Hardware Revision | **0x0101** | Product Profile |
 
 固定关系：
 
@@ -487,6 +490,14 @@ Calibration Generation
 
 `hardwareRevision / ocoHardwareRevision / pwmPolarity` 必须由当前 Keil Product Target 明确定义；未定义时编译失败，不允许静默使用 0 作为默认硬件版本。
 
+50W E1.1：
+
+```text
+hardwareRevision    = 0x0101
+pwmPolarity         = 1
+ocoHardwareRevision = 0x0101
+```
+
 ---
 
 ## 10. Calibration MQTT Protocol V3——重新冻结为清晰字符串协议
@@ -739,7 +750,7 @@ RAW 中必须包含：
 
 ---
 
-## 14. Persistent 6×2KiB 物理布局——保持不变
+## 14. Persistent 6×2KiB 物理布局与 Record——保持物理地址，冻结新格式
 
 ```text
 0x08005000 Config A
@@ -758,13 +769,194 @@ Config / Calibration / Runtime 都必须是真正的 A/B：
 读当前有效页
 → RAM构造完整新Record
 → 只擦非活动页
-→ 写入
+→ 写Header + Payload + RecordCRC
 → Readback / CRC
-→ 最后 Commit
+→ 最后写CommitWord
 → 新 Generation 生效
 ```
 
 禁止所谓 Main/Backup 在一次保存里同时擦写。
+
+### 14.1 Config / Runtime 共用事务 Header
+
+```text
+0x000 4B  Magic
+0x004 u16 formatVersion
+0x006 u16 recordLength
+0x008 u32 generation
+0x00C u16 payloadLength
+0x00E u16 reserved=0
+0x010 u32 payloadCrc32
+0x014 Payload
+...   u32 recordCrc32
+...   u32 commitWord=0xC0A17EED
+```
+
+CRC统一 CRC-32/ISO-HDLC：
+
+```text
+payloadCrc32 = CRC32(完整Payload)
+recordCrc32  = CRC32(Header + Payload)
+```
+
+RecordCRC自身和CommitWord不参与RecordCRC；CommitWord最后写。
+
+### 14.2 Config A/B——CFG1
+
+冻结：
+
+```text
+Magic         = CFG1
+formatVersion = 1
+payloadLength = 1088B
+recordLength  = 1116B
+```
+
+```text
+0x000..0x013 Common Header             20B
+0x014..0x453 ConfigPayloadV1          1088B
+0x454..0x457 recordCrc32                4B
+0x458..0x45B commitWord                 4B
+```
+
+ConfigPayloadV1：
+
+```text
+0x000..0x07F factoryUserCompat[128]
+0x080..0x083 deviceAddress u32 LE
+0x084..0x1B3 propertyConfig 304B
+0x1B4..0x43B planRecords[8] 648B
+0x43C..0x43F reserved=0
+```
+
+`factoryUserCompat[128]`保留当前`factory_user_buff[128]`字节语义，是旧API兼容影子；其中 Product-owned 字段不作为权威来源，加载后必须由当前 Product Target 重新同步/校验。
+
+`propertyConfig`显式304B：
+
+```text
+0x000 s32 lng
+0x004 s32 lat
+0x008 s32 zone
+0x00C s32 cns
+0x010 s32 dimTp
+0x014 s32 polar
+0x018 s32 dlmt
+0x01C s32 ulmt
+0x020 s32 rti
+0x024 s32 rtPwr
+0x028 s32 di
+0x02C s32 sBri
+0x030 s32 sBriTm
+0x034 char svrIp[32]
+0x054 s32 svrPort
+0x058 s32 uPeriod
+0x05C s32 hPeriod
+0x060 s32 tPeriod
+0x064 s32 almValue[17]
+0x0A8 s32 almRecValue[17]
+0x0EC s32 almEn[17]
+```
+
+`planRecords[8]`沿用当前ZK Plan语义，每条81B：
+
+```text
+u8 valid/en/id/type/priority/weekMask/jobCount
+s8 setOffset/riseOffset
+8B startDateTime
+8B endDateTime
+2 × 28B Job
+```
+
+DateTime=`u16 year LE + mon/day/hour/min/sec + reserved`；Job=`cnsMask/timeType/actionCount/reserved + 6×Action`；Action=`u16 minute LE + brightness + reserved`。
+
+Config只有配置真实变化才提交，不做周期无变化写入。
+
+### 14.3 Runtime A/B——RUN1
+
+用户确认：运行统计语义保持当前固件，只换存储。
+
+持久化：
+
+```text
+totalRunTimeSec       u32 秒，设备上电期间无论亮灯/不亮灯都累计
+totalLightTimeSec     u32 秒，PWM/调光输出>0才累计
+totalEnergy001Wh      u32，0.01Wh
+calibrationInhibit    u8
+```
+
+仅RAM、不持久化：
+
+```text
+currentRunTimeSec
+currentLightTimeSec
+currentEnergy001Wh
+```
+
+上述三个 current 值每次上电清0。
+
+为保持现有OTA成功/失败上报恢复能力，Runtime同一Payload保留OTA durable report内部状态。
+
+冻结：
+
+```text
+Magic         = RUN1
+formatVersion = 1
+payloadLength = 48B
+recordLength  = 76B
+```
+
+```text
+0x000..0x013 Common Header            20B
+0x014..0x043 RuntimePayloadV1         48B
+0x044..0x047 recordCrc32               4B
+0x048..0x04B commitWord                4B
+```
+
+RuntimePayloadV1：
+
+```text
+0x00 u32 totalRunTimeSec
+0x04 u32 totalLightTimeSec
+0x08 u32 totalEnergy001Wh
+0x0C u8  calibrationInhibit
+0x0D u8  reserved[3]=0
+0x10 u32 otaReportState
+0x14 char otaId[8]
+0x1C u32 otaUrlHash
+0x20 u32 otaImageChecksum
+0x24 u32 otaImageSize
+0x28 u16 otaDeviceType
+0x2A u16 reserved=0
+0x2C u32 otaRetryCount
+```
+
+保存时机：
+
+```text
+运行统计：每8小时一次
+掉电检测：立即一次
+BEGIN：inhibit=1立即一次
+ABORT/RELEASE/启动安全恢复完成：inhibit=0立即一次
+OTA durable关键状态变化：立即一次
+```
+
+禁止每秒写Flash，禁止HEARTBEAT写Runtime。
+
+### 14.4 A/B Generation 与掉电安全
+
+```text
+读取A/B
+→ 验证Magic/Version/Length/PayloadCRC/RecordCRC/CommitWord
+→ 选择Generation较新的有效页
+→ 另一页作为inactive
+→ 擦inactive整页
+→ generation=old+1
+→ 写Header+Payload+RecordCRC
+→ Readback验证
+→ 最后写CommitWord
+```
+
+`generation=0`无效，首个有效=1；溢出跳过0，使用wrap-safe比较。禁止先擦唯一有效页。
 
 ---
 
@@ -852,22 +1044,23 @@ READ      < 1024B
 2. Keil 多 Target 门禁 + 50W Product Profile；
 3. Product / Factory / User Ownership；
 4. 开发阶段 12KB 新布局检测与一次性格式化；
-5. Config / Calibration / Runtime 真 A/B；
-6. 先恢复“无 Calibration 仍正常输出”；
-7. Raw/Calibrated PWM 硬件出口分离；
-8. Product Fingerprint 显式 codec / CRC；
-9. 244B Payload 显式 codec / CRC / Golden Vector；
-10. V3 字符串 `op/sid/seq/rc/st` 与 13 个 Operation；
-11. RAW / DIAG；
-12. Output Calibration；
-13. OCO Calibration与 Protection 分流；
-14. BL0942 Freshness 与冻结根因修复；
-15. BL U/I/P Calibration；
-16. Format4 Calibration A/B；
-17. JSON / cJSON Pool 实测；
-18. Windows Keil 正式 Build；
-19. 与上位机真实 HIL；
-20. 掉电 / OTA边界 / 长稳 / 普通业务回归。
+5. 实现统一A/B事务codec；
+6. Config CFG1 / Runtime RUN1 / Calibration CAL4 真 A/B；
+7. Runtime 8小时checkpoint + 掉电保存 + inhibit/OTA关键状态保存；
+8. 先恢复“无 Calibration 仍正常输出”；
+9. Raw/Calibrated PWM 硬件出口分离；
+10. Product Fingerprint 显式 codec / CRC；
+11. 244B Payload 显式 codec / CRC / Golden Vector；
+12. V3 字符串 `op/sid/seq/rc/st` 与 13 个 Operation；
+13. RAW / DIAG；
+14. Output Calibration；
+15. OCO Calibration与 Protection 分流；
+16. BL0942 Freshness 与冻结根因修复；
+17. BL U/I/P Calibration；
+18. JSON / cJSON Pool 实测；
+19. Windows Keil 正式 Build；
+20. 与上位机真实 HIL；
+21. Config/Runtime/Calibration掉电注入 + OTA边界 + 长稳 + 普通业务回归。
 
 每一步必须保持可编译、可定位、可回滚。禁止一次性同时重写 PWM、Flash、MQTT、BL0942 后再整体找问题。
 
@@ -894,11 +1087,13 @@ READ      < 1024B
 - `sys_Vo_Io.*`
 - `sys_bl0942.*`
 - `hw_uart2.*`
+- `zk_runtime_stats.*`
 
 确有直接关系时：
 
 - `zk_property.*`
 - `zk_work_plan.*`
+- `mqtt_zk_protocol.*`（仅OTA durable storage迁移/接口适配）
 
 修改其他模块必须在提交说明中回答：
 
@@ -964,6 +1159,7 @@ OTA Backup  0x08024000~0x08040000
 - [ ] 多选 Product Target 编译失败；
 - [ ] Profile / Fingerprint 必填字段未冻结编译失败；
 - [ ] CAT1_50W.bin 不包含其他功率 Profile / 字符串；
+- [ ] 50W E1.1=`hardwareRevision 0x0101 / pwmPolarity 1 / ocoHardwareRevision 0x0101`；
 - [ ] 切 Target 不复制公共业务代码。
 
 ### Protocol
@@ -980,14 +1176,20 @@ OTA Backup  0x08024000~0x08040000
 ### Payload / Fingerprint / Storage
 
 - [ ] Wire Payload = 244B；
-- [ ] Flash Record = 272B；
-- [ ] Little Endian；
+- [ ] Calibration Flash Record = 272B；
+- [ ] Config=`CFG1 / 1088B Payload / 1116B Record`；
+- [ ] Runtime=`RUN1 / 48B Payload / 76B Record`；
+- [ ] Little Endian与factoryUserCompat例外规则明确；
 - [ ] Payload / Record CRC32参数一致；
 - [ ] Fingerprint 18B明确编码并通过跨端测试；
 - [ ] SET/HWMAX/CV/Tolerance等运行参数不参与Fingerprint；
 - [ ] Generation / Record CRC / CommitWord 只由固件管理；
 - [ ] CommitWord 最后写；
-- [ ] Calibration A/B掉电安全。
+- [ ] Config/Calibration/Runtime均为真A/B掉电安全；
+- [ ] currentRun/currentLight/currentEnergy不持久化；
+- [ ] Runtime每8小时checkpoint并在掉电时立即保存；
+- [ ] calibrationInhibit状态转换立即保存；
+- [ ] OTA durable report行为迁入Runtime后无回归。
 
 ### Calibration
 
@@ -1023,6 +1225,7 @@ OTA Backup  0x08024000~0x08040000
 - [ ] Windows Keil官方工程编译通过；
 - [ ] Boot启动正常；
 - [ ] OTA Backup区域未受影响；
+- [ ] OTA durable report状态无回归；
 - [ ] 普通MQTT正常；
 - [ ] RTC/Plan新业务正常；
 - [ ] 告警/温控/调光正常；
@@ -1038,12 +1241,14 @@ OTA Backup  0x08024000~0x08040000
 ```text
 V2真实代码升级到V3
 + 字符串MQTT V3合同一致
-+ 244B Wire Payload / 272B Flash Record
++ 244B Wire Payload / 272B Calibration Record
++ CFG1 1116B / RUN1 76B 持久化合同一致
 + Product Fingerprint精确一致
 + 开发期12KB初始化策略正确
 + 正常无校准业务不回归
 + 11点Output/OCO/BL U/I/P闭环
-+ Flash A/B掉电安全
++ Config/Calibration/Runtime三类A/B掉电安全
++ Runtime 8小时/掉电/安全状态保存正确
 + BL0942长期稳定有证据
 + JSON/cJSON有余量
 + Boot/APP/OTA Backup/普通业务无回归
