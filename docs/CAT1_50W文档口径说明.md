@@ -695,3 +695,159 @@ Runtime = RUN1 / Payload 48B   / Record 76B
 2. `HIL_SPEC_DEFECT`：真实Keil/HIL/内存/硬件测试证明冻结规范存在问题，提供证据后显式升级版本。
 
 禁止因为旧V2 fixture、编码习惯或个人偏好再次把已确认设计随意改回另一套。
+
+## 9. 2026-08-22 新增冻结：Config A/B 页首 4B 与 Boot OTA Flag
+
+本节是对 4.7.2、4.7.4、4.7.5、4.9、4.10 的补充冻结；如旧描述与本节存在歧义，以本节为准，并同步回三份权威实施/审核文档。
+
+### 9.1 Boot 不修改，0x08005000 保留既有 OTA 语义
+
+已按现有 Boot 源码确认：
+
+```text
+0x08005000 = 0xAA5555AA  -> Boot 判断存在待升级固件并进入 OTA Copy 流程
+0x08005000 != 0xAA5555AA -> 不触发 OTA，按正常 APP 校验/跳转流程处理
+```
+
+Boot 源码、Boot 地址判断和 OTA Backup 布局本轮全部禁止修改。
+
+### 9.2 六个 2KiB 物理页地址保持不变
+
+```text
+0x08005000~0x080057FF  Config A
+0x08005800~0x08005FFF  Config B
+0x08006000~0x080067FF  Calibration A
+0x08006800~0x08006FFF  Calibration B
+0x08007000~0x080077FF  Runtime A
+0x08007800~0x08007FFF  Runtime B
+```
+
+不新增页、不移动 Calibration/Runtime、不修改 APP 起始地址。
+
+### 9.3 Config A/B 页内统一预留 4B，CFG1 从 PageBase+4 开始
+
+```text
+Config A:
+0x08005000~0x08005003  Boot OTA Flag / Config页内保留兼容字段
+0x08005004             CFG1 Record 起点
+
+Config B:
+0x08005800~0x08005803  Reserved / 对称保留
+0x08005804             CFG1 Record 起点
+```
+
+Config A/B 仍然各自属于原来的 2KiB Config Page；不是重新划分 Flash，也不是新增独立事务 Owner。
+
+冻结解释：
+
+- 页大小仍为 2048B；
+- CFG1 实际可用页内空间为 2044B；
+- CFG1 Record 仍为 1116B，空间充足；
+- 20B Common Header、1088B Payload、recordCrc32、commitWord 的 **Record 内部相对 Offset 完全不变**；
+- Golden Vector、CFG1 `recordLength=1116`、`payloadLength=1088`、CRC覆盖规则全部不变；
+- 变化仅是 CFG1 的物理起始地址从 `PageBase+0` 调整为 `PageBase+4`。
+
+### 9.4 Config A/B 正常 A/B 提交
+
+Config A/B 继续使用真实 A/B 原子提交：
+
+```text
+读取 A/B 的 CFG1（均从 PageBase+4 解析）
+→ 选择 Generation 较新的有效页
+→ 选择另一页为 inactive
+→ 擦除 inactive 整个 2KiB page
+→ 页首4B保持擦除态 0xFFFFFFFF
+→ 从 PageBase+4 写 CFG1 Header + Payload + recordCrc32
+→ Readback 验证
+→ 最后写 commitWord
+```
+
+禁止把 CFG1 Magic 写到 `0x08005000` 或 `0x08005800`。
+
+Config A 页首4B虽然被 Boot 使用，但在 V3 Persistent 设计中按 **Config A 页内保留兼容字段** 管理；因此“一个物理擦除页一个 Owner”的整体设计不变。
+
+### 9.5 V2/旧布局首次切换 V3：允许直接格式化 12KiB 参数区
+
+当前开发/HIL阶段继续冻结为：**不做 Legacy Migration，发现旧 Persistent 或非法 V3 布局时直接格式化旧参数区。**
+
+```text
+确认当前不处于 OTA pending
+→ 擦除 0x08005000~0x08007FFF 六个2KiB页
+→ 0x08005000 OTA Flag 回到擦除态 0xFFFFFFFF
+→ 从 0x08005004 / 0x08005804 建立 V3 Config A/B
+→ Calibration A/B 空
+→ Runtime A/B 空
+```
+
+这里的“格式化 12KiB”就是直接擦除旧布局，不迁移旧 Config/User/Plan/Runtime/Calibration。
+
+仍然绝对不碰：
+
+```text
+Bootloader代码区
+0x08008000起 APP 区
+OTA Backup 区
+```
+
+合法 V3 Persistent 建立后，不允许每次启动重复执行 12KiB 格式化。
+
+### 9.6 远程 OTA 与 Config 的边界
+
+正常远程 OTA 不擦除这 12KiB 参数区。流程冻结为：
+
+```text
+APP 完成 OTA Backup 准备和校验
+→ 确保后续不再发生 Config A/B 提交
+→ 写 0x08005000 = 0xAA5555AA
+→ 立即复位
+→ Boot 读取该标志并执行 OTA
+→ Boot 只更新 APP，不格式化 V3 参数区
+```
+
+一旦 `0x08005000` 已写成 `0xAA5555AA`，直到复位进入 Boot 前，禁止再进行 Config 页擦除/提交，避免破坏 OTA 标志。
+
+### 9.7 新 APP 启动后必须安全清除 OTA Flag
+
+保持现有产品“OTA 成功后清除升级标志”的业务语义，但 V3 不再使用旧 `sys_data.sn` 布局。
+
+V3 清除规则：
+
+```text
+新 APP 成功启动
+→ 读取 Config A/B 的最新有效 CFG1
+→ 若最新有效 Config 仅在 A，先把同一有效配置原子提交到 B
+→ 确保 B 至少存在一份完整有效 Config
+→ 擦除 Config A 2KiB 页，使 0x08005000 恢复 0xFFFFFFFF
+→ 需要时再从 0x08005004 重建 Config A CFG1
+```
+
+禁止为了清除 OTA Flag 而先擦除唯一有效 Config。
+
+最终正常状态：
+
+```text
+0x08005000 = 0xFFFFFFFF（或其他非0xAA5555AA的正常未触发值）
+Config A/B 至少一份 CFG1 有效
+Boot 下次复位不会重复进入 OTA
+```
+
+### 9.8 本冻结项对既有 Golden Vector 的影响
+
+```text
+Fingerprint Golden Vector   不变
+244B CALP Golden Vector     不变
+272B CAL4 Golden Vector     不变
+CFG1 Record内部Codec/CRC    不变
+RUN1 Codec/CRC              不变
+```
+
+只需要新增 Storage/HIL 验收：
+
+- [ ] Config A CFG1 物理起点=`0x08005004`；
+- [ ] Config B CFG1 物理起点=`0x08005804`；
+- [ ] Config A/B 页首4B不被 CFG1 覆盖；
+- [ ] 旧布局首次格式化后 `0x08005000=0xFFFFFFFF`；
+- [ ] 正常 OTA 写 `0xAA5555AA` 后 Config 不再擦写；
+- [ ] Boot OTA 只更新 APP，不擦 12KiB V3 Persistent；
+- [ ] 新 APP 启动后能在不丢 Config 的前提下清除 OTA Flag；
+- [ ] 再次复位不会重复进入 OTA。
