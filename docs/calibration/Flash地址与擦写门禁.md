@@ -1,43 +1,68 @@
-# 量产校准 Flash 地址与擦写门禁
+# 历史实现快照：旧校准 Flash 地址与共享页布局
 
-状态：`SOURCE_ENABLED / MAP_HIL_PENDING`。源码已接入 A/B 事务，候选地址仍未作为量产发布合同冻结。
+> **状态：LEGACY / DEPRECATED / 不得作为新持久化布局依据**
 
-## 当前源码所有者表
+本文件原来描述的是当前旧源码如何把系统参数、Property、Runtime、OTA Report、Calibration 和 Plan 切在 12KiB 数据区中。该布局存在多个逻辑记录共享同一 2KiB 物理擦除页的问题，只能作为现状证据。
 
-以下地址以半开区间记录，擦除粒度按当前 STM32F103RC HAL 定义为 2KiB：
+## 1. 旧源码布局
 
-| 区间 | 当前所有者 |
-|---|---|
-| `0x08000000–0x08005000` | Boot |
-| `0x08005000–0x08005800` | 系统参数主记录 |
-| `0x08005800–0x08005A00` | 属性主记录 |
-| `0x08005A00–0x08005B00` | 运行统计主记录 |
-| `0x08005B00–0x08005C00` | OTA 报告主记录 |
-| `0x08005C00–0x08006000` | 校准 A 候选（1KiB，非独立擦除页） |
-| `0x08006000–0x08006800` | 计划主记录 |
-| `0x08006800–0x08007000` | 系统参数备记录 |
-| `0x08007000–0x08007200` | 属性备记录 |
-| `0x08007200–0x08007300` | 运行统计备记录 |
-| `0x08007300–0x08007400` | OTA 报告备记录 |
-| `0x08007400–0x08007800` | 校准 B 候选（1KiB，非独立擦除页） |
-| `0x08007800–0x08008000` | 计划备记录 |
-| `0x08008000–0x08024000` | APP |
-| `0x08024000–0x08040000` | OTA backup |
+旧实现包含：
 
-该表由 `Core/Src/flash_address_assignment.h` 集中定义。A/B 仍标记为 candidate；没有当前 HEAD 的新鲜 Keil MAP、HEX 地址审计和共享页故障注入，不得称为最终地址或量产完成。
+- `0x08005000~0x08005800` 系统参数主区；
+- `0x08005800~0x08006000` 内继续切 Property/Runtime/OTA/Calibration A；
+- `0x08006000~0x08006800` Plan Main；
+- `0x08006800~0x08007000` 系统参数 Backup；
+- `0x08007000~0x08007800` 内继续切 Property/Runtime/OTA/Calibration B；
+- `0x08007800~0x08008000` Plan Backup。
 
-## 擦写规则
+旧 Calibration A/B 各 1KiB，但并不是独立物理擦除页。`hw_flash_write_bytes_checked()` 实际仍需重写所在完整 2KiB 页，因此不同事务之间存在掉电耦合。
 
-- `hw_flash_write_bytes_checked()` 逐点检查 HAL 擦除、字编程和请求范围回读，并返回 `BOOL_FALSE`；它仍会重写完整 2KiB 页，不能绕过共享页所有者风险。
-- 旧 `hw_flash_write_bytes()` 仅为兼容入口，忽略返回值；新校准存储不得调用它。
-- `sys_calibration_flash.c` 已实现读取 A/B 最新有效序列、写非活动槽、payload/record CRC、最后写 `commit_word` 和整体回读。
-- 校准记录格式已升级为 v3：198 字节 payload 原样保留，记录头绑定 Profile/电压/`configuredRatedCurrentMa`/`calibratedMaxCurrentMa`/表 CRC；静态断言固定 payload 长度198、payload偏移40和记录总长244字节。v1/v2或外Profile记录失败关闭，不做隐式迁移。
-- boot-inhibit 使用每个 1KiB 候选槽内 `0x300` 偏移的独立 A/B 记录；为兼容升级前设备，两槽全 `0xFF` 时允许进入受控校准初始化路径，但没有有效 v3 表/`calibratedMaxCurrentMa` 时普通非零输出仍被阻断；任一槽非空且两份均无效时失败关闭。
-- 上述是源码能力，共页邻接记录保全和任意断电点仍需 Keil MAP/HEX 与实机故障注入。
+## 2. 目标新布局
 
-## 必须通过的审计
+新实施目标以 `docs/CAT1_50W校准固件基线与上位机对接方案.md` 为准：
 
-1. 当前 HEAD 的两个 Keil target 干净构建和 MAP；
-2. 所有绝对地址、源表和 HEX 地址一致；
-3. 修改每个共享页时，属性/运行统计/OTA/计划邻居记录保持不变；
-4. 擦除、payload、回读、commit 前各断电点均至少保留一份旧有效记录。
+```text
+0x08005000~0x08005800  Config A
+0x08005800~0x08006000  Config B
+0x08006000~0x08006800  Calibration A
+0x08006800~0x08007000  Calibration B
+0x08007000~0x08007800  Runtime A
+0x08007800~0x08008000  Runtime B
+```
+
+每个 Owner 独占一个 2KiB 物理擦除页。
+
+## 3. 新 A/B 原则
+
+```text
+读取当前有效页
+→ 在RAM构造完整新快照
+→ 擦除非活动页
+→ 写完整新记录
+→ 回读/CRC
+→ 最后写Commit
+→ 切换Generation
+```
+
+禁止：
+
+- 不相关事务共享一个物理擦除页；
+- 在当前有效页原地局部修改；
+- 主区写完后立即再写备区作为所谓“双备份”；
+- Calibration 每个点都写 Flash。
+
+## 4. 版本说明
+
+旧源码中的 `SYS_CALIBRATION_STORAGE_FORMAT_VERSION=3` 只表示旧 Storage Record 实现。
+
+目标新结构在逐 Byte 格式冻结前统一称为 `Target Calibration Record`，不得从本文件推导“Record V2/V3”目标版本。
+
+## 5. 仍需实机证明
+
+最终放行仍需要：
+
+- Keil MAP/HEX 地址核对；
+- 编译期对齐/不重叠断言；
+- Config/Calibration/Runtime 分别做断电故障注入；
+- Legacy 数据迁移；
+- 审计旧 `0x0801E000~0x08020000` programmer 区不再作为持久化写区。
