@@ -11,29 +11,75 @@
 
 ## 1. 审核定位
 
-当前固件第一阶段只冻结 50W；上位机必须保持多功率通用校准工作台。
+当前第一阶段只冻结 50W，但后续固件必须支持通过 Keil Target 生成不同功率的**独立固件镜像**；上位机则保持多功率通用工作台。
 
 ```text
-50W 固件
-└─ 当前产品身份与能力
+上位机
+└─ ProductProfileRegistry
+   ├─ 50W
+   ├─ 75W
+   ├─ 100W
+   ├─ 150W
+   ├─ 200W
+   └─ 240W
 
-多功率上位机
-├─ 50W
-├─ 75W
-├─ 100W
-├─ 150W
-├─ 200W
-└─ 240W
+固件
+├─ CAT1_50W.bin   → 只含50W Profile
+├─ CAT1_75W.bin   → 只含75W Profile
+├─ CAT1_100W.bin  → 只含100W Profile
+├─ CAT1_150W.bin  → 只含150W Profile
+├─ CAT1_200W.bin  → 只含200W Profile
+└─ CAT1_240W.bin  → 只含240W Profile
 ```
 
-- [ ] 单个固件只描述当前产品；
-- [ ] 上位机本地保持 ProductProfileRegistry；
-- [ ] CAP 不返回多型号 Catalog；
-- [ ] 上位机不依赖 `profilesCsv`。
+审核：
+
+- [ ] 上位机本地保持多功率 ProductProfileRegistry；
+- [ ] 单个固件只描述一个功率段；
+- [ ] 单个固件不携带其他功率 Profile 参数；
+- [ ] CAP 只返回当前编译 Target 的 Product；
+- [ ] 不返回 `profilesCsv`；
+- [ ] 上位机不依赖多型号 Catalog。
 
 ---
 
-## 2. 50W 冻结参数一致性
+## 2. Keil 多 Target / 独立固件审核
+
+推荐 Keil Target：
+
+```text
+CAT1_50W
+CAT1_75W
+CAT1_100W
+CAT1_150W
+CAT1_200W
+CAT1_240W
+```
+
+每个 Target 只定义一个：
+
+```text
+PRODUCT_TARGET_50W
+PRODUCT_TARGET_75W
+PRODUCT_TARGET_100W
+...
+```
+
+审核：
+
+- [ ] 同一 Build 中只能有一个 Product Target；
+- [ ] 未选择 Target 编译失败；
+- [ ] 同时选择多个 Target 编译失败；
+- [ ] 当前 Target Profile 参数未冻结时编译失败；
+- [ ] 不存在运行时 `_profiles[]` 多型号表；
+- [ ] 不存在运行时 `find(profileId)` 切换不同功率；
+- [ ] `CAT1_50W` 产物只含 50W Profile 常量/字符串；
+- [ ] 切换 Target 不复制 MQTT/Calibration/Flash/OTA/保护公共代码；
+- [ ] 产物名称能明确区分功率段。
+
+---
+
+## 3. 50W 冻结参数一致性
 
 | 参数 | 冻结值 |
 |---|---:|
@@ -55,7 +101,7 @@
 
 ---
 
-## 3. Product Profile / Run Config 分离
+## 4. Product Profile / Run Config 分离
 
 Product Profile：产品固有硬件身份与能力。
 
@@ -65,12 +111,13 @@ Run Config：本次任务的 SET、CV、Tolerance、Stabilization、ValidationMo
 
 - [ ] CV 不进入 Calibration 有效性；
 - [ ] SET 不进入 Calibration 有效性；
+- [ ] 当前 HWMAX 不进入 Calibration 有效性；
 - [ ] Tolerance 不进入固件运行授权；
 - [ ] Run Config 被上位机 Audit 记录。
 
 ---
 
-## 4. SET_OUTCUR 一致性
+## 5. SET_OUTCUR 一致性
 
 正式定义：
 
@@ -82,11 +129,12 @@ Run Config：本次任务的 SET、CV、Tolerance、Stabilization、ValidationMo
 - [ ] SET > HWMAX 被拒绝；
 - [ ] 校准完成后再次修改 SET，Calibration 仍有效；
 - [ ] SET 不参与 Product Fingerprint；
-- [ ] SET 不参与 Calibration Record 有效性绑定。
+- [ ] SET 不参与 Calibration Record 有效性绑定；
+- [ ] 无 Calibration 时 SET 仍可驱动正常输出链。
 
 ---
 
-## 5. CV Voltage 一致性
+## 6. CV Voltage 一致性
 
 正式定义：
 
@@ -102,15 +150,15 @@ Run Config：本次任务的 SET、CV、Tolerance、Stabilization、ValidationMo
 
 ---
 
-## 6. Tolerance 与最终验证职责
+## 7. Tolerance 与最终验证职责
 
 Tolerance 只属于上位机最终验收策略。
 
-必须冻结以下职责：
+职责冻结：
 
 ```text
 固件：
-完成完整Calibration
+完整Calibration
 → STAGE
 → APPLY
 → SET_OUTPUT
@@ -129,14 +177,16 @@ FAIL → ABORT
 
 - [ ] 固件不计算最终 ±1%/±2% PASS/FAIL；
 - [ ] 固件不保存 Tolerance；
-- [ ] 固件没有 VERIFY/PASS/FAIL 业务状态；
+- [ ] 固件没有 VERIFY/PASS/FAIL 状态；
+- [ ] 校准前不使用最终误差门槛阻止 Correction；
+- [ ] 校准前只检查 Fresh/稳定/仪器有效/基本单调/合理范围/硬件 Fault；
 - [ ] Quick/Full Verification 由上位机执行；
 - [ ] PASS 才允许 COMMIT；
 - [ ] FAIL 必须 ABORT。
 
 ---
 
-## 7. 11 点正式采集
+## 8. 11 点正式采集
 
 固定：
 
@@ -156,7 +206,7 @@ Level   = 0,20,...,200
 
 ---
 
-## 8. 每次必须完整 Calibration
+## 9. 每次必须完整 Calibration
 
 V3 不支持局部更新。
 
@@ -180,7 +230,7 @@ Output
 
 ---
 
-## 9. Output Calibration
+## 10. Output Calibration
 
 ```text
 Actual PWM <-> Reference Output Current
@@ -197,7 +247,7 @@ Actual PWM <-> Reference Output Current
 
 ---
 
-## 10. OCO Calibration
+## 11. OCO Calibration
 
 ```text
 OCO Raw <-> Reference Output Current
@@ -212,7 +262,7 @@ OCO Raw <-> Reference Output Current
 
 ---
 
-## 11. BL0942 Calibration / Freshness
+## 12. BL0942 Calibration / Freshness
 
 审核：
 
@@ -227,9 +277,9 @@ OCO Raw <-> Reference Output Current
 
 ---
 
-## 12. Calibration MQTT Protocol V3
+## 13. Calibration MQTT Protocol V3
 
-### 外层 Envelope
+### 13.1 外层 Envelope
 
 必须保持现有：
 
@@ -239,7 +289,7 @@ OCO Raw <-> Reference Output Current
 
 只升级 `SV=cal` 的 `DT`。
 
-### Operation
+### 13.2 Operation
 
 冻结为字符串：
 
@@ -263,10 +313,10 @@ DIAG
 
 - [ ] 不使用数字 Operation Code；
 - [ ] 上下位机字符串完全一致；
-- [ ] 不存在旧 `SET_VERIFY`；
+- [ ] 不存在旧 `SET_VALIDATION_PERCENT/SET_VERIFY`；
 - [ ] 不存在 `READ_INFO/READ_CHUNK` 第一版协议。
 
-### 公共字段
+### 13.3 公共字段
 
 ```text
 v      u8，固定3
@@ -300,7 +350,7 @@ payloadHex string
 
 ---
 
-## 13. Result Code / State
+## 14. Result Code / State
 
 ### rc
 
@@ -331,16 +381,16 @@ payloadHex string
 审核：
 
 - [ ] 上下位机完全一致；
-- [ ] 不新增复杂 Context 状态；
+- [ ] 不新增复杂 Calibration Context 状态；
 - [ ] 固件没有 PASS/FAIL 状态。
 
 ---
 
-## 14. Operation 行为审核
+## 15. Operation 行为审核
 
 ### CAP
 
-- [ ] 只返回当前产品身份；
+- [ ] 只返回当前 Keil Target 对应产品身份；
 - [ ] 返回 Hardware Max/HWMAX/SET/pointCount/levelStep/fingerprint/generation；
 - [ ] 不返回多功率 Catalog。
 
@@ -364,9 +414,14 @@ payloadHex string
 
 ### STAGE
 
-- [ ] 必须携带完整 `payloadHex + len + crc`；
+- [ ] `len=312`；
+- [ ] `payloadHex` 固定 624 Hex 字符；
+- [ ] JSON `crc` 与 staging image 内 crc32 相同；
+- [ ] Generation=0；
+- [ ] CommitMarker=0xFFFFFFFF；
+- [ ] ValidFlags=0x1F；
 - [ ] 固件验证 Record/Fingerprint/CRC；
-- [ ] 只有完整 Calibration 才能 STAGED。
+- [ ] 成功后只放 RAM，不写有效 Flash Slot。
 
 ### APPLY
 
@@ -377,20 +432,25 @@ payloadHex string
 
 - [ ] 只在 APPLIED 使用；
 - [ ] 只负责按 pct 输出；
-- [ ] 返回 actual pwm；
+- [ ] 返回 Actual PWM；
 - [ ] 不判断误差。
 
 ### COMMIT
 
 - [ ] 仅在上位机确认 PASS 后调用；
-- [ ] A/B 原子提交；
+- [ ] Generation 由固件生成；
+- [ ] 最终 Record CRC 由固件重算；
+- [ ] A/B Slot 由固件选择；
+- [ ] CommitMarker 最后写；
 - [ ] 返回 gen/len/crc。
 
 ### READ
 
-- [ ] 直接返回当前完整 Record；
+- [ ] 直接返回当前完整已提交 Record；
 - [ ] 返回 gen/len/crc/payloadHex；
-- [ ] 上位机逐 Byte/CRC 核验。
+- [ ] len=312；
+- [ ] 上位机逐 Byte/CRC 核验；
+- [ ] CommitMarker=0xA55AA55A。
 
 ### ABORT / RELEASE
 
@@ -400,11 +460,9 @@ payloadHex string
 
 ---
 
-## 15. Calibration Record V2 字节级冻结
+## 16. Calibration Record V2 字节级冻结
 
 统一 Little Endian。
-
-CRC32：IEEE `0x04C11DB7`，init `0xFFFFFFFF`，final xor `0xFFFFFFFF`。
 
 ### Header 32B
 
@@ -412,22 +470,32 @@ CRC32：IEEE `0x04C11DB7`，init `0xFFFFFFFF`，final xor `0xFFFFFFFF`。
 |---:|---:|---|
 | 0x00 | 4 | Magic=`0x324C4143` (`CAL2`) |
 | 0x04 | 2 | FormatVersion=2 |
-| 0x06 | 2 | RecordLength |
+| 0x06 | 2 | RecordLength=`0x0138` |
 | 0x08 | 4 | Generation |
 | 0x0C | 2 | ProfileId |
 | 0x0E | 2 | ProfileVersion |
 | 0x10 | 4 | ProfileFingerprint |
-| 0x14 | 4 | ValidFlags |
+| 0x14 | 4 | ValidFlags=`0x0000001F` |
 | 0x18 | 4 | Reserved0=0 |
 | 0x1C | 4 | Reserved1=0 |
+
+ValidFlags：
+
+```text
+bit0 Output
+bit1 OCO
+bit2 BL Voltage
+bit3 BL Current
+bit4 BL Power
+```
 
 ### Payload
 
 ```text
-0x20 Output: 11 × {u16 pwm, u16 refCurrentMa} = 44B
-0x4C OCO: 11 × {u16 raw, u16 refCurrentMa} = 44B
+0x20 Output:     11 × {u16 pwm, u16 refCurrentMa} = 44B
+0x4C OCO:        11 × {u16 raw, u16 refCurrentMa} = 44B
 0x78 BL Current: 11 × {u32 raw, u16 refCurrentMa, u16 reserved} = 88B
-0xD0 BL Power: 11 × {u32 raw, u32 refPowerMw} = 88B
+0xD0 BL Power:   11 × {u32 raw, u32 refPowerMw} = 88B
 0x128 BL Voltage: s32 gainQ20 + s32 offsetMv = 8B
 ```
 
@@ -435,38 +503,75 @@ CRC32：IEEE `0x04C11DB7`，init `0xFFFFFFFF`，final xor `0xFFFFFFFF`。
 
 ```text
 0x130 u32 crc32
-0x134 u32 commitMarker = 0xA55AA55A
+0x134 u32 commitMarker
 RecordLength = 0x138 = 312B
 ```
 
-CRC 覆盖 `[0x00,0x130)`。
+最终已提交 Record：
+
+```text
+commitMarker = 0xA55AA55A
+```
+
+最终 CRC 覆盖 `[0x00,0x130)`。
 
 审核：
 
 - [ ] 上位机 encode 与固件 decode 逐 Byte 一致；
 - [ ] 至少一组 Golden Vector；
-- [ ] ValidFlags 当前只表示整套 Calibration 有效，不用于局部更新。
+- [ ] ValidFlags 当前只允许 0x1F；
+- [ ] 不用于局部更新。
 
 ---
 
-## 16. Product Fingerprint
+## 17. CRC32 统一审核
 
-只绑定固定工厂/硬件身份：
+冻结算法：
 
 ```text
-Profile Version
-Profile ID / MID
-Hardware Revision
-Rated Power
-RS3
-Hardware Max
-PWM Full Scale
-PWM Polarity
-OCO Hardware Revision
+Name       = CRC-32/ISO-HDLC（CRC32/IEEE）
+Poly       = 0x04C11DB7
+RefIn      = true
+RefOut     = true
+Init       = 0xFFFFFFFF
+XorOut     = 0xFFFFFFFF
+Check      = 0xCBF43926
+```
+
+反射实现允许使用 `0xEDB88320`。
+
+审核：
+
+- [ ] 固件对 ASCII `123456789` 结果为 `0xCBF43926`；
+- [ ] 上位机结果相同；
+- [ ] Calibration Record 使用此算法；
+- [ ] Product Fingerprint 使用此算法；
+- [ ] 不存在另一套 CRC32 参数。
+
+---
+
+## 18. Product Fingerprint 字节级审核
+
+按固定顺序拼接：
+
+```text
+profileVersion      u16 LE
+profileId           u16 LE
+mid                 u8
+hardwareRevision    u16 LE
+ratedPowerW         u16 LE
+rs3Mohm             u16 LE
+hardwareMaxMa       u16 LE
+pwmFullScale        u16 LE
+pwmPolarity         u8
+ocoHardwareRevision u16 LE
 ```
 
 审核：
 
+- [ ] 固件按显式字段编码，不直接 CRC C 结构体；
+- [ ] 上位机按相同字段/顺序/LE 编码；
+- [ ] 不受编译器 padding 影响；
 - [ ] SET_OUTCUR 不参与；
 - [ ] 当前 HWMAX 不参与；
 - [ ] CV 不参与；
@@ -475,7 +580,7 @@ OCO Hardware Revision
 
 ---
 
-## 17. Flash A/B
+## 19. Flash A/B
 
 目标布局：
 
@@ -501,15 +606,15 @@ OCO Hardware Revision
 
 ---
 
-## 18. 历史数据策略
+## 20. 历史数据策略
 
 当前开发阶段不做 Legacy Migration。
 
-V3 首次部署遇到非 V3 Persistent 格式时：
+V3 首次部署遇到非 V3 Persistent 格式：
 
 ```text
-仅格式化 0x08005000~0x08008000
-→ 初始化 Config A/B
+只格式化 0x08005000~0x08008000
+→ 按当前 Keil Target 初始化 Config A/B
 → Calibration 空
 → Runtime 空
 ```
@@ -519,13 +624,12 @@ V3 首次部署遇到非 V3 Persistent 格式时：
 - [ ] Boot 不擦；
 - [ ] APP 不擦；
 - [ ] OTA Backup 不擦；
-- [ ] 旧计划/运行统计/旧配置/旧Calibration不迁移；
-- [ ] 若 SN/MAC/平台凭证位于旧 Persistent，开发设备允许重新写入/重新配网；
-- [ ] 不增加一次性复杂迁移代码。
+- [ ] 旧计划/运行统计/旧配置/旧 Calibration 不迁移；
+- [ ] 开发设备必要时重新写 SN/MAC/平台凭证。
 
 ---
 
-## 19. JSON / TX 内存
+## 21. JSON / 内存预算
 
 目标：
 
@@ -533,79 +637,90 @@ V3 首次部署遇到非 V3 Persistent 格式时：
 - RAW `<512B`；
 - CAP `<768B`；
 - READ `<1024B`；
-- 所有 TX `<1536B`；
+- 所有设备 TX `<1536B`；
 - 无 `TX Pool Exhausted`。
+
+312B Record 使用 624 Hex 字符，应在第一版单报文预算内实测确认。
 
 审核：
 
-- [ ] 大 Calibration 使用 payloadHex；
-- [ ] 不使用大数字数组；
-- [ ] 不返回完整复杂 Context；
-- [ ] 不返回多 Profile Catalog。
+- [ ] STAGE 最大 RX 实测通过；
+- [ ] READ 最大 TX 实测通过；
+- [ ] cJSON Pool 留有余量；
+- [ ] 不因为大 JSON 数字数组导致节点耗尽。
 
 ---
 
-## 20. 上位机 UI / Audit
+## 22. 上位机 UI / 业务审核
 
-UI 必须明确：
-
-- SET_OUTCUR = User Config；
-- CV = 电子负载工况；
-- Tolerance = 上位机最终验收策略；
-- Product Profile = 产品身份/能力。
-
-Audit 至少保存：
-
-- 设备身份；
-- Product Profile；
-- SET/CV/Tolerance；
-- 11 点 RAW/Reference/PWM；
-- 完整 Calibration Record；
-- APPLY 后验证；
-- PASS/FAIL；
-- COMMIT/READ 的 generation/len/crc。
+- [ ] 多功率产品卡保留；
+- [ ] 未冻结功率显示不可量产，不删除；
+- [ ] 当前设备 CAP 只匹配一个 Product；
+- [ ] SET_OUTCUR 标为 User Config；
+- [ ] CV 标为电子负载工况；
+- [ ] Tolerance 标为上位机最终验收策略；
+- [ ] 不显示“固件 Bound Voltage 必须匹配”旧逻辑；
+- [ ] 上位机不要求固件返回所有功率参数。
 
 ---
 
-## 21. HIL 必测场景
+## 23. 最终 HIL 场景
 
-1. 空白 V3 设备、无 Calibration 正常输出；
-2. 默认 SET=893 完整校准；
-3. 修改 SET 后完整校准；
-4. 36V/40V/48V/52V/56V 不同工况验证；
-5. 11 点完整采集；
-6. 校准前存在较大误差仍可生成 Correction；
-7. 完整 STAGE；
-8. APPLY 后 Quick Validation；
-9. APPLY 后 Full Validation；
-10. 上位机判 FAIL → ABORT；
-11. 上位机判 PASS → COMMIT；
-12. READ 完整回读逐 Byte/CRC；
-13. Config/Calibration A/B 掉电；
-14. BL0942 stale/ORE/长稳；
-15. 校准后修改 SET，Calibration 仍有效；
-16. 改变运行 Vo，Calibration 不因 CV 绑定失效；
-17. V3 首次部署清空旧 Persistent 12KB；
-18. Boot/APP/OTA 地址无变化；
-19. 所有 V3 报文无 TX Pool Exhausted；
-20. 上位机多功率框架仍存在。
+至少执行：
+
+1. 50W Target 编译，确认二进制不含其他功率 Profile；
+2. 切换一个待冻结 Target，确认未冻结参数会阻止正式 Build；
+3. 50W 空白 V3 Persistent 初始化；
+4. 无 Calibration 正常输出；
+5. SET=893 完整校准；
+6. 修改 SET 后 Calibration 继续有效；
+7. 36V / 40V / 48V / 52V / 56V 工况验证 Calibration 不被 Context 自动失效；
+8. 11 点完整采集；
+9. 校准前大误差仍允许生成 Correction；
+10. STAGE 312B staging image；
+11. APPLY 后 Quick Validation；
+12. APPLY 后 Full Validation；
+13. FAIL→ABORT，旧已提交 Calibration 不变；
+14. PASS→COMMIT；
+15. COMMIT 前后 Generation 正确 +1；
+16. COMMIT 掉电恢复；
+17. READ 返回完整 312B Record；
+18. CRC Golden Vector；
+19. Fingerprint Golden Vector；
+20. BL0942 stale / ORE / 长稳；
+21. 所有 V3 报文无 TX Pool Exhausted；
+22. Boot/OTA/普通业务/RTC/Plan 无回归。
 
 ---
 
-## 22. 最终通过条件
+## 24. 最终通过条件
 
-只有同时满足以下条件才通过：
+只有同时满足以下条件才认为本轮 V3 完成：
 
-- 50W 固件功能正确；
-- 上位机仍为多功率通用工作台；
-- 每次完整 Calibration，不局部更新；
-- 固件不做最终误差 PASS/FAIL；
-- 上位机使用外部标准仪器进行最终验收；
-- PASS→COMMIT，FAIL→ABORT；
-- MQTT V3 字段、Operation、rc、st 完全一致；
-- Calibration Record 逐 Byte 一致；
-- Fingerprint 只绑定固定工厂/硬件身份；
-- Config/Calibration/Runtime A/B 掉电安全；
-- V3 首次部署不做历史迁移；
-- Boot/OTA/普通业务无回归；
-- 至少完成 50W 真实硬件端到端 HIL 并保留证据。
+> **每个功率段是独立固件，优先通过 Keil Target 选择生成；单个固件不混入其他功率 Profile。**
+
+> **上位机保持多功率通用 ProductProfileRegistry。**
+
+> **50W 参数为 Hardware Max 1680mA / Default HWMAX 1400mA / Default SET 893mA / RS3 120mΩ。**
+
+> **无 Calibration 仍可按 SET_OUTCUR 正常运行。**
+
+> **SET/CV/HWMAX当前值/Tolerance 不作为 Calibration 有效性 Context。**
+
+> **每次完整校准 Output + OCO + BL0942 U/I/P，不做局部更新。**
+
+> **固件不做最终误差 PASS/FAIL；上位机外部仪器验收，PASS→COMMIT，FAIL→ABORT。**
+
+> **MQTT V3 字符串 Operation、rc/st、字段、单位一致。**
+
+> **Calibration Record 固定 312B Little Endian。**
+
+> **STAGE 使用 Generation=0 / CommitMarker=0xFFFFFFFF；Generation、final CRC、CommitMarker 由固件 COMMIT 管理。**
+
+> **CRC32 与 Product Fingerprint 有跨端 Golden Vector。**
+
+> **Config/Calibration/Runtime A/B 掉电安全。**
+
+> **开发阶段旧 12KB Persistent 不迁移，首次 V3 部署直接格式化。**
+
+> **完成真实 50W HIL，并保留可审计证据。**
