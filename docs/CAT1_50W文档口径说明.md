@@ -200,35 +200,279 @@ Plan
 Calibration Generation
 ```
 
-### 4.7 Config A/B、Runtime A/B 职责
+### 4.7 Config A/B、Runtime A/B 职责与逐 Byte Record
 
-Config A/B 只保存“掉电后仍需保留的配置”，包括：
+#### 4.7.1 共用事务外壳
 
-```text
-Factory Config
-+ User Config
-+ Plan / MQTT / 告警 / 温控 / 调光 / 上报周期等持久配置
-```
-
-Product Profile 不写入 Config A/B，由 Keil Product Target 编译确定。
-
-Calibration 数据不写入 Config A/B，单独属于 Calibration A/B。
-
-Runtime A/B 只保存运行统计和必要的 durable runtime safety 状态。第一版至少包括：
+Config / Runtime / Calibration 都必须是真正 A/B；Config 与 Runtime 的新 Record 共用以下 20B Header：
 
 ```text
-totalRunTimeSec          u32   总运行时间，秒
-currentRunTimeSec        u32   当前运行时间，秒
-totalLightTimeSec        u32   总亮灯时间，秒
-currentLightTimeSec      u32   当前亮灯时间，秒
-totalEnergy001Wh         u32   总能耗，0.01Wh
-currentEnergy001Wh       u32   当前能耗，0.01Wh
-calibrationInhibit       u8    Calibration durable inhibit
+0x000  4B   Magic
+0x004  2B   formatVersion
+0x006  2B   recordLength
+0x008  4B   generation
+0x00C  2B   payloadLength
+0x00E  2B   reserved = 0
+0x010  4B   payloadCrc32
+0x014       Payload
+...         recordCrc32
+...         commitWord = 0xC0A17EED
 ```
 
-运行统计在 RAM 实时累计，不允许每秒擦写 Flash。正常统计采用周期性 Checkpoint；安全字段 `calibrationInhibit` 按状态转换立即持久化。
+除明确标注的兼容字节块外，所有多字节数值使用 Little Endian。CRC统一使用 CRC-32/ISO-HDLC：
 
-Config / Calibration / Runtime 三类 A/B 都采用各自独立的事务 Record；一个物理擦除页一个 Owner，不允许跨 Owner 共用页面。
+```text
+Poly   = 0x04C11DB7
+RefIn  = true
+RefOut = true
+Init   = 0xFFFFFFFF
+XorOut = 0xFFFFFFFF
+Check("123456789") = 0xCBF43926
+```
+
+规则：
+
+```text
+payloadCrc32 = CRC32(完整Payload)
+recordCrc32  = CRC32(Header + Payload)
+```
+
+`recordCrc32`自身和`commitWord`不参与Record CRC；`commitWord`必须最后写。
+
+#### 4.7.2 Config A/B：CFG1，1116B Record
+
+Config A/B 保存当前正常业务中掉电后仍需保留的 Factory/User、Property、Plan 等配置。Product Profile 本身仍由 Keil Target 编译确定，不以 Flash 为权威来源。
+
+冻结：
+
+```text
+Magic         = "CFG1"
+formatVersion = 1
+payloadLength = 1088B = 0x0440
+recordLength  = 1116B = 0x045C
+```
+
+Record：
+
+```text
+0x000..0x013  Common Header             20B
+0x014..0x453  ConfigPayloadV1          1088B
+0x454..0x457  recordCrc32                4B
+0x458..0x45B  commitWord=0xC0A17EED      4B
+Total                                  1116B
+```
+
+`ConfigPayloadV1`：
+
+```text
+Payload Offset
+0x000..0x07F  factoryUserCompat[128]    128B
+0x080..0x083  deviceAddress             u32 LE
+0x084..0x1B3  propertyConfig            304B
+0x1B4..0x43B  planRecords[8]            648B
+0x43C..0x43F  reserved                    4B = 0
+Total                                  1088B
+```
+
+`factoryUserCompat[128]` 是当前 `factory_user_buff[128]` 的兼容字节镜像，其内部既有字节语义保持不变，不按新Record的Little Endian规则重新解释。该兼容块中若存在 MID/RS3 等 Product-owned 影子字段，它们**不是权威 Product Profile**；加载后必须由当前 Keil Product Target 重新同步/校验，不能借 Flash 切换功率型号。
+
+`propertyConfig` 304B 使用显式 Little Endian 编码，对齐当前有效 Property 持久字段：
+
+```text
+SubOffset
+0x000 s32 lng
+0x004 s32 lat
+0x008 s32 zone
+0x00C s32 cns
+0x010 s32 dimTp
+0x014 s32 polar
+0x018 s32 dlmt
+0x01C s32 ulmt
+0x020 s32 rti
+0x024 s32 rtPwr
+0x028 s32 di
+0x02C s32 sBri
+0x030 s32 sBriTm
+0x034 char svrIp[32]
+0x054 s32 svrPort
+0x058 s32 uPeriod
+0x05C s32 hPeriod
+0x060 s32 tPeriod
+0x064 s32 almValue[17]       // 68B
+0x0A8 s32 almRecValue[17]    // 68B
+0x0EC s32 almEn[17]          // 68B
+Total = 0x130 = 304B
+```
+
+`planRecords[8]` 复用当前 ZK Plan 业务语义，但不再带旧独立 Flash Header/Checksum。每条固定 81B：
+
+```text
+PlanRecordV1，81B
+0x00 u8 valid
+0x01 u8 en
+0x02 u8 id
+0x03 u8 type
+0x04 u8 priority
+0x05 u8 weekMask
+0x06 u8 jobCount
+0x07 s8 setOffset
+0x08 s8 riseOffset
+0x09 8B startDateTime
+0x11 8B endDateTime
+0x19 28B job[0]
+0x35 28B job[1]
+Total = 0x51 = 81B
+```
+
+DateTime固定8B：
+
+```text
+u16 year LE
+u8 mon
+u8 day
+u8 hour
+u8 min
+u8 sec
+u8 reserved=0
+```
+
+Job固定28B：
+
+```text
+u8 cnsMask
+u8 timeType
+u8 actionCount
+u8 reserved=0
+6 × Action
+```
+
+Action固定4B：
+
+```text
+u16 minute LE
+u8 brightness
+u8 reserved=0
+```
+
+Config 不保存 Calibration 数据，也不保存累计运行统计。配置发生实际变化时才提交新的 Config A/B Generation，不做周期性无变化写入。
+
+#### 4.7.3 Runtime A/B：RUN1，76B Record
+
+Runtime A/B 对外运行统计语义保持当前固件不变；只改变存储方式。
+
+用户确认的持久统计只有：
+
+```text
+totalRunTimeSec       总运行时间，秒；设备上电期间无论亮灯与否都累计
+totalLightTimeSec     总亮灯时间，秒；PWM/调光输出 > 0 时累计
+totalEnergy001Wh      总能耗，单位0.01Wh
+calibrationInhibit    Calibration durable safety flag
+```
+
+本次上电的以下值只存在 RAM，不进 Flash：
+
+```text
+currentRunTimeSec
+currentLightTimeSec
+currentEnergy001Wh
+```
+
+设备重新上电后上述三个 current 值从 0 开始。
+
+为保持当前 OTA 成功/失败上报的 durable 行为，Runtime Payload 同时保留 OTA report 内部状态；它属于内部运行恢复状态，不属于对外运行统计字段。
+
+冻结：
+
+```text
+Magic         = "RUN1"
+formatVersion = 1
+payloadLength = 48B = 0x0030
+recordLength  = 76B = 0x004C
+```
+
+Record：
+
+```text
+0x000..0x013  Common Header             20B
+0x014..0x043  RuntimePayloadV1          48B
+0x044..0x047  recordCrc32                4B
+0x048..0x04B  commitWord=0xC0A17EED      4B
+Total                                    76B
+```
+
+`RuntimePayloadV1`：
+
+```text
+Payload Offset
+0x00 u32 totalRunTimeSec
+0x04 u32 totalLightTimeSec
+0x08 u32 totalEnergy001Wh
+0x0C u8  calibrationInhibit
+0x0D u8  reserved[3] = 0
+
+0x10 u32 otaReportState
+0x14 char otaId[8]
+0x1C u32 otaUrlHash
+0x20 u32 otaImageChecksum
+0x24 u32 otaImageSize
+0x28 u16 otaDeviceType
+0x2A u16 reserved = 0
+0x2C u32 otaRetryCount
+Total = 0x30 = 48B
+```
+
+Runtime 正常保存策略：
+
+```text
+RAM实时累计
+→ 每8小时提交一次Runtime A/B
+→ 检测到掉电时再立即提交一次Runtime A/B
+```
+
+安全/恢复字段例外：
+
+```text
+BEGIN                  -> calibrationInhibit=1，立即提交
+ABORT / RELEASE        -> calibrationInhibit=0，立即提交
+启动完成安全恢复后      -> calibrationInhibit=0，立即提交
+OTA durable状态发生关键变化 -> 立即提交
+```
+
+禁止每秒写 Flash，禁止 HEARTBEAT 写 Runtime Flash。
+
+#### 4.7.4 A/B 原子提交规则
+
+Config / Runtime / Calibration 统一：
+
+```text
+读取A/B并校验
+→ 选择Generation较新的有效页
+→ 选择另一页为inactive
+→ 擦除inactive 2KiB page
+→ RAM构造完整新Record，generation=old+1
+→ 写Header + Payload + recordCrc32
+→ Readback验证PayloadCRC + RecordCRC
+→ 最后写commitWord
+→ 再读回commitWord
+→ 新页成为active
+```
+
+禁止一次保存同时擦 A/B 两页；禁止先擦唯一有效页。
+
+`generation=0` 无效，首个有效 Generation=1；递增溢出时跳过0，并使用 wrap-safe 比较选择新旧。
+
+#### 4.7.5 物理页映射
+
+```text
+0x08005000 Config A       CFG1
+0x08005800 Config B       CFG1
+0x08006000 Calibration A  CAL4
+0x08006800 Calibration B  CAL4
+0x08007000 Runtime A      RUN1
+0x08007800 Runtime B      RUN1
+```
+
+每页2KiB，一个物理擦除页一个Owner。Record之外剩余字节保持擦除态/Reserved，不允许另一个事务 Owner 复用。
 
 ### 4.8 V3 durable boot/session inhibit
 
@@ -401,7 +645,9 @@ CAT1_240W
 - BL0942周期Reset保活；
 - 在244B PayloadVersion=1偷偷增加Voltage Offset；
 - 把sid/seq/heartbeat/staged Payload持久化到Runtime；
-- 每秒写Runtime Flash。
+- 每秒写Runtime Flash；
+- Runtime持久化本次上电currentRun/currentLight/currentEnergy；
+- Config/Runtime采用一次保存同时覆盖A和B的伪主备。
 
 ## 6. 仍然保留、不得因协议重冻而删除的工程设计
 
@@ -430,11 +676,18 @@ V3 durable boot/session inhibit Owner/存放位置    CLOSED
 50W hardwareRevision/pwmPolarity/OCO Revision    CLOSED
 ```
 
-Runtime / Config Record 的最终逐 Byte Layout 在实现前必须按上述字段归属机械冻结，但不得改变本节已经确认的 Owner 和语义。
+并且 Config / Runtime Record 的逐 Byte Layout 已在本文 4.7 节完成技术冻结：
+
+```text
+Config  = CFG1 / Payload 1088B / Record 1116B
+Runtime = RUN1 / Payload 48B   / Record 76B
+```
+
+因此该项不再留给 Codex 设计。
 
 ## 8. 后续问题分类
 
-从本版开始，Codex不再自由设计协议。
+从本版开始，Codex不再自由设计协议或Persistent格式。
 
 后续问题只分：
 
