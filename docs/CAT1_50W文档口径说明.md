@@ -695,3 +695,79 @@ Runtime = RUN1 / Payload 48B   / Record 76B
 2. `HIL_SPEC_DEFECT`：真实Keil/HIL/内存/硬件测试证明冻结规范存在问题，提供证据后显式升级版本。
 
 禁止因为旧V2 fixture、编码习惯或个人偏好再次把已确认设计随意改回另一套。
+
+## 9. 2026-08-22 补充冻结：Config A/B 页首 4B 与 Boot OTA Flag
+
+本节只补充本轮已经人工确认的 Boot/Config 物理兼容规则；不删除、不改写前文已经冻结的 Wire、Payload、Record、CRC、A/B、Runtime、Calibration、HIL 和非回归内容。
+
+### 9.1 Boot 不修改，六个 2KiB 页地址保持不变
+
+```text
+0x08005000~0x080057FF  Config A
+0x08005800~0x08005FFF  Config B
+0x08006000~0x080067FF  Calibration A
+0x08006800~0x08006FFF  Calibration B
+0x08007000~0x080077FF  Runtime A
+0x08007800~0x08007FFF  Runtime B
+```
+
+Config A/B 仍属于原定 Config 页；不新增页，不移动 Calibration/Runtime，不修改 APP 起始地址。
+
+### 9.2 Config A/B 页首统一保留 4B，CFG1 从 PageBase+4 开始
+
+```text
+Config A:
+0x08005000~0x08005003  Boot OTA Flag / Config页内保留兼容字段
+0x08005004             CFG1 Record 物理起点
+
+Config B:
+0x08005800~0x08005803  Reserved / 对称保留
+0x08005804             CFG1 Record 物理起点
+```
+
+冻结解释：
+
+- Config A/B 页仍各为 2048B；
+- CFG1 可用页内空间为 2044B；
+- CFG1 Record 仍为 1116B；
+- CFG1 Record 内部相对 Offset、1088B Payload、CRC、CommitWord、Golden Vector 全部不变；
+- 只改变 CFG1 的物理起始地址为 `PageBase + 4`。
+
+### 9.3 旧布局首次进入 V3
+
+发现旧 V2 Persistent 或非法 V3 布局时，允许按当前开发/HIL策略直接格式化旧 12KiB 参数区，不做迁移：
+
+```text
+确认当前不处于 OTA pending
+→ 直接擦除 0x08005000~0x08007FFF 六个 2KiB 页
+→ 0x08005000 回到 0xFFFFFFFF
+→ 从 0x08005004 / 0x08005804 建立 V3 Config
+→ Calibration A/B 空
+→ Runtime A/B 空
+```
+
+不迁移旧 Config/User/Plan/Runtime/Calibration；不碰 Bootloader 代码、APP、OTA Backup。合法 V3 Persistent 建立后不得重复格式化。
+
+### 9.4 正常远程 OTA
+
+现有 Boot OTA 约定继续保留：
+
+```text
+0x08005000 = 0xAA5555AA  -> Boot 进入 OTA Copy 流程
+0x08005000 != 0xAA5555AA -> 不触发 OTA，按正常 APP 校验/跳转流程处理
+```
+
+正常远程 OTA 不格式化这 12KiB 参数区。APP 完成 OTA Backup 准备后停止后续 Config A/B 提交，写入 `0xAA5555AA` 后立即复位；写标志后到复位进入 Boot 前禁止再擦写 Config 页。
+
+### 9.5 新 APP 清除 OTA Flag
+
+新 APP 启动后继续保持现有“OTA 成功后清除升级标志”的业务语义，但不得破坏唯一有效 Config：
+
+```text
+读取 Config A/B 最新有效 CFG1
+→ 确保另一页至少存在一份完整有效 Config
+→ 擦除 Config A 页，使 0x08005000 恢复 0xFFFFFFFF
+→ 需要时从 0x08005004 重建 Config A CFG1
+```
+
+禁止为了清除 OTA Flag 先擦除唯一有效 Config。
