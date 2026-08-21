@@ -21,6 +21,8 @@ V3功能代码    = 尚未实现
 
 **从本次冻结开始，不再新增协议设计 P0。** 除非后续真实 Keil/HIL 证明本合同存在物理不可实现或数据类型错误，否则 Codex 必须按本文实现，不得重新设计字段、编号、字节布局、CRC、State 或 Storage。
 
+> **本文不仅审核“协议字段是否一致”，还必须审核原实施方案中的正常运行、Fallback、仪器安全、稳定采样、Flash/OTA、BL0942根因、Audit和业务回归。字段级冻结不得覆盖或删除这些工程要求。**
+
 ---
 
 ## 1. 产品架构与50W参数
@@ -47,6 +49,12 @@ Logical PWM        = 0..1000
 ```text
 SET_OUTCUR <= HWMAX <= Hardware Max
 ```
+
+审核：
+
+- [ ] 单个50W固件没有75/100/150/200/240W运行Profile Catalog；
+- [ ] 上位机没有因为当前先做50W而删除其他功率UI/Profile；
+- [ ] 未冻结功率可保留但不能误标为“可量产校准”。
 
 ---
 
@@ -75,6 +83,13 @@ SET_OUTCUR <= HWMAX <= Hardware Max
 - 仅上位机 APPLY 后 PASS/FAIL 策略；
 - 校准前不得以最终误差门槛阻止 Correction 生成。
 
+审核：
+
+- [ ] SET改变后Calibration仍有效；
+- [ ] CV改变后Calibration仍有效；
+- [ ] Tolerance没有进入固件Context/Flash授权；
+- [ ] 有效Config重启/OTA后SET不被默认893覆盖。
+
 ---
 
 ## 3. 11点与PWM域
@@ -93,6 +108,14 @@ logicalPwm = level * 5 = 0,100,...,1000
 - 有有效 Output Calibration 后不重复 Offset；
 - 底层必须拆开 Legacy/Default PWM Path 与 Raw/Calibrated PWM Path。
 
+合法 Target Current 超出Calibration覆盖范围时：
+
+```text
+Fallback -> Legacy/Default PWM + OP_PWM_OFFSET + CAL_OUT_OF_RANGE
+```
+
+不得直接PWM=0，也不得无约束外推。
+
 ---
 
 ## 4. Calibration 模型
@@ -102,6 +125,8 @@ logicalPwm = level * 5 = 0,100,...,1000
 ```text
 actual logical PWM <-> Reference Output Current
 ```
+
+运行时 Target Current 使用邻近点分段反插值并直接得到u16 logical PWM，不做整数百分比往返量化。
 
 ### OCO
 
@@ -1009,6 +1034,18 @@ fresh/stale
 
 禁止周期 Reset 掩盖根因；异常后的有限恢复必须可分类、可计数、可验证。
 
+根因审核必须能给出：
+
+```text
+冻结/异常触发证据
+-> UART/HAL/协议状态
+-> 根因
+-> 修复
+-> 有限恢复
+-> 再次收到有效帧
+-> 长稳结果
+```
+
 ---
 
 # 16. Flash A/B 物理布局
@@ -1024,17 +1061,20 @@ fresh/stale
 
 每页 2KiB，一个物理页一个 Owner。Calibration Format4 Record 272B 放在各自 Calibration 物理页起始，其余空间保留/擦除态，不允许被其他事务共享。
 
+Config/Runtime也必须按真正A/B事务验收，不能Main/Backup同时擦写后称为A/B。
+
 ---
 
 # 17. 上位机完整流程
 
 ```text
 PRECHECK
--> SET/CV/Tolerance Run Config
+-> SET/CV/Tolerance/Stabilization/Validation Run Config
+-> Product/CAP核对
 -> 写SET并回读
--> CAP
 -> BEGIN
 -> 11点 SET_POINT + RAW + Instruments
+-> 稳定窗口 + 多样本聚合
 -> FITTING
 -> 生成244B Payload + CRC
 -> STAGE
@@ -1050,9 +1090,11 @@ PRECHECK
 
 校准前不按最终 Tolerance 判 FAIL；APPLY 后才由上位机最终验收。
 
+Quick/Full验证点应保持独立于0/10/.../100正式拟合点，例如Quick 5/45/85、Full 5/15/.../95，用于证明插值和固件实际APPLY效果。
+
 ---
 
-# 18. V3 实现后的最终审核
+# 18. V3 实现后的字段/存储审核
 
 必须逐项证明：
 
@@ -1095,3 +1137,147 @@ Golden Vector Set                       DONE
 ```
 
 **协议设计阶段不再保留待 Codex 自行决定的 P0。** 后续若实现中发现问题，应记录为“实现偏差 / HIL发现”，先对照本文定位根因；只有真实硬件或协议容量证明本文不可实现时，才允许通过明确版本变更重新打开设计，而不是边写代码边改协议。
+
+---
+
+# 20. 恢复：正常业务与Fallback联合审核
+
+字段一致只是必要条件，下面这些运行行为同样必须审核：
+
+- [ ] 无Calibration时设备仍能正常开关/调光；
+- [ ] 无Calibration使用成熟Default PWM + OP_PWM_OFFSET；
+- [ ] 有Calibration时不重复Offset；
+- [ ] SET改变后Calibration不失效；
+- [ ] 运行Vo/CV改变后Calibration不失效；
+- [ ] 合法Target超Calibration覆盖范围时Fallback Default Path，不直接0输出；
+- [ ] 硬件过流/过温/短路等保护不因Calibration被绕过；
+- [ ] OCO Corrected不反向替代Raw保护链。
+
+---
+
+# 21. 恢复：Config / OTA / Legacy审核
+
+必须区分旧Calibration和旧业务Config：
+
+### Legacy Calibration
+
+旧Storage formatVersion=3不直接解释成V3 Calibration；没有合法Format4时视为uncalibrated，但设备仍正常运行。
+
+### Legacy业务配置
+
+有效SET_OUTCUR、合法HWMAX、平台/MQTT、告警/温控、Plan等不得因为V3升级无条件清空。
+
+审核：
+
+- [ ] 默认893/1400只在空白/无效Config初始化；
+- [ ] 新Config A/B存在后不重复迁移；
+- [ ] 迁移幂等；
+- [ ] 非法旧值回到对应Profile默认，不把合法旧值覆盖；
+- [ ] OTA后SET不会无条件恢复893；
+- [ ] Plan/RTC业务语义未因存储迁移改变。
+
+---
+
+# 22. 恢复：上位机稳定采样与仪器安全审核
+
+稳定采样不得只做固定sleep：
+
+- [ ] 支持基础等待；
+- [ ] 连续N组样本；
+- [ ] Raw/Reference变化率或峰峰值稳定条件；
+- [ ] BL Fresh检查；
+- [ ] 最大等待超时；
+- [ ] 超时/不稳定点不用于拟合。
+
+电子负载：
+
+- [ ] 任务开始先safeOff；
+- [ ] Profile/CAP/仪器未通过前INPUT保持OFF；
+- [ ] 取消、断线、MQTT超时、BL stale、STAGE/APPLY/VERIFY/COMMIT失败都能INPUT OFF；
+- [ ] RELEASE后再次确认INPUT OFF；
+- [ ] 应用退出/窗口关闭有安全关闭策略。
+
+---
+
+# 23. 恢复：多功率UI与Audit审核
+
+上位机必须保留：
+
+- [ ] 多功率Product卡/Registry；
+- [ ] 未冻结Profile显示不可量产而不是删除；
+- [ ] Device SN/IMEI；
+- [ ] 本次SET_OUTCUR；
+- [ ] Load CV；
+- [ ] Tolerance；
+- [ ] Stabilization；
+- [ ] Quick/Full Validation；
+- [ ] 仪器/MQTT连接状态；
+- [ ] 11点进度；
+- [ ] 最终PASS/FAIL和证据入口。
+
+`audit.jsonl` 至少能追溯：
+
+```text
+Device/Product/Firmware
+Run Config
+11点 actual PWM + Raw + Reference + 稳定统计
+生成的Calibration/Payload CRC
+APPLY后独立验证
+PASS/FAIL原因
+COMMIT generation/len/crc
+READ_CHUNK Byte Compare
+必要DIAG
+异常/取消原因
+```
+
+---
+
+# 24. 恢复：允许修改范围与非回归审核
+
+固件重点修改范围应围绕：Product/Factory/User、PWM、Calibration、Flash、OCO、BL0942、UART2以及必要Property/Plan迁移；额外模块修改必须能解释与V3闭环的直接关系。
+
+上位机应保留成熟：Electron main/renderer/preload隔离、MQTT QoS1、SerialManager、DC5200、SCPI Load、settings原子写、audit.jsonl、safeStorage、Vitest、打包结构。
+
+非回归必须覆盖：
+
+- [ ] Boot/APP/OTA地址与metadata；
+- [ ] Windows Keil官方Build；
+- [ ] 普通MQTT登录/在线/property/report/alarm/OTA；
+- [ ] RTC/Plan；
+- [ ] CAT1正常业务；
+- [ ] 温控/告警/调光；
+- [ ] Electron MQTT/Serial/Persistence基础设施。
+
+---
+
+# 25. 最终分阶段放行
+
+不得仅凭“能跑一次11点”判定完成。推荐按以下顺序审核：
+
+```text
+A. 静态协议审计
+   -> V3字段 / Byte Layout / CRC / State
+
+B. 两端单元测试
+   -> Golden Vector / codec / interpolation / retry / chunk
+
+C. 固件正式Build
+   -> Windows Keil / size / warnings
+
+D. 台架HIL
+   -> 50W完整11点 + Quick/Full验证
+
+E. 稳定性
+   -> BL0942长稳 / JSON TX Pool / MQTT retry
+
+F. 掉电与OTA
+   -> Config/Calibration/Runtime A/B power-cut
+   -> OTA配置保持
+
+G. 联合回归
+   -> 普通业务 + UI + Audit
+```
+
+所有阶段通过后，才能从 `IMPLEMENTATION_PENDING` 进入量产验证状态。
+
+**本联合文档现在既保留完整V3字段合同，也恢复原实施方案中的工程审核思想；后续不得再以“精简文档”为理由删除这些内容。**
