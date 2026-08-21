@@ -1256,3 +1256,99 @@ V2真实代码升级到V3
 ```
 
 **V3 字段冻结只能覆盖旧协议歧义，不能删除原实施方案中的 Fallback、安全、诊断、分阶段开发、实机验证和非回归要求。**
+
+## 22. 2026-08-22 补充冻结：Config A/B 页首 4B 与 Boot OTA Flag
+
+本节仅补充 Flash 物理落点与 OTA 兼容规则，不删除、不改写前文已经冻结的 Record 字段、CRC、A/B、初始化、非回归和安全要求。
+
+### 22.1 Boot 与 Config A/B 物理页
+
+Boot 不修改，六个 2KiB 页地址保持不变：
+
+```text
+0x08005000~0x080057FF  Config A
+0x08005800~0x08005FFF  Config B
+0x08006000~0x080067FF  Calibration A
+0x08006800~0x08006FFF  Calibration B
+0x08007000~0x080077FF  Runtime A
+0x08007800~0x08007FFF  Runtime B
+```
+
+Config A/B 仍属于原定 Config 页，只在页内统一保留前 4B：
+
+```text
+Config A:
+0x08005000~0x08005003  Boot OTA Flag / Config页内保留兼容字段
+0x08005004             CFG1 Record 物理起点
+
+Config B:
+0x08005800~0x08005803  Reserved / 对称保留
+0x08005804             CFG1 Record 物理起点
+```
+
+因此：
+
+- Config A/B 页仍各为 2048B；
+- CFG1 可用页内空间为 2044B；
+- CFG1 Record 仍为 1116B；
+- CFG1 Record 内部 `0x000..0x45B` 相对 Offset、Payload、CRC、CommitWord、Golden Vector 全部不变；
+- 只改变 CFG1 的物理起始地址为 `PageBase + 4`。
+
+### 22.2 旧布局首次进入 V3
+
+发现旧 V2 Persistent 或非法 V3 布局时，继续执行已经冻结的“直接格式化、不迁移”策略：
+
+```text
+确认当前不处于 OTA pending
+→ 直接擦除 0x08005000~0x08007FFF 六个 2KiB 页
+→ 0x08005000 回到 0xFFFFFFFF
+→ 从 0x08005004 / 0x08005804 建立 V3 Config
+→ Calibration A/B 空
+→ Runtime A/B 空
+```
+
+不迁移旧 Config/User/Plan/Runtime/Calibration；不碰 Bootloader 代码、APP、OTA Backup。合法 V3 Persistent 建立后不得重复格式化。
+
+### 22.3 正常远程 OTA
+
+现有 Boot OTA 约定继续保留：
+
+```text
+0x08005000 = 0xAA5555AA  -> Boot 进入 OTA Copy 流程
+0x08005000 != 0xAA5555AA -> 不触发 OTA，按正常 APP 校验/跳转流程处理
+```
+
+正常 OTA 不格式化这 12KiB V3 参数区。APP 完成 OTA Backup 准备后：
+
+```text
+停止后续 Config A/B 提交
+→ 写 0x08005000 = 0xAA5555AA
+→ 立即复位
+→ Boot 执行 OTA，只更新 APP
+```
+
+写入 OTA Flag 后至复位前，禁止再擦除/提交 Config 页。
+
+### 22.4 新 APP 清除 OTA Flag
+
+新 APP 启动后必须保留现有“成功后清除升级标志”的业务语义，但不得破坏唯一有效 Config：
+
+```text
+读取 Config A/B 最新有效 CFG1
+→ 若 B 没有有效 Config，先保证 B 存在一份完整有效 Config
+→ 擦除 Config A 页，使 0x08005000 恢复 0xFFFFFFFF
+→ 需要时从 0x08005004 重建 Config A CFG1
+```
+
+禁止为了清除 OTA Flag 先擦除唯一有效 Config。
+
+### 22.5 新增验收
+
+- [ ] Config A CFG1 物理起点=`0x08005004`；
+- [ ] Config B CFG1 物理起点=`0x08005804`；
+- [ ] Config A/B 页首4B不被 CFG1 覆盖；
+- [ ] 旧布局首次格式化后 `0x08005000=0xFFFFFFFF`；
+- [ ] 写 `0xAA5555AA` 后至复位前不再发生 Config 擦写；
+- [ ] Boot OTA 不擦 12KiB V3 Persistent；
+- [ ] 新 APP 能在至少保留一份有效 Config 的情况下清除 OTA Flag；
+- [ ] 再次复位不会因残留 `0xAA5555AA` 重复进入 OTA。
