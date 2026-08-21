@@ -2,58 +2,48 @@
 
 > 生效日期：2026-08-21  
 > 分支：`main`  
-> 状态：`CURRENT_V2 / TARGET_V3 / FIELD_CONTRACT_FREEZING`
+> 状态：`CURRENT_CODE_V2 / TARGET_V3_FIELD_CONTRACT_FROZEN / IMPLEMENTATION_PENDING`
 
 ## 1. 当前唯一权威文档
 
-后续设计、实现和审核只以以下三份文档为目标规范：
+后续实现和审核只以以下三份文档为目标规范：
 
 1. 固件：`docs/CAT1_50W校准固件基线与上位机对接方案.md`
 2. 上位机：`L12ichang/tc-desktop-client/docs/CAT1_50W校准上位机修改实施方案.md`
-3. 联合审核：`docs/CAT1_50W固件与上位机联合审核清单.md`
+3. 联合字段合同与审核：`docs/CAT1_50W固件与上位机联合审核清单.md`
 
-旧文档、旧 fixture 和旧源码只用于理解 V2 现状和迁移，不得反向覆盖以上三份目标规范。
+其中第3份是 **V3 Wire / Payload / Storage / Golden Vector 唯一字段级真源**。如果三份文档发生字段级冲突，以第3份为准并同步修正前两份，禁止由Codex自行选择。
 
-## 2. 当前代码状态必须统一理解
+旧文档、旧fixture和旧源码只用于理解V2现状，不得覆盖以上目标规范。
+
+## 2. 当前代码状态
 
 ```text
 CAT1_Keil_Project 当前代码 = V2
 tc-desktop-client 当前代码 = V2
 V3功能代码                  = 尚未实现
-当前工作目标                = 将两端从V2升级到V3
+当前工作目标                = 将两端从V2完整升级到V3
 ```
 
-当前固件中的 `SYS_CALIBRATION_MQTT_PROTOCOL_VERSION=2`、当前上位机的 `calibration-mqtt-v2.ts`、旧198B表、旧Context都属于真实现状，不代表目标设计。
+当前固件 `SYS_CALIBRATION_MQTT_PROTOCOL_VERSION=2`、上位机 `calibration-mqtt-v2.ts`、旧198B Payload、旧Context、旧Storage formatVersion=3都属于V2现状。
 
-任何文档中的 V3 内容当前都只是**待实现目标规范**。
+**文档冻结不等于代码已实现。** 后续必须用真实代码、Keil编译、单测和HIL证明V3完成。
 
-## 3. 版本命名
-
-目标 Wire Protocol：
+## 3. V3版本空间
 
 ```text
-Calibration MQTT Protocol V3
+Wire Protocol              = Calibration MQTT Protocol V3
+Calibration PayloadVersion = 1
+Calibration StorageFormat  = 4
 ```
 
-旧 Wire Protocol：
+三者是不同版本空间，不得混淆。
 
-```text
-CAL_MQTT_V2
-```
+V2旧Storage `formatVersion=3` 不等于 MQTT V3。
 
-新 Flash 校准记录在最终 Header/Offset/CRC/Golden Vector 冻结前统一称为：
+## 4. 已冻结的核心设计
 
-```text
-Target Calibration Record
-```
-
-不得再用“Calibration Record V2”作为新目标名称。
-
-当前源码 `SYS_CALIBRATION_STORAGE_FORMAT_VERSION=3` 只是旧 Storage Record 版本，与 MQTT Protocol V3 不是同一个版本空间。
-
-## 4. 已冻结的 V3 P0
-
-### 产品/运行参数
+### 产品参数
 
 ```text
 50W Hardware Max       = 1680mA
@@ -61,13 +51,19 @@ Target Calibration Record
 50W Default SET_OUTCUR = 893mA
 RS3                    = 120mΩ
 11 points              = Level 0/20/.../200
+logicalPwm             = 0..1000
 ```
 
-`SET_OUTCUR <= HWMAX <= Hardware Max`。
+### 参数职责
 
-SET_OUTCUR 采用兼容方案 A：Wire 保留 `Factory.SET_OUTCUR`，固件内部迁移到 User Config。
+- SET_OUTCUR = User Config；Wire暂保留 `Factory.SET_OUTCUR`兼容入口；
+- HWMAX = Factory Config；
+- Hardware Max = Product Profile固定能力；
+- CV = 上位机电子负载本次工况；
+- Tolerance = 上位机APPLY后验收策略；
+- Calibration不绑定SET/CV/当前HWMAX/calibratedMax。
 
-### Operation Code
+### Protocol Operation
 
 ```text
 0 CAP
@@ -86,31 +82,7 @@ SET_OUTCUR 采用兼容方案 A：Wire 保留 `Factory.SET_OUTCUR`，固件内�
 13 DIAG
 ```
 
-V3 使用数字 Operation，不用长字符串。
-
-### RAW
-
-同包返回 Raw + Corrected；拟合只用 Raw，APPLY 后验收使用 Corrected。
-
-### PWM
-
-协议只操作 Level；固件逻辑 PWM 域为 0..1000。上位机不写 CCR。OP_PWM_OFFSET 只保留在无 Calibration Legacy/Default Path，Calibration SET_POINT 和有效 Calibration 正常运行不重复叠加 Offset。
-
-### Wire State
-
-```text
-0 IDLE
-1 ACTIVE
-2 STAGED
-3 APPLIED
-4 FAULT
-```
-
-不设置长期 COMMITTED/ABORTED 状态。
-
-### BL0942 Voltage
-
-第一版由上位机计算 Q24 Gain，各有效点 Gain 取中位数；固件只做定点应用。量产前必须多输入电压 HIL 验证 Gain-only 是否满足 Tolerance。
+V3使用数字Operation。
 
 ### Result Code
 
@@ -132,13 +104,67 @@ V3 使用数字 Operation，不用长字符串。
 14 RANGE_ERROR
 ```
 
-### STAGE / Storage 所有权
+### Wire State
 
-STAGE 只传 Target Calibration Payload；上位机不发送完整 Flash Record。
+```text
+0 IDLE
+1 ACTIVE
+2 STAGED
+3 APPLIED
+4 FAULT
+```
 
-固件拥有：Generation、A/B Slot、Storage Header、Record CRC、Commit Marker 和掉电事务。
+无长期COMMITTED/ABORTED状态。
 
-READ_INFO / READ_CHUNK 回读的是已提交 Calibration Payload，用于上位机 CRC/Byte Compare，不要求 MQTT 回传整个 Flash Record。
+### Target Calibration Payload
+
+```text
+Magic          = CALP
+PayloadVersion = 1
+PayloadLength  = 244B
+Endian         = Little Endian
+ValidFlags     = 0x001F
+CRC            = CRC-32/ISO-HDLC，覆盖完整244B
+```
+
+完整Byte Layout以联合审核清单第5节为准。
+
+### RAW
+
+同包返回Raw + Corrected；`vf/flt`逐bit已经冻结，详见联合审核清单第7节。
+
+### READ_CHUNK
+
+```text
+Max Chunk = 128B
+标准244B回读 = 128B + 116B
+```
+
+### Calibration Flash Record
+
+```text
+Magic         = CAL4
+StorageFormat = 4
+RecordLength  = 272B
+PayloadLength = 244B
+Endian        = Little Endian
+CommitWord    = 0xC0A17EED
+```
+
+Flash Record由固件生成；STAGE只传Calibration Payload。
+
+### BL0942 Voltage
+
+第一版固定：上位机计算Q24 Gain并对有效点取中位数；固件使用定点乘法应用；量产前做多输入电压HIL验证。
+
+### Golden Vector
+
+联合审核清单已经冻结：
+
+- CRC标准向量；
+- Little Endian向量；
+- 244B Payload codec向量；
+- 272B Flash Record codec向量。
 
 ## 5. 明确废弃的旧口径
 
@@ -146,29 +172,39 @@ READ_INFO / READ_CHUNK 回读的是已提交 Calibration Payload，用于上位�
 
 - SET_OUTCUR=890mA；
 - HWMAX与Hardware Max合并；
-- V2作为最终协议；
+- CAL_MQTT_V2作为最终协议；
 - Calibration绑定SET/CV/calibratedMax；
-- 缺少Calibration禁止正常输出；
+- 无Calibration禁止正常输出；
 - 设备CAP返回多型号profilesCsv；
-- 字符串Operation作为V3正式Wire；
-- COMMITTED作为长期V3 Wire State；
-- “Calibration Record V2 / 312B / Q20+Offset”作为目标格式；
+- 字符串Operation作为V3 Wire；
+- COMMITTED作为长期Wire State；
+- “Calibration Record V2 / 312B / Q20+Offset”；
 - 上位机发送完整Flash Record；
-- 校准前按最终±1%/±2%精度直接FAIL；
-- BL0942用周期Reset掩盖通信冻结。
+- 校准前按最终Tolerance直接FAIL；
+- BL0942用周期Reset保活；
+- 让Codex在开发阶段继续自由设计Payload/CRC/State/Storage。
 
-## 6. 当前仍需继续冻结的 P0
+## 6. 设计P0状态
 
-在允许 Codex 做完整 V3 跨端实现前，还需冻结：
+此前需要冻结的字段设计项已经全部关闭：
 
-1. Target Calibration Payload 逐Byte布局；
-2. Endian；
-3. Payload CRC算法与覆盖范围；
-4. RAW `vf` bit表；
-5. RAW `flt` bit表；
-6. 每个Operation完整Request/Response必填字段；
-7. READ_CHUNK最大长度；
-8. Target Calibration Record最终Storage `formatVersion`、Header/CRC/Commit布局；
-9. Golden Vector。
+```text
+Target Calibration Payload精确Byte布局  DONE
+Endian                                  DONE
+Payload CRC                             DONE
+RAW vf bit                              DONE
+RAW flt bit                             DONE
+每个Operation Request/Response          DONE
+READ_CHUNK大小                          DONE
+最终Flash Record格式                    DONE
+Golden Vector                           DONE
+```
 
-这些未冻结项必须先讨论，存在疑问先询问用户，禁止 Codex自行拍板。
+**当前不存在协议设计待定P0。**
+
+后续若出现问题，只按以下两类处理：
+
+1. `IMPLEMENTATION_MISMATCH`：代码没有按已冻结文档实现，修改代码；
+2. `HIL_SPEC_DEFECT`：真实硬件/容量测试证明冻结规范不可实现，提供证据后显式升级规范版本。
+
+禁止把普通编码困难、旧V2测试冲突或个人偏好重新包装成新的“P0设计问题”。
