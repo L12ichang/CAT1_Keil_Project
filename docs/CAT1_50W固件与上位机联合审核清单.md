@@ -28,6 +28,7 @@ V3功能代码    = 尚未实现
 - Calibration Payload；
 - CRC / Endian；
 - Flash Calibration Record；
+- Config / Runtime A/B Record；
 - 开发期 Persistent 初始化策略；
 - 跨端 Golden Vector。
 
@@ -90,15 +91,18 @@ Fingerprint硬件字段未定义    -> 编译失败
 # 2. 50W 冻结参数
 
 ```text
-Rated Power        = 50W
-MID                = 1
-Hardware Max       = 1680mA
-Default HWMAX      = 1400mA
-Default SET_OUTCUR = 893mA
-RS3                = 120mΩ
-Formal Points      = 11
-Level              = 0,20,...,200
-Logical PWM Full   = 1000
+Rated Power         = 50W
+MID                 = 1
+Hardware Max        = 1680mA
+Default HWMAX       = 1400mA
+Default SET_OUTCUR  = 893mA
+RS3                 = 120mΩ
+Formal Points       = 11
+Level               = 0,20,...,200
+Logical PWM Full    = 1000
+hardwareRevision    = 0x0101   // E1.1
+pwmPolarity         = 1        // Inverted / 负逻辑
+ocoHardwareRevision = 0x0101
 ```
 
 ```text
@@ -110,7 +114,9 @@ SET_OUTCUR <= HWMAX <= Hardware Max
 - [ ] 两端50W Profile一致；
 - [ ] 旧890mA不再作为V3默认值；
 - [ ] HWMAX与Hardware Max已拆开；
-- [ ] 50W Product Target 中硬件修订号、PWM极性、OCO硬件修订号均显式定义。
+- [ ] 50W Product Target 中 `hardwareRevision=0x0101`；
+- [ ] `pwmPolarity=1`；
+- [ ] `ocoHardwareRevision=0x0101`。
 
 ---
 
@@ -1169,7 +1175,7 @@ A/B同时有效时选更新Generation；generation=0无效。
 
 ---
 
-# 15. 6×2KiB Persistent物理布局——保持
+# 15. 6×2KiB Persistent物理布局与 Config/Runtime Record
 
 ```text
 0x08005000 Config A
@@ -1185,6 +1191,203 @@ A/B同时有效时选更新Generation；generation=0无效。
 Config/Runtime同样必须是真正A/B，不能Main/Backup一次保存时同时擦写。
 
 Calibration Record只占Calibration页起始272B，其余空间保持保留/擦除态，不允许其他事务共享。
+
+## 15.1 Config/Runtime 共用 Header/CRC/Commit
+
+两类Record共用20B Header：
+
+```text
+0x000 4B Magic
+0x004 u16 formatVersion
+0x006 u16 recordLength
+0x008 u32 generation
+0x00C u16 payloadLength
+0x00E u16 reserved=0
+0x010 u32 payloadCrc32
+0x014 Payload
+```
+
+CRC：
+
+```text
+payloadCrc32 = CRC32(完整Payload)
+recordCrc32  = CRC32(Header + Payload)
+```
+
+算法统一 CRC-32/ISO-HDLC。`recordCrc32`自身和`commitWord`不参与Record CRC。`commitWord=0xC0A17EED`必须最后写。
+
+## 15.2 Config A/B——CFG1
+
+冻结：
+
+```text
+Magic         = "CFG1"
+formatVersion = 1
+payloadLength = 1088B = 0x0440
+recordLength  = 1116B = 0x045C
+```
+
+Record：
+
+```text
+0x000..0x013 Common Header             20B
+0x014..0x453 ConfigPayloadV1          1088B
+0x454..0x457 recordCrc32                4B
+0x458..0x45B commitWord                 4B
+Total                                  1116B
+```
+
+Payload：
+
+```text
+0x000..0x07F factoryUserCompat[128]    128B
+0x080..0x083 deviceAddress             u32 LE
+0x084..0x1B3 propertyConfig            304B
+0x1B4..0x43B planRecords[8]            648B
+0x43C..0x43F reserved                    4B = 0
+Total                                  1088B
+```
+
+`factoryUserCompat[128]`保持当前`factory_user_buff[128]`字节语义；它是兼容影子，不是Product Profile权威来源。MID/RS3等Product-owned字段加载后必须由当前Keil Target重新同步/校验，不能通过Flash切产品型号。
+
+`propertyConfig` 304B：
+
+```text
+0x000 s32 lng
+0x004 s32 lat
+0x008 s32 zone
+0x00C s32 cns
+0x010 s32 dimTp
+0x014 s32 polar
+0x018 s32 dlmt
+0x01C s32 ulmt
+0x020 s32 rti
+0x024 s32 rtPwr
+0x028 s32 di
+0x02C s32 sBri
+0x030 s32 sBriTm
+0x034 char svrIp[32]
+0x054 s32 svrPort
+0x058 s32 uPeriod
+0x05C s32 hPeriod
+0x060 s32 tPeriod
+0x064 s32 almValue[17]
+0x0A8 s32 almRecValue[17]
+0x0EC s32 almEn[17]
+Total=304B
+```
+
+`planRecords[8]`每条固定81B：
+
+```text
+0x00 u8 valid
+0x01 u8 en
+0x02 u8 id
+0x03 u8 type
+0x04 u8 priority
+0x05 u8 weekMask
+0x06 u8 jobCount
+0x07 s8 setOffset
+0x08 s8 riseOffset
+0x09 8B startDateTime
+0x11 8B endDateTime
+0x19 28B job[0]
+0x35 28B job[1]
+Total=81B
+```
+
+DateTime：`u16 year LE + mon/day/hour/min/sec + reserved`，共8B。Job：`cnsMask/timeType/actionCount/reserved + 6×Action`，共28B。Action：`u16 minute LE + u8 brightness + u8 reserved`，共4B。
+
+Config只在配置真实变化时提交，不做周期性无变化写入。
+
+## 15.3 Runtime A/B——RUN1
+
+对外运行统计语义保持现有固件，只换存储：
+
+```text
+totalRunTimeSec   = 设备全部历史上电运行秒数，亮灯/不亮灯都累计
+totalLightTimeSec = 历史PWM/调光输出>0累计秒数
+totalEnergy001Wh  = 历史总能耗，0.01Wh
+```
+
+以下仅RAM，本次上电从0开始，不持久化：
+
+```text
+currentRunTimeSec
+currentLightTimeSec
+currentEnergy001Wh
+```
+
+为不破坏现有OTA成功/失败上报恢复能力，Runtime同时保存OTA durable report内部状态。
+
+冻结：
+
+```text
+Magic         = "RUN1"
+formatVersion = 1
+payloadLength = 48B = 0x0030
+recordLength  = 76B = 0x004C
+```
+
+Record：
+
+```text
+0x000..0x013 Common Header            20B
+0x014..0x043 RuntimePayloadV1         48B
+0x044..0x047 recordCrc32               4B
+0x048..0x04B commitWord                4B
+Total                                  76B
+```
+
+Payload：
+
+```text
+0x00 u32 totalRunTimeSec
+0x04 u32 totalLightTimeSec
+0x08 u32 totalEnergy001Wh
+0x0C u8  calibrationInhibit
+0x0D u8  reserved[3]=0
+0x10 u32 otaReportState
+0x14 char otaId[8]
+0x1C u32 otaUrlHash
+0x20 u32 otaImageChecksum
+0x24 u32 otaImageSize
+0x28 u16 otaDeviceType
+0x2A u16 reserved=0
+0x2C u32 otaRetryCount
+Total=48B
+```
+
+保存时机：
+
+```text
+正常运行统计 -> 每8小时提交一次
+掉电检测     -> 立即提交一次
+BEGIN        -> calibrationInhibit=1，立即提交
+ABORT/RELEASE/启动安全恢复完成 -> inhibit=0，立即提交
+OTA durable report关键状态变化 -> 立即提交
+```
+
+禁止每秒写Flash；HEARTBEAT不写Runtime。
+
+## 15.4 Config/Runtime A/B原子提交
+
+统一：
+
+```text
+读取A/B并校验
+→ 选Generation较新的有效页
+→ 另一页作为inactive
+→ 擦inactive整页
+→ RAM生成generation=old+1的新Record
+→ 写Header + Payload + recordCrc32
+→ Readback验证PayloadCRC + RecordCRC
+→ 最后写commitWord
+→ 再读回commitWord
+→ 新页成为active
+```
+
+禁止先擦唯一有效页，禁止一次保存同时擦A/B。`generation=0`无效，首个有效=1，溢出跳过0并使用wrap-safe比较。
 
 ---
 
@@ -1376,7 +1579,7 @@ u32 0x12345678 -> 78 56 34 12
 s32 -2         -> FE FF FF FF
 ```
 
-## G3 Fingerprint Codec
+## G3 Fingerprint Codec——50W E1.1正式向量
 
 固定测试输入：
 
@@ -1384,19 +1587,19 @@ s32 -2         -> FE FF FF FF
 profileVersion      = 1
 profileId           = 50
 mid                 = 1
-hardwareRevision    = 1
+hardwareRevision    = 0x0101
 ratedPowerW         = 50
 rs3Mohm             = 120
 hardwareMaxMa       = 1680
 pwmFullScale        = 1000
 pwmPolarity         = 1
-ocoHardwareRevision = 1
+ocoHardwareRevision = 0x0101
 ```
 
 必须先得到18B：
 
 ```text
-01 00 32 00 01 01 00 32 00 78 00 90 06 E8 03 01 01 00
+01 00 32 00 01 01 01 32 00 78 00 90 06 E8 03 01 01 01
 ```
 
 然后两端各自用G1 CRC实现独立计算Fingerprint并比较。
@@ -1500,6 +1703,30 @@ Record CRC按本文独立计算。
 
 STAGE/READ fixture必须验证字段名统一为`payloadLength/payloadCrc32/payloadHex`。
 
+## G7 Config / Runtime Storage Fixtures
+
+两端/固件离线工具至少固定：
+
+```text
+CFG1:
+Magic         = 43 46 47 31
+formatVersion = 1
+payloadLength = 0x0440
+recordLength  = 0x045C
+recordCrc     @0x454
+commit        @0x458 = ED 7E A1 C0
+
+RUN1:
+Magic         = 52 55 4E 31
+formatVersion = 1
+payloadLength = 0x0030
+recordLength  = 0x004C
+recordCrc     @0x044
+commit        @0x048 = ED 7E A1 C0
+```
+
+必须验证：PayloadCRC覆盖完整Payload、RecordCRC覆盖Header+Payload、CommitWord最后写、A/B断电回退有效。
+
 ---
 
 # 22. Audit / 生产证据
@@ -1567,6 +1794,7 @@ READ payloadHex CRC + Byte Compare
 ## Fingerprint
 
 - [ ] 18B顺序/LE完全一致；
+- [ ] 50W E1.1 G3 bytes一致；
 - [ ] CRC参数一致；
 - [ ] Product Target硬件字段显式定义；
 - [ ] SET/HWMAX/CV/Tolerance/MQTT/Plan/历史不参与。
@@ -1574,13 +1802,21 @@ READ payloadHex CRC + Byte Compare
 ## Payload / Storage
 
 - [ ] Wire Payload=244B；
-- [ ] Flash Record=272B；
+- [ ] Calibration Flash Record=272B；
 - [ ] Payload≠Flash Record；
 - [ ] 上位机不生成Generation/RecordCRC/CommitWord；
 - [ ] READ返回244B Payload；
 - [ ] Payload/Record CRC正确；
 - [ ] CommitWord最后写；
-- [ ] Calibration A/B掉电安全。
+- [ ] Calibration A/B掉电安全；
+- [ ] Config=`CFG1/1088B Payload/1116B Record`；
+- [ ] Runtime=`RUN1/48B Payload/76B Record`；
+- [ ] Config/Runtime使用真A/B而非同时写Main/Backup；
+- [ ] Runtime每8小时checkpoint；
+- [ ] 掉电触发Runtime立即保存；
+- [ ] currentRun/currentLight/currentEnergy不持久化；
+- [ ] calibrationInhibit由Calibration Service持有并存Runtime；
+- [ ] OTA durable report行为在Runtime新布局中保留。
 
 ## Flash开发初始化
 
@@ -1631,8 +1867,11 @@ States               = IDLE / ACTIVE / STAGED / APPLIED / COMMITTED
 Large data field     = payloadHex
 READ                 = 第一版单READ，不分块
 Wire Payload         = 244B CALP PayloadVersion1
-Flash Record         = 272B CAL4 StorageFormat4
-Fingerprint          = 固定18B LE + CRC32
+Calibration Record   = 272B CAL4 StorageFormat4
+Config Record        = 1116B CFG1，Payload 1088B
+Runtime Record       = 76B RUN1，Payload 48B
+Runtime Checkpoint   = 每8小时 + 掉电 + safety/OTA关键状态变化
+Fingerprint          = 固定18B LE + CRC32；50W E1.1=0x0101/1/0x0101
 Development Flash    = 旧12KB Persistent直接格式化，不迁移
 BL Voltage V3        = Gain-only Q24；HIL失败则版本升级支持Gain+Offset
 ```
@@ -1651,4 +1890,4 @@ BL0942根因修复
 稳定采样 / SafeOff / Audit / 非回归
 ```
 
-**后续 Codex 执行的是 V2→V3 实现任务，不允许再自行把协议切回数字 Operation、分块 READ、重新绑定 SET/CV，或删掉上述工程约束。**
+**后续 Codex 执行的是 V2→V3 实现任务，不允许再自行把协议切回数字 Operation、分块 READ、重新绑定 SET/CV，或重新设计 CFG1/RUN1 持久化格式。**
