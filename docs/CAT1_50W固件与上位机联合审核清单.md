@@ -1947,6 +1947,10 @@ Boot 不修改，既有约定保持：
 
 正常 OTA 不擦这 12KiB 参数区。APP 完成 OTA Backup 准备后，必须停止后续 Config A/B 提交，写入 `0xAA5555AA` 后立即复位；写 Flag 后到复位前禁止再擦写 Config 页。
 
+**实现提示：这里不新增第二套 OTA 写锁/命令门禁。** 当前固件在 OTA 状态下已经禁止普通控制/配置类命令继续写入，V3 必须直接复用该现有门禁。新的 CFG1 / Config A/B 存储入口只能接入并服从现有 OTA 状态判断，不得新增 `OTA_CONFIG_LOCK`、`CONFIG_WRITE_INHIBIT`、独立 Flash Mutex 或并行 OTA 状态机，也不得绕过当前 OTA 门禁。
+
+因此本条的实现目标是“存储重构后现有 OTA 门禁仍然有效”，不是重新设计 OTA 互斥机制。通过代码审计和 HIL/回归证明 OTA 期间普通配置命令不会触发 Config A/B 提交即可；`0x08005000` 写入 `0xAA5555AA` 后继续按现有成熟流程立即复位。
+
 ## 25.4 新 APP 清 Flag 与验收
 
 新 APP 成功启动后，必须在至少保留一份有效 Config 的前提下清除 OTA Flag：
@@ -1964,6 +1968,8 @@ Boot 不修改，既有约定保持：
 - [ ] Config B CFG1物理起点=`0x08005804`；
 - [ ] Config A/B页首4B不被CFG1覆盖；
 - [ ] 旧布局首次格式化后`0x08005000=0xFFFFFFFF`；
+- [ ] OTA期间继续复用当前已有命令/配置写入门禁，不新增第二套锁状态机；
+- [ ] 新CFG1/Config A/B写入口不能绕过现有OTA门禁；
 - [ ] 写`0xAA5555AA`后至复位前不再发生Config擦写；
 - [ ] Boot OTA只更新APP，不擦12KiB V3 Persistent；
 - [ ] 新APP清Flag时不丢失唯一有效Config；
