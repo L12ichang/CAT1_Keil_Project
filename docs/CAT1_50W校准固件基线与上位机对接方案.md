@@ -1329,6 +1329,10 @@ Config B:
 
 写入 OTA Flag 后至复位前，禁止再擦除/提交 Config 页。
 
+**实现提示：复用当前固件已有 OTA 命令/配置写入门禁，不新增第二套锁机制。** 当前 OTA 状态下已经禁止普通控制/配置类命令继续写入，因此 V3 不新增 `OTA_CONFIG_LOCK`、`CONFIG_WRITE_INHIBIT`、独立 Flash Mutex 或第二套 OTA 状态机。新的 CFG1/Config A/B 存储接口必须继续服从现有 OTA 门禁、不得绕过它；除此之外保持现有 OTA 业务逻辑不变。
+
+该要求的验收方式是回归/HIL证明 OTA 期间普通配置写入仍被现有机制阻止、不会产生 Config A/B 提交，而不是再实现一套并行的 OTA 写锁。`0x08005000` 写入 `0xAA5555AA` 后仍按当前成熟流程立即复位。
+
 ### 22.4 新 APP 清除 OTA Flag
 
 新 APP 启动后必须保留现有“成功后清除升级标志”的业务语义，但不得破坏唯一有效 Config：
@@ -1348,6 +1352,8 @@ Config B:
 - [ ] Config B CFG1 物理起点=`0x08005804`；
 - [ ] Config A/B 页首4B不被 CFG1 覆盖；
 - [ ] 旧布局首次格式化后 `0x08005000=0xFFFFFFFF`；
+- [ ] OTA期间沿用现有命令/配置写入门禁，不新增第二套锁状态机；
+- [ ] 新 CFG1/Config A/B 写入口不能绕过现有 OTA 门禁；
 - [ ] 写 `0xAA5555AA` 后至复位前不再发生 Config 擦写；
 - [ ] Boot OTA 不擦 12KiB V3 Persistent；
 - [ ] 新 APP 能在至少保留一份有效 Config 的情况下清除 OTA Flag；
