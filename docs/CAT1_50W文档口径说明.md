@@ -759,6 +759,10 @@ Config B:
 
 正常远程 OTA 不格式化这 12KiB 参数区。APP 完成 OTA Backup 准备后停止后续 Config A/B 提交，写入 `0xAA5555AA` 后立即复位；写标志后到复位进入 Boot 前禁止再擦写 Config 页。
 
+**实现提示：沿用现有 OTA 门禁，不新增第二套机制。** 当前固件在 OTA 状态下已经禁止普通控制/配置类命令继续写入，因此 V3 不新增 `OTA_CONFIG_LOCK`、`CONFIG_WRITE_INHIBIT`、独立 Flash Mutex 或第二套 OTA 状态机。V3 仅要求新的 Config A/B 写入口继续服从现有 OTA 门禁、不得绕过该门禁；现有 OTA 业务逻辑保持不变，并通过回归/HIL 验证 OTA 期间不会发生 Config A/B 提交。
+
+`0x08005000` 写入 `0xAA5555AA` 后仍按当前成熟 OTA 流程立即复位。本条是对现有 OTA 行为的兼容约束，不是要求重新设计 OTA 写锁或命令门禁。
+
 ### 9.5 新 APP 清除 OTA Flag
 
 新 APP 启动后继续保持现有“OTA 成功后清除升级标志”的业务语义，但不得破坏唯一有效 Config：
