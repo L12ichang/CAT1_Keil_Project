@@ -221,9 +221,8 @@ static boolean_en sys_persistent_config_update_range_valid(u16 offset,
         return BOOL_FALSE;
     }
     end = (u16)(offset + length);
-    if ((offset >= SYS_PERSISTENT_CONFIG_FACTORY_OFFSET &&
-         end <= (SYS_PERSISTENT_CONFIG_DEVICE_OFFSET +
-                 SYS_PERSISTENT_CONFIG_DEVICE_LENGTH)) ||
+    if (end <= (SYS_PERSISTENT_CONFIG_DEVICE_OFFSET +
+                SYS_PERSISTENT_CONFIG_DEVICE_LENGTH) ||
         (offset >= SYS_PERSISTENT_CONFIG_PROPERTY_OFFSET &&
          end <= (SYS_PERSISTENT_CONFIG_PROPERTY_OFFSET +
                  SYS_PERSISTENT_CONFIG_PROPERTY_LENGTH)) ||

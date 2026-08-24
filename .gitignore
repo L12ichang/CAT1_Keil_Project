@@ -14,7 +14,10 @@ RTE/
 tests/
 *.json
 !protocol/fixtures/CAL_MQTT_V2/RAW_50W_SNAPSHOT.json
-out/
+# Only ignore the repository-root output folder.  Keil firmware artifacts under
+# MDK-ARM-8008000/out/ are versioned release files.
+/out/
+tools/
 *.jsonl
 
 # ARM Compiler / Keil intermediate extensions
@@ -24,7 +27,6 @@ out/
 *.crf
 *.dep
 *.lnp
-*.map
 *.lst
 *.htm
 *.sct
@@ -34,7 +36,6 @@ out/
 *.axf
 *.elf
 *.idx
-*.hex
 *.out
 *.err
 # J-Link / Debugger files
@@ -61,7 +62,6 @@ EventRecorderStub.scvd
 
 # Build logs
 *.log
-*.bin
 # OS generated files
 .DS_Store
 Thumbs.db
