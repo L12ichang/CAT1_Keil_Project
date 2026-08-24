@@ -24,11 +24,25 @@ UART_HandleTypeDef huart2;
 static u8 * volatile _buffer;
 u8 rx3_buffer[1];// HAL_UART_Receive_IT(&huart2, (uint8_t*)rx3_buffer, 1);中断需要，可能是_buffer指针在初始下是空，无法正常产生中断
 //uint8_t u8_buffer[1024];
+typedef struct
+{
+    u32 ore_count;
+    u32 fe_count;
+    u32 ne_count;
+    u32 uart_error_count;
+    u32 tx_start_fail_count;
+    u32 rx_start_fail_count;
+    u32 abort_fail_count;
+    u32 hal_busy_count;
+    u32 hal_timeout_count;
+    u32 last_error_code;
+} hw_uart2_counters_st;
+
 static volatile u8 _index;
 static volatile u8 _tx_length;
 static volatile u8 _rx_length;
 static volatile hw_bl0942_state_en _bl0942_state =  BL0942_STATE_IDLE;
-static volatile u32 hw_uart2_error_count = 0;
+static volatile hw_uart2_counters_st _uart2_diag;
 
 #if BL0942_REPRO_TEST_ENABLE
 volatile u8  g_bl0942_repro_inject_once = 0;
@@ -47,21 +61,61 @@ volatile u32 g_bl0942_repro_rx_fail_count = 0;
 volatile u32 g_bl0942_repro_force_recover_count = 0;
 #endif
 
-static void hw_bl0942_uart_abort_rx(void)
+static void hw_uart2_counter_increment(volatile u32 *counter)
 {
-    (void)HAL_UART_AbortReceive(&huart2);
-    (void)__HAL_UART_FLUSH_DRREGISTER(&huart2);
+    if (*counter < 0xFFFFFFFFUL)
+    {
+        ++(*counter);
+    }
 }
 
-static void hw_bl0942_uart_start_rx(void)
+static void hw_uart2_record_hal_failure(HAL_StatusTypeDef status,
+                                        volatile u32 *class_counter)
 {
+    hw_uart2_counter_increment(class_counter);
+    hw_uart2_counter_increment(&_uart2_diag.uart_error_count);
+    if (status == HAL_BUSY)
+    {
+        hw_uart2_counter_increment(&_uart2_diag.hal_busy_count);
+    }
+    else if (status == HAL_TIMEOUT)
+    {
+        hw_uart2_counter_increment(&_uart2_diag.hal_timeout_count);
+    }
+    _uart2_diag.last_error_code = huart2.ErrorCode;
+}
+
+static boolean_en hw_bl0942_uart_abort_rx(void)
+{
+    HAL_StatusTypeDef status = HAL_UART_AbortReceive(&huart2);
+    if (status != HAL_OK)
+    {
+        hw_uart2_record_hal_failure(status, &_uart2_diag.abort_fail_count);
+        return BOOL_FALSE;
+    }
+    (void)__HAL_UART_FLUSH_DRREGISTER(&huart2);
+    return BOOL_TRUE;
+}
+
+static boolean_en hw_bl0942_uart_start_rx(void)
+{
+    HAL_StatusTypeDef status;
+
     if(_rx_length == 0 || _buffer == 0)
     {
-        _bl0942_state = BL0942_STATE_READ_READY;
-        return;
+        hw_uart2_record_hal_failure(HAL_ERROR, &_uart2_diag.rx_start_fail_count);
+        _bl0942_state = BL0942_STATE_IDLE;
+        return BOOL_FALSE;
     }
 
-    (void)HAL_UART_Receive_IT(&huart2, (uint8_t*)_buffer, 1);
+    status = HAL_UART_Receive_IT(&huart2, (uint8_t*)_buffer, 1);
+    if (status != HAL_OK)
+    {
+        hw_uart2_record_hal_failure(status, &_uart2_diag.rx_start_fail_count);
+        _bl0942_state = BL0942_STATE_IDLE;
+        return BOOL_FALSE;
+    }
+    return BOOL_TRUE;
 }
 
 
@@ -72,39 +126,62 @@ hw_bl0942_state_en hw_bl0942_get_state(void)
 }
 
 
-void hw_bl0942_uart_write(u8 * buf, u8 length)
+boolean_en hw_bl0942_uart_write(u8 * buf, u8 length)
 {
+    HAL_StatusTypeDef status;
+
+    if (buf == NULL || length == 0U)
+    {
+        hw_uart2_record_hal_failure(HAL_ERROR, &_uart2_diag.tx_start_fail_count);
+        return BOOL_FALSE;
+    }
     _bl0942_state = BL0942_STATE_WRITE;
     _buffer = buf;
     _index = 1;
-    _tx_length = length;    
-    HAL_UART_Transmit_IT(&huart2, (uint8_t*)_buffer, 1);
+    _tx_length = length;
+    status = HAL_UART_Transmit_IT(&huart2, (uint8_t*)_buffer, 1);
+    if (status != HAL_OK)
+    {
+        hw_uart2_record_hal_failure(status, &_uart2_diag.tx_start_fail_count);
+        _bl0942_state = BL0942_STATE_IDLE;
+        return BOOL_FALSE;
+    }
+    return BOOL_TRUE;
 }
 
 
 //buf放发送的两个字节，接收到的数据也放里面。length 接收的数据长度，包括校验值
-void hw_bl0942_uart_read(u8 * buf, u8 length)
+boolean_en hw_bl0942_uart_read(u8 * buf, u8 length)
 {
-#if BL0942_REPRO_TEST_ENABLE
     HAL_StatusTypeDef uart_ret;
-#endif
+
+    if (buf == NULL || length == 0U)
+    {
+        hw_uart2_record_hal_failure(HAL_ERROR, &_uart2_diag.tx_start_fail_count);
+        return BOOL_FALSE;
+    }
 
     _bl0942_state = BL0942_STATE_READ_TX;
     _buffer = buf;
     _index = 1;
     _tx_length = 2;
     _rx_length = length;
-    hw_bl0942_uart_abort_rx();
-#if BL0942_REPRO_TEST_ENABLE
+    if (hw_bl0942_uart_abort_rx() != BOOL_TRUE)
+    {
+        _bl0942_state = BL0942_STATE_IDLE;
+        return BOOL_FALSE;
+    }
     uart_ret = HAL_UART_Transmit_IT(&huart2, (uint8_t*)_buffer, 1);
     if(uart_ret != HAL_OK)
     {
+        hw_uart2_record_hal_failure(uart_ret, &_uart2_diag.tx_start_fail_count);
+#if BL0942_REPRO_TEST_ENABLE
         g_bl0942_repro_tx_fail_count++;
-    }
-#else
-    HAL_UART_Transmit_IT(&huart2, (uint8_t*)_buffer, 1);
 #endif
-
+        _bl0942_state = BL0942_STATE_IDLE;
+        return BOOL_FALSE;
+    }
+    return BOOL_TRUE;
 }
 
 
@@ -143,16 +220,17 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
                 }
                 else
                 {
-#if BL0942_REPRO_TEST_ENABLE
-                    if(HAL_UART_Receive_IT(&huart2,
-                                           (uint8_t*)_buffer + _index,
-                                           1) != HAL_OK)
+                    HAL_StatusTypeDef status = HAL_UART_Receive_IT(
+                        &huart2, (uint8_t*)_buffer + _index, 1);
+                    if(status != HAL_OK)
                     {
+                        hw_uart2_record_hal_failure(
+                            status, &_uart2_diag.rx_start_fail_count);
+#if BL0942_REPRO_TEST_ENABLE
                         g_bl0942_repro_rx_fail_count++;
-                    }
-#else
-                    HAL_UART_Receive_IT(&huart2, (uint8_t*)_buffer + _index, 1);
 #endif
+                        _bl0942_state = BL0942_STATE_IDLE;
+                    }
                 }
             }
           else
@@ -171,9 +249,21 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
   {
        if(_index < _tx_length)
     {
-     
-        HAL_UART_Transmit_IT(&huart2, (uint8_t*)_buffer + _index, 1);
-        ++_index;
+        HAL_StatusTypeDef status = HAL_UART_Transmit_IT(
+            &huart2, (uint8_t*)_buffer + _index, 1);
+        if (status == HAL_OK)
+        {
+            ++_index;
+        }
+        else
+        {
+            hw_uart2_record_hal_failure(
+                status, &_uart2_diag.tx_start_fail_count);
+#if BL0942_REPRO_TEST_ENABLE
+            g_bl0942_repro_tx_fail_count++;
+#endif
+            _bl0942_state = BL0942_STATE_IDLE;
+        }
     }
     else
     {
@@ -181,7 +271,7 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
         {
             _bl0942_state = BL0942_STATE_READ_RX;
             _index = 0;
-            hw_bl0942_uart_start_rx();
+            (void)hw_bl0942_uart_start_rx();
         }
         else
         {
@@ -200,31 +290,41 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
   if (huart->Instance == USART2)
   {
+      u32 error_code = huart->ErrorCode;
 #if BL0942_REPRO_TEST_ENABLE
       g_bl0942_repro_error_count++;
-      g_bl0942_repro_last_error = huart->ErrorCode;
+      g_bl0942_repro_last_error = error_code;
 
-      if((huart->ErrorCode & HAL_UART_ERROR_ORE) != 0U)
+      if((error_code & HAL_UART_ERROR_ORE) != 0U)
       {
           g_bl0942_repro_ore_count++;
       }
-      if((huart->ErrorCode & HAL_UART_ERROR_FE) != 0U)
+      if((error_code & HAL_UART_ERROR_FE) != 0U)
       {
           g_bl0942_repro_fe_count++;
       }
-      if((huart->ErrorCode & HAL_UART_ERROR_NE) != 0U)
+      if((error_code & HAL_UART_ERROR_NE) != 0U)
       {
           g_bl0942_repro_ne_count++;
       }
 #endif
-
-      hw_uart2_error_count++;
+      hw_uart2_counter_increment(&_uart2_diag.uart_error_count);
+      if((error_code & HAL_UART_ERROR_ORE) != 0U)
+      {
+          hw_uart2_counter_increment(&_uart2_diag.ore_count);
+      }
+      if((error_code & HAL_UART_ERROR_FE) != 0U)
+      {
+          hw_uart2_counter_increment(&_uart2_diag.fe_count);
+      }
+      if((error_code & HAL_UART_ERROR_NE) != 0U)
+      {
+          hw_uart2_counter_increment(&_uart2_diag.ne_count);
+      }
+      _uart2_diag.last_error_code = error_code;
       _bl0942_state = BL0942_STATE_IDLE;
       _index = 0;
-      hw_bl0942_uart_abort_rx();
-      /* F1上ORE/FE/NE共用"读SR再读DR"序列清除，一次调用即清全部 */
-      __HAL_UART_CLEAR_OREFLAG(&huart2);
-      (void)HAL_UART_Receive_IT(&huart2, (uint8_t*)rx3_buffer, 1);
+      /* 恢复延后到主循环；ISR只分类并同步状态，避免回调内反复Abort/重挂。 */
   }
   else if (huart->Instance == USART1)
   {
@@ -236,22 +336,58 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 
 u32 hw_uart2_get_error_count(void)
 {
-    return hw_uart2_error_count;
+    return _uart2_diag.uart_error_count;
+}
+
+boolean_en hw_bl0942_uart_recover(void)
+{
+    HAL_StatusTypeDef status = HAL_UART_Abort(&huart2);
+
+    _bl0942_state = BL0942_STATE_IDLE;
+    _index = 0U;
+    _tx_length = 0U;
+    _rx_length = 0U;
+    _buffer = NULL;
+    if (status != HAL_OK)
+    {
+        hw_uart2_record_hal_failure(status, &_uart2_diag.abort_fail_count);
+        return BOOL_FALSE;
+    }
+    /* F1的ORE/FE/NE使用读SR后读DR清除；HAL Abort后再清一次残留状态。 */
+    __HAL_UART_CLEAR_OREFLAG(&huart2);
+    huart2.ErrorCode = HAL_UART_ERROR_NONE;
+    return BOOL_TRUE;
+}
+
+boolean_en hw_uart2_get_diag(hw_uart2_diag_st *diag)
+{
+    if (diag == NULL)
+    {
+        return BOOL_FALSE;
+    }
+    diag->ore_count = _uart2_diag.ore_count;
+    diag->fe_count = _uart2_diag.fe_count;
+    diag->ne_count = _uart2_diag.ne_count;
+    diag->uart_error_count = _uart2_diag.uart_error_count;
+    diag->tx_start_fail_count = _uart2_diag.tx_start_fail_count;
+    diag->rx_start_fail_count = _uart2_diag.rx_start_fail_count;
+    diag->abort_fail_count = _uart2_diag.abort_fail_count;
+    diag->hal_busy_count = _uart2_diag.hal_busy_count;
+    diag->hal_timeout_count = _uart2_diag.hal_timeout_count;
+    diag->uart_error_code = huart2.ErrorCode;
+    diag->last_error_code = _uart2_diag.last_error_code;
+    diag->uart_g_state = (u8)huart2.gState;
+    diag->uart_rx_state = (u8)huart2.RxState;
+    diag->transfer_state = (u8)_bl0942_state;
+    diag->buffer_index = _index;
+    diag->rx_length = _rx_length;
+    return BOOL_TRUE;
 }
 
 #if BL0942_REPRO_TEST_ENABLE
 void hw_bl0942_repro_force_recover(void)
 {
-    (void)HAL_UART_Abort(&huart2);
-    __HAL_UART_CLEAR_OREFLAG(&huart2);
-    huart2.ErrorCode = HAL_UART_ERROR_NONE;
-
-    _bl0942_state = BL0942_STATE_IDLE;
-    _index = 0;
-    _tx_length = 0;
-    _rx_length = 0;
-    _buffer = 0;
-
+    (void)hw_bl0942_uart_recover();
     g_bl0942_repro_force_recover_count++;
 }
 #endif
@@ -340,6 +476,16 @@ void hw_uart2_init(void)
 {
 
   GPIO_InitTypeDef GPIO_InitStruct = {0};
+#ifdef _4G_CAT_1
+  HAL_StatusTypeDef rx_status;
+
+  memset((void *)&_uart2_diag, 0, sizeof(_uart2_diag));
+  _buffer = NULL;
+  _index = 0U;
+  _tx_length = 0U;
+  _rx_length = 0U;
+  _bl0942_state = BL0942_STATE_IDLE;
+#endif
   /* USER CODE BEGIN USART2_Init 0 */
 
   /* USER CODE END USART2_Init 0 */
@@ -397,7 +543,11 @@ void hw_uart2_init(void)
   /* USER CODE BEGIN USART2_MspInit 1 */
    
   #ifdef  _4G_CAT_1  
-  HAL_UART_Receive_IT(&huart2, (uint8_t*)rx3_buffer, 1);// HAL_UART_Receive_IT(&huart2, (uint8_t*)rx3_buffer, 1);中断需要，可能是_buffer指针在初始下是空，无法正常产生中断
+  rx_status = HAL_UART_Receive_IT(&huart2, (uint8_t*)rx3_buffer, 1);
+  if (rx_status != HAL_OK)
+  {
+      hw_uart2_record_hal_failure(rx_status, &_uart2_diag.rx_start_fail_count);
+  }
   #else
    HAL_UART_Receive_IT(&huart2, (uint8_t*)rx2_buffer, 1);
   #endif
@@ -486,8 +636,4 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* huart)
 }
 
 #endif
-
-
-
-
 

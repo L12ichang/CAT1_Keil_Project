@@ -2,16 +2,10 @@
 #if ZK_ENABLE_SUNRISE_PLAN
 #include "zk_sunriset.h"
 #endif
-#include "hw_flash.h"
-#include "flash_address_assignment.h"
+#include "sys_persistent_storage.h"
 #include "sys_aip1302.h"
 #include <stdio.h>
 #include <string.h>
-
-#define ZK_PLAN_FLASH_MAIN_ADDR     CAT1_FLASH_PLAN_MAIN_START
-#define ZK_PLAN_FLASH_BACKUP_ADDR   CAT1_FLASH_PLAN_BACKUP_START
-#define ZK_PLAN_FLASH_MAGIC         ((u32)0x5a4b504c)
-#define ZK_PLAN_FLASH_VERSION       2
 
 typedef struct __attribute__((packed))
 {
@@ -58,11 +52,6 @@ typedef struct __attribute__((packed))
 
 typedef struct __attribute__((packed))
 {
-    u32 magic;
-    u16 version;
-    u16 size;
-    u16 checksum;
-    u16 reserved;
     zk_plan_record_t plans[ZK_PLAN_MAX_COUNT];
 } zk_plan_store_t;
 
@@ -77,6 +66,7 @@ typedef struct
 } zk_plan_match_t;
 
 static zk_plan_store_t zk_plan_store;
+static u8 zk_plan_persistent_payload[SYS_PERSISTENT_CONFIG_PLAN_LENGTH];
 static boolean_en zk_plan_loaded = BOOL_FALSE;
 
 static int zk_plan_delete(int id);
@@ -104,88 +94,171 @@ static void zk_plan_clear_last_exec(void)
     zk_last_exec_action = 0xff;
 }
 
-static u16 zk_plan_checksum(const zk_plan_store_t *store)
-{
-    const u8 *bytes;
-    u16 sum;
-    u16 i;
-
-    bytes = (const u8 *)store;
-    sum = 0x5a;
-    for (i = 0; i < sizeof(*store); ++i)
-    {
-        if (i == 8 || i == 9)
-        {
-            continue;
-        }
-        sum = (u16)(sum + bytes[i]);
-    }
-    return sum;
-}
-
-static void zk_plan_store_prepare(zk_plan_store_t *store)
-{
-    store->magic = ZK_PLAN_FLASH_MAGIC;
-    store->version = ZK_PLAN_FLASH_VERSION;
-    store->size = (u16)sizeof(*store);
-    store->reserved = 0;
-    store->checksum = 0;
-    store->checksum = zk_plan_checksum(store);
-}
-
-static boolean_en zk_plan_store_valid(const zk_plan_store_t *store)
-{
-    if (store == NULL)
-    {
-        return BOOL_FALSE;
-    }
-    if (store->magic != ZK_PLAN_FLASH_MAGIC ||
-        store->version != ZK_PLAN_FLASH_VERSION ||
-        store->size != sizeof(*store))
-    {
-        return BOOL_FALSE;
-    }
-    return (store->checksum == zk_plan_checksum(store)) ? BOOL_TRUE : BOOL_FALSE;
-}
-
 static void zk_plan_reset_store(zk_plan_store_t *store)
 {
     memset(store, 0, sizeof(*store));
-    store->magic = ZK_PLAN_FLASH_MAGIC;
-    store->version = ZK_PLAN_FLASH_VERSION;
-    store->size = (u16)sizeof(*store);
-    store->checksum = zk_plan_checksum(store);
 }
 
-static boolean_en zk_plan_load_from_addr(u32 addr, zk_plan_store_t *store)
+static boolean_en zk_plan_payload_decode(
+    const u8 payload[SYS_PERSISTENT_CONFIG_PLAN_LENGTH],
+    zk_plan_store_t *store)
 {
-    hw_flash_read_bytes(addr, (u8 *)store, sizeof(*store));
-    return zk_plan_store_valid(store);
+    u8 plan_index;
+    u8 job_index;
+    u8 action_index;
+    u16 offset;
+    const u8 *source;
+    zk_plan_record_t *record;
+    zk_plan_job_t *job;
+
+    if (payload == NULL || store == NULL)
+    {
+        return BOOL_FALSE;
+    }
+    memset(store, 0, sizeof(*store));
+    for (plan_index = 0U; plan_index < ZK_PLAN_MAX_COUNT; ++plan_index)
+    {
+        source = payload + (u16)plan_index * 81U;
+        record = &store->plans[plan_index];
+        if (source[0x00U] > 1U || source[0x01U] > 1U)
+        {
+            return BOOL_FALSE;
+        }
+        record->valid = source[0x00U];
+        record->en = source[0x01U];
+        record->id = source[0x02U];
+        record->type = source[0x03U];
+        record->priority = source[0x04U];
+        record->week_mask = source[0x05U];
+        record->job_count = source[0x06U];
+        record->setoffset = (s8)source[0x07U];
+        record->riseoffset = (s8)source[0x08U];
+        if (record->valid == 1U &&
+            (record->id == 0U || record->id > ZK_PLAN_MAX_COUNT ||
+             record->job_count > ZK_PLAN_MAX_JOBS))
+        {
+            return BOOL_FALSE;
+        }
+        record->start.year = sys_persistent_get_u16_le(source + 0x09U);
+        record->start.mon = source[0x0BU];
+        record->start.day = source[0x0CU];
+        record->start.hour = source[0x0DU];
+        record->start.min = source[0x0EU];
+        record->start.sec = source[0x0FU];
+        record->start.reserved = source[0x10U];
+        record->end.year = sys_persistent_get_u16_le(source + 0x11U);
+        record->end.mon = source[0x13U];
+        record->end.day = source[0x14U];
+        record->end.hour = source[0x15U];
+        record->end.min = source[0x16U];
+        record->end.sec = source[0x17U];
+        record->end.reserved = source[0x18U];
+        if (record->start.reserved != 0U || record->end.reserved != 0U)
+        {
+            return BOOL_FALSE;
+        }
+        for (job_index = 0U; job_index < ZK_PLAN_MAX_JOBS; ++job_index)
+        {
+            offset = (u16)(0x19U + job_index * 28U);
+            job = &record->jobs[job_index];
+            job->cns_mask = source[offset + 0U];
+            job->timetp = source[offset + 1U];
+            job->action_count = source[offset + 2U];
+            job->reserved = source[offset + 3U];
+            if (job->action_count > ZK_PLAN_MAX_ACTIONS || job->reserved != 0U)
+            {
+                return BOOL_FALSE;
+            }
+            for (action_index = 0U; action_index < ZK_PLAN_MAX_ACTIONS;
+                 ++action_index)
+            {
+                u16 action_offset =
+                    (u16)(offset + 4U + action_index * 4U);
+                job->actions[action_index].minute =
+                    sys_persistent_get_u16_le(source + action_offset);
+                job->actions[action_index].bri = source[action_offset + 2U];
+                job->actions[action_index].reserved =
+                    source[action_offset + 3U];
+                if (job->actions[action_index].reserved != 0U)
+                {
+                    return BOOL_FALSE;
+                }
+            }
+        }
+    }
+    return BOOL_TRUE;
 }
 
-static boolean_en zk_plan_addr_valid(u32 addr)
+static void zk_plan_payload_encode(
+    const zk_plan_store_t *store,
+    u8 payload[SYS_PERSISTENT_CONFIG_PLAN_LENGTH])
 {
-    zk_plan_store_t check;
+    u8 plan_index;
+    u8 job_index;
+    u8 action_index;
+    u16 offset;
+    u8 *target;
+    const zk_plan_record_t *record;
+    const zk_plan_job_t *job;
 
-    return zk_plan_load_from_addr(addr, &check);
+    memset(payload, 0, SYS_PERSISTENT_CONFIG_PLAN_LENGTH);
+    for (plan_index = 0U; plan_index < ZK_PLAN_MAX_COUNT; ++plan_index)
+    {
+        target = payload + (u16)plan_index * 81U;
+        record = &store->plans[plan_index];
+        target[0x00U] = record->valid;
+        target[0x01U] = record->en;
+        target[0x02U] = record->id;
+        target[0x03U] = record->type;
+        target[0x04U] = record->priority;
+        target[0x05U] = record->week_mask;
+        target[0x06U] = record->job_count;
+        target[0x07U] = (u8)record->setoffset;
+        target[0x08U] = (u8)record->riseoffset;
+        sys_persistent_put_u16_le(target + 0x09U, record->start.year);
+        target[0x0BU] = record->start.mon;
+        target[0x0CU] = record->start.day;
+        target[0x0DU] = record->start.hour;
+        target[0x0EU] = record->start.min;
+        target[0x0FU] = record->start.sec;
+        sys_persistent_put_u16_le(target + 0x11U, record->end.year);
+        target[0x13U] = record->end.mon;
+        target[0x14U] = record->end.day;
+        target[0x15U] = record->end.hour;
+        target[0x16U] = record->end.min;
+        target[0x17U] = record->end.sec;
+        for (job_index = 0U; job_index < ZK_PLAN_MAX_JOBS; ++job_index)
+        {
+            offset = (u16)(0x19U + job_index * 28U);
+            job = &record->jobs[job_index];
+            target[offset + 0U] = job->cns_mask;
+            target[offset + 1U] = job->timetp;
+            target[offset + 2U] = job->action_count;
+            for (action_index = 0U; action_index < ZK_PLAN_MAX_ACTIONS;
+                 ++action_index)
+            {
+                u16 action_offset =
+                    (u16)(offset + 4U + action_index * 4U);
+                sys_persistent_put_u16_le(
+                    target + action_offset,
+                    job->actions[action_index].minute);
+                target[action_offset + 2U] =
+                    job->actions[action_index].bri;
+            }
+        }
+    }
 }
 
 static boolean_en zk_plan_save_store(const zk_plan_store_t *store)
 {
-    zk_plan_store_t image;
-    boolean_en main_ok;
-    boolean_en backup_ok;
-
-    image = *store;
-    zk_plan_store_prepare(&image);
-    hw_flash_write_bytes(ZK_PLAN_FLASH_MAIN_ADDR, (u8 *)&image, sizeof(image));
-    hw_flash_write_bytes(ZK_PLAN_FLASH_BACKUP_ADDR, (u8 *)&image, sizeof(image));
-
-    main_ok = zk_plan_addr_valid(ZK_PLAN_FLASH_MAIN_ADDR);
-    backup_ok = zk_plan_addr_valid(ZK_PLAN_FLASH_BACKUP_ADDR);
-    if (main_ok == BOOL_TRUE || backup_ok == BOOL_TRUE)
+    zk_plan_payload_encode(store, zk_plan_persistent_payload);
+    if (sys_persistent_config_update_section(
+            SYS_PERSISTENT_CONFIG_PLAN_OFFSET,
+            zk_plan_persistent_payload,
+            sizeof(zk_plan_persistent_payload),
+            NULL) == BOOL_TRUE)
     {
-        zk_plan_store = image;
+        zk_plan_store = *store;
         zk_plan_loaded = BOOL_TRUE;
         zk_plan_clear_last_exec();
         return BOOL_TRUE;
@@ -193,15 +266,25 @@ static boolean_en zk_plan_save_store(const zk_plan_store_t *store)
     return BOOL_FALSE;
 }
 
+boolean_en zk_work_plan_persistent_defaults(u8 *payload, u16 length)
+{
+    if (payload == NULL || length != SYS_PERSISTENT_CONFIG_PLAN_LENGTH)
+    {
+        return BOOL_FALSE;
+    }
+    memset(payload, 0, SYS_PERSISTENT_CONFIG_PLAN_LENGTH);
+    return BOOL_TRUE;
+}
+
 void zk_work_plan_init(void)
 {
-    if (zk_plan_load_from_addr(ZK_PLAN_FLASH_MAIN_ADDR, &zk_plan_store) == BOOL_TRUE)
-    {
-        zk_plan_loaded = BOOL_TRUE;
-        zk_plan_clear_last_exec();
-        return;
-    }
-    if (zk_plan_load_from_addr(ZK_PLAN_FLASH_BACKUP_ADDR, &zk_plan_store) == BOOL_TRUE)
+    if (sys_persistent_config_read_section(
+            SYS_PERSISTENT_CONFIG_PLAN_OFFSET,
+            zk_plan_persistent_payload,
+            sizeof(zk_plan_persistent_payload),
+            NULL) == BOOL_TRUE &&
+        zk_plan_payload_decode(zk_plan_persistent_payload,
+                               &zk_plan_store) == BOOL_TRUE)
     {
         zk_plan_loaded = BOOL_TRUE;
         zk_plan_clear_last_exec();

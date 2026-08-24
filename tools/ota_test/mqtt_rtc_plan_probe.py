@@ -67,7 +67,7 @@ def main() -> int:
     parser.add_argument("--timezone-hours", type=int, default=8, help="Device local timezone offset used for DT.RTC when --set-time=now.")
     parser.add_argument("--set-time", default="now", help="RTC value to write, or 'now' for current local time.")
     parser.add_argument("--skip-rtc-write", action="store_true", help="Only read RTC; do not write a new time.")
-    parser.add_argument("--probe-sr", action="store_true", help="Also probe plan DO=sr; Release-MinSize may return an error when local sunrise math is disabled.")
+    parser.add_argument("--probe-sr", action="store_true", help="Also probe plan DO=sr; CAT1_50W release may return an error when local sunrise math is disabled.")
     parser.add_argument("--log-dir", type=Path, default=Path("tools/ota_test/logs"))
     args = parser.parse_args()
 
@@ -79,7 +79,7 @@ def main() -> int:
     ]
 
     args.log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = args.log_dir / f"mqtt_release_minsize_rtc_plan_{timestamp()}.jsonl"
+    log_path = args.log_dir / f"mqtt_cat1_50w_rtc_plan_{timestamp()}.jsonl"
     state: dict[str, object] = {
         "connected": False,
         "messages": 0,

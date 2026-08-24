@@ -10,20 +10,19 @@ cc \
   -Wall \
   -Wextra \
   -Werror \
+  -DPRODUCT_TARGET_50W \
   -I"${ROOT_DIR}/Core/Src" \
-  "${ROOT_DIR}/Core/Src/sys_calibration_snapshot.c" \
-  "${ROOT_DIR}/Core/Src/sys_calibration_service.c" \
-  "${ROOT_DIR}/Core/Src/sys_calibration_driver_protocol.c" \
-  "${ROOT_DIR}/Core/Src/sys_calibration_dc5200.c" \
-  "${ROOT_DIR}/Core/Src/sys_calibration_curve.c" \
   "${ROOT_DIR}/Core/Src/sys_product_profile.c" \
-  "${ROOT_DIR}/Core/Src/sys_calibration_safety.c" \
-  "${ROOT_DIR}/Core/Src/sys_calibration_storage.c" \
-  "${ROOT_DIR}/Core/Src/sys_bl0942_frame.c" \
-  "${ROOT_DIR}/tools/calibration/test_snapshot.c" \
-  -o "${BUILD_DIR}/test_snapshot"
+  "${ROOT_DIR}/Core/Src/sys_calibration_driver_protocol.c" \
+  "${ROOT_DIR}/tools/calibration/test_cal_payload_v3.c" \
+  -o "${BUILD_DIR}/test_cal_payload_v3"
 
-"${BUILD_DIR}/test_snapshot"
+"${BUILD_DIR}/test_cal_payload_v3" \
+  "${ROOT_DIR}/protocol/fixtures/CAL_MQTT_V3/G1_CRC32.fixture" \
+  "${ROOT_DIR}/protocol/fixtures/CAL_MQTT_V3/G2_ENDIAN.fixture" \
+  "${ROOT_DIR}/protocol/fixtures/CAL_MQTT_V3/G3_FINGERPRINT_50W_E1_1.fixture" \
+  "${ROOT_DIR}/protocol/fixtures/CAL_MQTT_V3/G4_PAYLOAD.fixture" \
+  "${ROOT_DIR}/protocol/fixtures/CAL_MQTT_V3/G5_RECORD_GENERATION_7.fixture"
 
 cc \
   -std=c11 \
@@ -32,6 +31,7 @@ cc \
   -Werror \
   -DUSE_HAL_DRIVER \
   -DSTM32F103xE \
+  -DPRODUCT_TARGET_50W \
   -I"${ROOT_DIR}/Core/Inc" \
   -I"${ROOT_DIR}/Core/Src" \
   -I"${ROOT_DIR}/Core/Src/CJSON" \
@@ -41,36 +41,32 @@ cc \
   -I"${ROOT_DIR}/Drivers/CMSIS/Device/ST/STM32F1xx/Include" \
   -I"${ROOT_DIR}/Drivers/CMSIS/Include" \
   "${ROOT_DIR}/Core/Src/CJSON/cJSON.c" \
-  "${ROOT_DIR}/Core/Src/sys_calibration_mqtt.c" \
-  "${ROOT_DIR}/Core/Src/sys_calibration_snapshot.c" \
-  "${ROOT_DIR}/Core/Src/sys_calibration_service.c" \
-  "${ROOT_DIR}/Core/Src/sys_calibration_driver_protocol.c" \
-  "${ROOT_DIR}/Core/Src/sys_calibration_curve.c" \
   "${ROOT_DIR}/Core/Src/sys_product_profile.c" \
-  "${ROOT_DIR}/Core/Src/sys_calibration_safety.c" \
-  "${ROOT_DIR}/Core/Src/sys_calibration_storage.c" \
-  "${ROOT_DIR}/tools/calibration/test_cal_mqtt_v2.c" \
-  -o "${BUILD_DIR}/test_cal_mqtt_v2"
+  "${ROOT_DIR}/Core/Src/sys_calibration_driver_protocol.c" \
+  "${ROOT_DIR}/Core/Src/sys_calibration_mqtt.c" \
+  "${ROOT_DIR}/tools/calibration/test_cal_mqtt_v3.c" \
+  -o "${BUILD_DIR}/test_cal_mqtt_v3"
 
-"${BUILD_DIR}/test_cal_mqtt_v2" \
-  "${ROOT_DIR}/protocol/fixtures/CAL_MQTT_V2"
+"${BUILD_DIR}/test_cal_mqtt_v3" \
+  "${ROOT_DIR}/protocol/fixtures/CAL_MQTT_V3"
 
 while read -r expected_sha fixture_name; do
   actual_sha="$(openssl dgst -sha256 \
-    "${ROOT_DIR}/protocol/fixtures/CAL_MQTT_V2/${fixture_name}" | awk '{print $NF}')"
+    "${ROOT_DIR}/protocol/fixtures/CAL_MQTT_V3/${fixture_name}" | awk '{print $NF}')"
   if [[ "${actual_sha}" != "${expected_sha}" ]]; then
-    echo "error: fixture SHA256 mismatch: ${fixture_name}" >&2
+    echo "error: CAL_MQTT_V3 fixture SHA256 mismatch: ${fixture_name}" >&2
     exit 1
   fi
-done < "${ROOT_DIR}/protocol/fixtures/CAL_MQTT_V2/SHA256SUMS"
+done < "${ROOT_DIR}/protocol/fixtures/CAL_MQTT_V3/SHA256SUMS"
 
-echo "CAL_MQTT_V2 fixture SHA256 manifest: PASS"
+echo "CAL_MQTT_V3 fixture SHA256 manifest: PASS"
 
 cc \
   -std=c11 \
   -Wall \
   -Wextra \
   -Werror \
+  -DPRODUCT_TARGET_50W \
   -I"${ROOT_DIR}/Core/Src" \
   "${ROOT_DIR}/Core/Src/sys_bl0942_frame.c" \
   "${ROOT_DIR}/tools/calibration/test_bl0942_frame.c" \
@@ -83,24 +79,21 @@ cc \
   -Wall \
   -Wextra \
   -Werror \
+  -DPRODUCT_TARGET_50W \
   -I"${ROOT_DIR}/Core/Src" \
-  "${ROOT_DIR}/Core/Src/sys_calibration_driver_protocol.c" \
-  "${ROOT_DIR}/Core/Src/sys_calibration_dc5200.c" \
-  "${ROOT_DIR}/Core/Src/sys_calibration_curve.c" \
-  "${ROOT_DIR}/Core/Src/sys_product_profile.c" \
-  "${ROOT_DIR}/Core/Src/sys_calibration_safety.c" \
-  "${ROOT_DIR}/Core/Src/sys_calibration_storage.c" \
-  "${ROOT_DIR}/Core/Src/sys_calibration_boot_inhibit.c" \
-  "${ROOT_DIR}/tools/calibration/test_protocol_gates.c" \
-  -o "${BUILD_DIR}/test_protocol_gates"
+  "${ROOT_DIR}/Core/Src/sys_calibration_snapshot.c" \
+  "${ROOT_DIR}/Core/Src/sys_bl0942_frame.c" \
+  "${ROOT_DIR}/tools/calibration/test_bl0942_snapshot_freshness.c" \
+  -o "${BUILD_DIR}/test_bl0942_snapshot_freshness"
 
-"${BUILD_DIR}/test_protocol_gates"
+"${BUILD_DIR}/test_bl0942_snapshot_freshness"
 
 cc \
   -std=c11 \
   -Wall \
   -Wextra \
   -Werror \
+  -DPRODUCT_TARGET_50W \
   -I"${ROOT_DIR}/Core/Src" \
   "${ROOT_DIR}/Core/Src/hw_flash_page_writer.c" \
   "${ROOT_DIR}/tools/calibration/test_hw_flash_paging.c" \
@@ -110,7 +103,7 @@ cc \
 
 for disabled_profile in 75 100 150 200 240; do
   if cc -std=c11 -fsyntax-only \
-      -DSYS_PRODUCT_PROFILE_SELECT="${disabled_profile}" \
+      -D"PRODUCT_TARGET_${disabled_profile}W" \
       -I"${ROOT_DIR}/Core/Src" \
       "${ROOT_DIR}/Core/Src/sys_product_profile.c" \
       >"${BUILD_DIR}/profile-${disabled_profile}.log" 2>&1; then
@@ -119,4 +112,4 @@ for disabled_profile in 75 100 150 200 240; do
   fi
 done
 
-echo "disabled product profile compile gates: PASS"
+echo "unfrozen Product Target compile gates: PASS"

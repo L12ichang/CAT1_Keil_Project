@@ -84,8 +84,6 @@
 */
                                  
 #define   BOOTROM_STARTADDR               CAT1_FLASH_BOOT_START
-#define   DATAROM_STARTADDR               CAT1_FLASH_SYSTEM_DATA_MAIN_START  //参数区
-#define   BAKDATAROM_STARTADDR            CAT1_FLASH_SYSTEM_DATA_BACKUP_START //数据备份区
 #define   APROM_STARTADDR                 CAT1_FLASH_APP_START
 #define   APROM_SAFE_ENDADDR              CAT1_FLASH_APP_END
 #define   OTABAKROM_STARTADDR             CAT1_FLASH_OTA_BACKUP_START    //( BOOTROM_STARTADDR+ROM_OFFSET)
@@ -195,7 +193,9 @@ typedef struct
 }sys_data_st;
 
 #define SYS_DATA_ST_EXPECTED_SIZE         408
+#ifndef SYS_DATA_HOST_TEST
 typedef char sys_data_st_size_must_remain_408[(sizeof(sys_data_st) == SYS_DATA_ST_EXPECTED_SIZE) ? 1 : -1];
+#endif
 
 extern sys_data_st  sys_data  __attribute__ ((aligned(4)));
 
@@ -213,9 +213,9 @@ extern void sys_data_load(void);
 输出返回：无
 *************************************/
 extern void sys_data_store(void);
+extern boolean_en sys_data_store_checked(void);
 extern void sys_data_default(void);
 extern boolean_en flash_store(u8* buf, u16 size, u32 addr_main);
-extern boolean_en data_store_data(u8* buf, u16 size, u32 addr_main);
 
 #endif
 

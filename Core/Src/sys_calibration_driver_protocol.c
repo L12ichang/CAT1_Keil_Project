@@ -1,179 +1,181 @@
 /*************************************************************
-程序功能：量产校准驱动器二进制协议编解码
+程序功能：Calibration V3 244B Wire Payload显式Little Endian Codec
 开发环境：keil 5.37
 芯片型号：STM32F103CBT6/HK32F103CCT6A
-开发人员：黎长彩
-单位名称：广东东菱电源科技有限公司
-编辑日期：2026.8.4
 *************************************************************/
 #include "sys_calibration_driver_protocol.h"
+
 #include <string.h>
 
-static u16 sys_calibration_driver_get_u16_be(const u8 *data)
+static void sys_calibration_put_u16_le(u8 *destination, u16 value)
 {
-    return (u16)(((u16)data[0] << 8U) | data[1]);
+    destination[0] = (u8)value;
+    destination[1] = (u8)(value >> 8U);
 }
 
-static void sys_calibration_driver_put_u16_be(u8 *data, u16 value)
+static void sys_calibration_put_u32_le(u8 *destination, u32 value)
 {
-    data[0] = (u8)(value >> 8U);
-    data[1] = (u8)value;
+    destination[0] = (u8)value;
+    destination[1] = (u8)(value >> 8U);
+    destination[2] = (u8)(value >> 16U);
+    destination[3] = (u8)(value >> 24U);
 }
 
-static boolean_en sys_calibration_driver_is_level(u8 level, u8 index)
+static u16 sys_calibration_get_u16_le(const u8 *source)
 {
-    return (level == (u8)(index * SYS_CALIBRATION_DRIVER_LEVEL_STEP)) ?
-           BOOL_TRUE : BOOL_FALSE;
+    return (u16)((u16)source[0] | ((u16)source[1] << 8U));
 }
 
-static boolean_en sys_calibration_driver_is_command(u8 command)
+static u32 sys_calibration_get_u32_le(const u8 *source)
 {
-    return (command == SYS_CALIBRATION_DRIVER_CMD_SET ||
-            command == SYS_CALIBRATION_DRIVER_CMD_SET_ACK ||
-            command == SYS_CALIBRATION_DRIVER_CMD_QUERY ||
-            command == SYS_CALIBRATION_DRIVER_CMD_QUERY_REPLY) ?
-           BOOL_TRUE : BOOL_FALSE;
+    return (u32)source[0] |
+           ((u32)source[1] << 8U) |
+           ((u32)source[2] << 16U) |
+           ((u32)source[3] << 24U);
 }
 
-u8 sys_calibration_driver_checksum(u8 command,
-                                   u8 offset,
-                                   u8 length,
-                                   const u8 *data)
+static u32 sys_calibration_crc32_byte(u32 crc, u8 value)
 {
+    u8 bit;
+
+    crc ^= value;
+    for (bit = 0U; bit < 8U; ++bit)
+    {
+        crc = (crc & 1U) != 0U ?
+              ((crc >> 1U) ^ 0xEDB88320UL) : (crc >> 1U);
+    }
+    return crc;
+}
+
+static boolean_en sys_calibration_hex_nibble(char value, u8 *nibble)
+{
+    if (nibble == NULL)
+    {
+        return BOOL_FALSE;
+    }
+    if (value >= '0' && value <= '9')
+    {
+        *nibble = (u8)(value - '0');
+        return BOOL_TRUE;
+    }
+    if (value >= 'A' && value <= 'F')
+    {
+        *nibble = (u8)(value - 'A' + 10);
+        return BOOL_TRUE;
+    }
+    if (value >= 'a' && value <= 'f')
+    {
+        *nibble = (u8)(value - 'a' + 10);
+        return BOOL_TRUE;
+    }
+    return BOOL_FALSE;
+}
+
+u32 sys_calibration_payload_crc32_iso_hdlc(const u8 *data, u16 length)
+{
+    u32 crc = 0xFFFFFFFFUL;
     u16 index;
-    u8 checksum = (u8)(command + offset + length);
 
+    if (data == NULL && length != 0U)
+    {
+        return 0U;
+    }
     for (index = 0U; index < length; ++index)
     {
-        checksum = (u8)(checksum + data[index]);
+        crc = sys_calibration_crc32_byte(crc, data[index]);
     }
-    return checksum;
+    return crc ^ 0xFFFFFFFFUL;
 }
 
-boolean_en sys_calibration_driver_encode(u8 command,
-                                         u8 offset,
-                                         const u8 *data,
-                                         u8 length,
-                                         u8 *frame,
-                                         u16 frame_capacity,
-                                         u16 *frame_length)
+boolean_en sys_calibration_payload_validate(
+    const sys_calibration_payload_st *payload)
 {
-    u16 total_length;
+    u8 index;
 
-    if (frame_length == NULL ||
-        frame == NULL ||
-        sys_calibration_driver_is_command(command) != BOOL_TRUE ||
-        length > SYS_CALIBRATION_DRIVER_MAX_PAYLOAD_LENGTH ||
-        (length > 0U && data == NULL))
+    if (payload == NULL ||
+        payload->point_count != SYS_CALIBRATION_PAYLOAD_POINT_COUNT ||
+        payload->level_step != SYS_CALIBRATION_PAYLOAD_LEVEL_STEP ||
+        payload->valid_flags != SYS_CALIBRATION_PAYLOAD_VALID_FLAGS ||
+        payload->voltage_gain_q24 == 0U)
     {
         return BOOL_FALSE;
     }
-
-    total_length = (u16)(SYS_CALIBRATION_DRIVER_FRAME_OVERHEAD + length);
-    if (frame_capacity < total_length)
+    for (index = 0U; index < SYS_CALIBRATION_PAYLOAD_POINT_COUNT; ++index)
+    {
+        if (payload->output[index].logical_pwm != (u16)((u16)index * 100U) ||
+            payload->oco[index].reference_output_current_ma !=
+                payload->output[index].reference_output_current_ma)
+        {
+            return BOOL_FALSE;
+        }
+        if (index != 0U &&
+            (payload->output[index].reference_output_current_ma <=
+                 payload->output[index - 1U].reference_output_current_ma ||
+             payload->oco[index].oco_adc_raw <=
+                 payload->oco[index - 1U].oco_adc_raw ||
+             payload->bl_current[index].bl_current_raw <=
+                 payload->bl_current[index - 1U].bl_current_raw ||
+             payload->bl_current[index].reference_input_current_ma <
+                 payload->bl_current[index - 1U].reference_input_current_ma ||
+             payload->bl_power[index].bl_power_raw <=
+                 payload->bl_power[index - 1U].bl_power_raw ||
+             payload->bl_power[index].reference_input_power_01w <
+                 payload->bl_power[index - 1U].reference_input_power_01w))
+        {
+            return BOOL_FALSE;
+        }
+    }
+    if (payload->output[10].reference_output_current_ma <=
+            payload->output[0].reference_output_current_ma ||
+        payload->oco[10].oco_adc_raw <= payload->oco[0].oco_adc_raw ||
+        payload->oco[10].reference_output_current_ma <=
+            payload->oco[0].reference_output_current_ma ||
+        payload->bl_current[10].bl_current_raw <=
+            payload->bl_current[0].bl_current_raw ||
+        payload->bl_current[10].reference_input_current_ma <=
+            payload->bl_current[0].reference_input_current_ma ||
+        payload->bl_power[10].bl_power_raw <=
+            payload->bl_power[0].bl_power_raw ||
+        payload->bl_power[10].reference_input_power_01w <=
+            payload->bl_power[0].reference_input_power_01w)
     {
         return BOOL_FALSE;
     }
-
-    frame[0] = SYS_CALIBRATION_DRIVER_FRAME_HEADER;
-    frame[1] = command;
-    frame[2] = offset;
-    frame[3] = length;
-    if (length > 0U)
-    {
-        memcpy(&frame[4], data, length);
-    }
-    frame[4U + length] = sys_calibration_driver_checksum(command,
-                                                         offset,
-                                                         length,
-                                                         data);
-    frame[5U + length] = SYS_CALIBRATION_DRIVER_FRAME_TAIL_0;
-    frame[6U + length] = SYS_CALIBRATION_DRIVER_FRAME_TAIL_1;
-    *frame_length = total_length;
     return BOOL_TRUE;
 }
 
-boolean_en sys_calibration_driver_decode(
-    const u8 *frame,
-    u16 frame_length,
-    sys_calibration_driver_message_st *message)
+boolean_en sys_calibration_payload_matches_product(
+    const sys_calibration_payload_st *payload,
+    const sys_product_profile_st *profile)
 {
-    u16 expected_length;
-    u8 checksum;
-
-    if (frame == NULL || message == NULL ||
-        frame_length < SYS_CALIBRATION_DRIVER_FRAME_OVERHEAD ||
-        frame[0] != SYS_CALIBRATION_DRIVER_FRAME_HEADER ||
-        sys_calibration_driver_is_command(frame[1]) != BOOL_TRUE)
+    if (sys_calibration_payload_validate(payload) != BOOL_TRUE ||
+        profile == NULL ||
+        payload->profile_id != profile->profile_id ||
+        payload->profile_version != profile->profile_version ||
+        payload->profile_fingerprint != profile->fingerprint_crc32)
     {
         return BOOL_FALSE;
     }
-
-    expected_length = (u16)(SYS_CALIBRATION_DRIVER_FRAME_OVERHEAD + frame[3]);
-    if (frame[3] > SYS_CALIBRATION_DRIVER_MAX_PAYLOAD_LENGTH ||
-        frame_length != expected_length ||
-        frame[frame_length - 2U] != SYS_CALIBRATION_DRIVER_FRAME_TAIL_0 ||
-        frame[frame_length - 1U] != SYS_CALIBRATION_DRIVER_FRAME_TAIL_1)
-    {
-        return BOOL_FALSE;
-    }
-
-    checksum = sys_calibration_driver_checksum(frame[1],
-                                               frame[2],
-                                               frame[3],
-                                               &frame[4]);
-    if (checksum != frame[4U + frame[3]])
-    {
-        return BOOL_FALSE;
-    }
-
-    memset(message, 0, sizeof(*message));
-    message->command = frame[1];
-    message->offset = frame[2];
-    message->length = frame[3];
-    if (message->length > 0U)
-    {
-        memcpy(message->data, &frame[4], message->length);
-    }
-    return sys_calibration_driver_validate_message(message);
+    return BOOL_TRUE;
 }
 
-boolean_en sys_calibration_driver_table_decode(
-    const u8 *payload,
-    u16 payload_length,
-    sys_calibration_driver_table_st *table)
+boolean_en sys_calibration_payload_within_product_limits(
+    const sys_calibration_payload_st *payload,
+    const sys_product_profile_st *profile)
 {
     u8 index;
-    u16 offset;
-    sys_calibration_driver_point_st *point;
 
-    if (payload == NULL || table == NULL ||
-        payload_length != SYS_CALIBRATION_DRIVER_TABLE_PAYLOAD_LENGTH)
+    if (sys_calibration_payload_validate(payload) != BOOL_TRUE ||
+        profile == NULL)
     {
         return BOOL_FALSE;
     }
-
-    memset(table, 0, sizeof(*table));
-    for (index = 0U; index < SYS_CALIBRATION_DRIVER_POINT_COUNT; ++index)
+    for (index = 0U; index < SYS_CALIBRATION_PAYLOAD_POINT_COUNT; ++index)
     {
-        offset = (u16)index * 18U;
-        point = &table->point[index];
-        point->level = payload[offset];
-        point->power_factor_percent = payload[offset + 1U];
-        point->input_voltage_01v = sys_calibration_driver_get_u16_be(&payload[offset + 2U]);
-        point->input_current_ma = sys_calibration_driver_get_u16_be(&payload[offset + 4U]);
-        point->input_power_01w = sys_calibration_driver_get_u16_be(&payload[offset + 6U]);
-        point->instrument_output_current_ma =
-            sys_calibration_driver_get_u16_be(&payload[offset + 8U]);
-        point->instrument_output_power_01w =
-            sys_calibration_driver_get_u16_be(&payload[offset + 10U]);
-        point->device_output_current_ma =
-            sys_calibration_driver_get_u16_be(&payload[offset + 12U]);
-        point->device_output_power_01w =
-            sys_calibration_driver_get_u16_be(&payload[offset + 14U]);
-        point->input_current_ad = sys_calibration_driver_get_u16_be(&payload[offset + 16U]);
-        if (sys_calibration_driver_is_level(point->level, index) != BOOL_TRUE ||
-            point->power_factor_percent > 100U)
+        if (payload->output[index].reference_output_current_ma >
+                profile->hw_max_current_ma ||
+            payload->oco[index].reference_output_current_ma >
+                profile->hw_max_current_ma)
         {
             return BOOL_FALSE;
         }
@@ -181,142 +183,185 @@ boolean_en sys_calibration_driver_table_decode(
     return BOOL_TRUE;
 }
 
-boolean_en sys_calibration_driver_table_encode(
-    const sys_calibration_driver_table_st *table,
+boolean_en sys_calibration_payload_encode(
+    const sys_calibration_payload_st *payload,
+    u8 *encoded,
+    u16 encoded_capacity)
+{
+    u16 offset;
+    u8 index;
+
+    if (encoded == NULL || encoded_capacity < SYS_CALIBRATION_PAYLOAD_LENGTH ||
+        sys_calibration_payload_validate(payload) != BOOL_TRUE)
+    {
+        return BOOL_FALSE;
+    }
+    memset(encoded, 0, SYS_CALIBRATION_PAYLOAD_LENGTH);
+    encoded[0x00] = SYS_CALIBRATION_PAYLOAD_MAGIC_0;
+    encoded[0x01] = SYS_CALIBRATION_PAYLOAD_MAGIC_1;
+    encoded[0x02] = SYS_CALIBRATION_PAYLOAD_MAGIC_2;
+    encoded[0x03] = SYS_CALIBRATION_PAYLOAD_MAGIC_3;
+    sys_calibration_put_u16_le(&encoded[0x04],
+                               SYS_CALIBRATION_PAYLOAD_VERSION);
+    sys_calibration_put_u16_le(&encoded[0x06],
+                               SYS_CALIBRATION_PAYLOAD_LENGTH);
+    sys_calibration_put_u16_le(&encoded[0x08], payload->profile_id);
+    sys_calibration_put_u16_le(&encoded[0x0A], payload->profile_version);
+    sys_calibration_put_u32_le(&encoded[0x0C], payload->profile_fingerprint);
+    encoded[0x10] = payload->point_count;
+    encoded[0x11] = payload->level_step;
+    sys_calibration_put_u16_le(&encoded[0x12], payload->valid_flags);
+
+    for (index = 0U; index < SYS_CALIBRATION_PAYLOAD_POINT_COUNT; ++index)
+    {
+        offset = (u16)(SYS_CALIBRATION_PAYLOAD_OUTPUT_OFFSET +
+                       (u16)index * 4U);
+        sys_calibration_put_u16_le(&encoded[offset],
+                                   payload->output[index].logical_pwm);
+        sys_calibration_put_u16_le(
+            &encoded[offset + 2U],
+            payload->output[index].reference_output_current_ma);
+
+        offset = (u16)(SYS_CALIBRATION_PAYLOAD_OCO_OFFSET +
+                       (u16)index * 4U);
+        sys_calibration_put_u16_le(&encoded[offset],
+                                   payload->oco[index].oco_adc_raw);
+        sys_calibration_put_u16_le(
+            &encoded[offset + 2U],
+            payload->oco[index].reference_output_current_ma);
+
+        offset = (u16)(SYS_CALIBRATION_PAYLOAD_BL_CURRENT_OFFSET +
+                       (u16)index * 6U);
+        sys_calibration_put_u32_le(&encoded[offset],
+                                   payload->bl_current[index].bl_current_raw);
+        sys_calibration_put_u16_le(
+            &encoded[offset + 4U],
+            payload->bl_current[index].reference_input_current_ma);
+
+        offset = (u16)(SYS_CALIBRATION_PAYLOAD_BL_POWER_OFFSET +
+                       (u16)index * 6U);
+        sys_calibration_put_u32_le(
+            &encoded[offset], (u32)payload->bl_power[index].bl_power_raw);
+        sys_calibration_put_u16_le(
+            &encoded[offset + 4U],
+            payload->bl_power[index].reference_input_power_01w);
+    }
+    sys_calibration_put_u32_le(&encoded[SYS_CALIBRATION_PAYLOAD_BL_VOLTAGE_OFFSET],
+                               payload->voltage_gain_q24);
+    return BOOL_TRUE;
+}
+
+boolean_en sys_calibration_payload_decode(
+    const u8 *encoded,
+    u16 encoded_length,
+    sys_calibration_payload_st *payload)
+{
+    u16 offset;
+    u8 index;
+
+    if (encoded == NULL || payload == NULL ||
+        encoded_length != SYS_CALIBRATION_PAYLOAD_LENGTH ||
+        encoded[0x00] != SYS_CALIBRATION_PAYLOAD_MAGIC_0 ||
+        encoded[0x01] != SYS_CALIBRATION_PAYLOAD_MAGIC_1 ||
+        encoded[0x02] != SYS_CALIBRATION_PAYLOAD_MAGIC_2 ||
+        encoded[0x03] != SYS_CALIBRATION_PAYLOAD_MAGIC_3 ||
+        sys_calibration_get_u16_le(&encoded[0x04]) !=
+            SYS_CALIBRATION_PAYLOAD_VERSION ||
+        sys_calibration_get_u16_le(&encoded[0x06]) !=
+            SYS_CALIBRATION_PAYLOAD_LENGTH)
+    {
+        return BOOL_FALSE;
+    }
+    memset(payload, 0, sizeof(*payload));
+    payload->profile_id = sys_calibration_get_u16_le(&encoded[0x08]);
+    payload->profile_version = sys_calibration_get_u16_le(&encoded[0x0A]);
+    payload->profile_fingerprint = sys_calibration_get_u32_le(&encoded[0x0C]);
+    payload->point_count = encoded[0x10];
+    payload->level_step = encoded[0x11];
+    payload->valid_flags = sys_calibration_get_u16_le(&encoded[0x12]);
+
+    for (index = 0U; index < SYS_CALIBRATION_PAYLOAD_POINT_COUNT; ++index)
+    {
+        offset = (u16)(SYS_CALIBRATION_PAYLOAD_OUTPUT_OFFSET +
+                       (u16)index * 4U);
+        payload->output[index].logical_pwm =
+            sys_calibration_get_u16_le(&encoded[offset]);
+        payload->output[index].reference_output_current_ma =
+            sys_calibration_get_u16_le(&encoded[offset + 2U]);
+
+        offset = (u16)(SYS_CALIBRATION_PAYLOAD_OCO_OFFSET +
+                       (u16)index * 4U);
+        payload->oco[index].oco_adc_raw =
+            sys_calibration_get_u16_le(&encoded[offset]);
+        payload->oco[index].reference_output_current_ma =
+            sys_calibration_get_u16_le(&encoded[offset + 2U]);
+
+        offset = (u16)(SYS_CALIBRATION_PAYLOAD_BL_CURRENT_OFFSET +
+                       (u16)index * 6U);
+        payload->bl_current[index].bl_current_raw =
+            sys_calibration_get_u32_le(&encoded[offset]);
+        payload->bl_current[index].reference_input_current_ma =
+            sys_calibration_get_u16_le(&encoded[offset + 4U]);
+
+        offset = (u16)(SYS_CALIBRATION_PAYLOAD_BL_POWER_OFFSET +
+                       (u16)index * 6U);
+        payload->bl_power[index].bl_power_raw =
+            (s32)sys_calibration_get_u32_le(&encoded[offset]);
+        payload->bl_power[index].reference_input_power_01w =
+            sys_calibration_get_u16_le(&encoded[offset + 4U]);
+    }
+    payload->voltage_gain_q24 = sys_calibration_get_u32_le(
+        &encoded[SYS_CALIBRATION_PAYLOAD_BL_VOLTAGE_OFFSET]);
+    return BOOL_TRUE;
+}
+
+boolean_en sys_calibration_payload_hex_encode(
+    const u8 *payload,
+    u16 payload_length,
+    char *hex,
+    u16 hex_capacity)
+{
+    static const char digit[] = "0123456789ABCDEF";
+    u16 index;
+
+    if (payload == NULL || hex == NULL ||
+        payload_length != SYS_CALIBRATION_PAYLOAD_LENGTH ||
+        hex_capacity < SYS_CALIBRATION_PAYLOAD_HEX_LENGTH + 1U)
+    {
+        return BOOL_FALSE;
+    }
+    for (index = 0U; index < payload_length; ++index)
+    {
+        hex[index * 2U] = digit[payload[index] >> 4U];
+        hex[index * 2U + 1U] = digit[payload[index] & 0x0FU];
+    }
+    hex[SYS_CALIBRATION_PAYLOAD_HEX_LENGTH] = '\0';
+    return BOOL_TRUE;
+}
+
+boolean_en sys_calibration_payload_hex_decode(
+    const char *hex,
     u8 *payload,
     u16 payload_capacity)
 {
-    u8 index;
-    u16 offset;
-    const sys_calibration_driver_point_st *point;
+    u16 index;
+    u8 high;
+    u8 low;
 
-    if (table == NULL || payload == NULL ||
-        payload_capacity < SYS_CALIBRATION_DRIVER_TABLE_PAYLOAD_LENGTH)
+    if (hex == NULL || payload == NULL ||
+        payload_capacity < SYS_CALIBRATION_PAYLOAD_LENGTH ||
+        strlen(hex) != SYS_CALIBRATION_PAYLOAD_HEX_LENGTH)
     {
         return BOOL_FALSE;
     }
-
-    memset(payload, 0, SYS_CALIBRATION_DRIVER_TABLE_PAYLOAD_LENGTH);
-    for (index = 0U; index < SYS_CALIBRATION_DRIVER_POINT_COUNT; ++index)
+    for (index = 0U; index < SYS_CALIBRATION_PAYLOAD_LENGTH; ++index)
     {
-        offset = (u16)index * 18U;
-        point = &table->point[index];
-        if (sys_calibration_driver_is_level(point->level, index) != BOOL_TRUE ||
-            point->power_factor_percent > 100U)
+        if (sys_calibration_hex_nibble(hex[index * 2U], &high) != BOOL_TRUE ||
+            sys_calibration_hex_nibble(hex[index * 2U + 1U], &low) != BOOL_TRUE)
         {
             return BOOL_FALSE;
         }
-        payload[offset] = point->level;
-        payload[offset + 1U] = point->power_factor_percent;
-        sys_calibration_driver_put_u16_be(&payload[offset + 2U],
-                                          point->input_voltage_01v);
-        sys_calibration_driver_put_u16_be(&payload[offset + 4U],
-                                          point->input_current_ma);
-        sys_calibration_driver_put_u16_be(&payload[offset + 6U],
-                                          point->input_power_01w);
-        sys_calibration_driver_put_u16_be(&payload[offset + 8U],
-                                          point->instrument_output_current_ma);
-        sys_calibration_driver_put_u16_be(&payload[offset + 10U],
-                                          point->instrument_output_power_01w);
-        sys_calibration_driver_put_u16_be(&payload[offset + 12U],
-                                          point->device_output_current_ma);
-        sys_calibration_driver_put_u16_be(&payload[offset + 14U],
-                                          point->device_output_power_01w);
-        sys_calibration_driver_put_u16_be(&payload[offset + 16U],
-                                          point->input_current_ad);
+        payload[index] = (u8)((high << 4U) | low);
     }
     return BOOL_TRUE;
-}
-
-boolean_en sys_calibration_driver_max_context_decode(
-    const u8 *payload,
-    u16 payload_length,
-    sys_calibration_driver_max_context_st *context)
-{
-    if (payload == NULL || context == NULL || payload_length != 8U)
-    {
-        return BOOL_FALSE;
-    }
-    context->input_ac_voltage_float_bits =
-        ((u32)payload[0] << 24U) |
-        ((u32)payload[1] << 16U) |
-        ((u32)payload[2] << 8U) |
-        payload[3];
-    context->maximum_output_voltage_01v =
-        sys_calibration_driver_get_u16_be(&payload[4]);
-    context->maximum_output_current_ma =
-        sys_calibration_driver_get_u16_be(&payload[6]);
-    return BOOL_TRUE;
-}
-
-boolean_en sys_calibration_driver_measurement_decode(
-    const u8 *payload,
-    u16 payload_length,
-    sys_calibration_driver_measurement_st *measurement)
-{
-    if (payload == NULL || measurement == NULL || payload_length != 6U)
-    {
-        return BOOL_FALSE;
-    }
-    measurement->device_output_current_ma =
-        sys_calibration_driver_get_u16_be(&payload[0]);
-    measurement->device_output_power_01w =
-        sys_calibration_driver_get_u16_be(&payload[2]);
-    measurement->input_current_ad =
-        sys_calibration_driver_get_u16_be(&payload[4]);
-    return BOOL_TRUE;
-}
-
-boolean_en sys_calibration_driver_validate_message(
-    const sys_calibration_driver_message_st *message)
-{
-    sys_calibration_driver_table_st table;
-
-    if (message == NULL || message->length > SYS_CALIBRATION_DRIVER_MAX_PAYLOAD_LENGTH)
-    {
-        return BOOL_FALSE;
-    }
-
-    if (message->command == SYS_CALIBRATION_DRIVER_CMD_SET)
-    {
-        switch (message->offset)
-        {
-            case SYS_CALIBRATION_DRIVER_OFFSET_MODE:
-                return (message->length == 1U &&
-                        (message->data[0] == 0U || message->data[0] == 1U)) ?
-                       BOOL_TRUE : BOOL_FALSE;
-            case SYS_CALIBRATION_DRIVER_OFFSET_TABLE:
-                return sys_calibration_driver_table_decode(message->data,
-                                                            message->length,
-                                                            &table);
-            case SYS_CALIBRATION_DRIVER_OFFSET_LEVEL:
-                return (message->length == 1U && message->data[0] <= 200U) ?
-                       BOOL_TRUE : BOOL_FALSE;
-            case SYS_CALIBRATION_DRIVER_OFFSET_MAX_CONTEXT:
-                return (message->length == 8U) ? BOOL_TRUE : BOOL_FALSE;
-            default:
-                return BOOL_FALSE;
-        }
-    }
-
-    if (message->command == SYS_CALIBRATION_DRIVER_CMD_SET_ACK)
-    {
-        return (message->length == 1U &&
-                message->data[0] == SYS_CALIBRATION_DRIVER_ACK_VALUE &&
-                (message->offset == SYS_CALIBRATION_DRIVER_OFFSET_MODE ||
-                 message->offset == SYS_CALIBRATION_DRIVER_OFFSET_TABLE ||
-                 message->offset == SYS_CALIBRATION_DRIVER_OFFSET_LEVEL ||
-                 message->offset == SYS_CALIBRATION_DRIVER_OFFSET_MAX_CONTEXT)) ?
-               BOOL_TRUE : BOOL_FALSE;
-    }
-
-    if (message->command == SYS_CALIBRATION_DRIVER_CMD_QUERY)
-    {
-        return (message->offset == SYS_CALIBRATION_DRIVER_OFFSET_MEASURE &&
-                message->length == 0U) ? BOOL_TRUE : BOOL_FALSE;
-    }
-
-    return (message->command == SYS_CALIBRATION_DRIVER_CMD_QUERY_REPLY &&
-            message->offset == SYS_CALIBRATION_DRIVER_OFFSET_MEASURE &&
-            message->length == 6U) ? BOOL_TRUE : BOOL_FALSE;
 }

@@ -10,6 +10,7 @@ extern u8  Error_4_LV;//输入欠压
 
 extern u32 Vo_value;   //单位0.1V 
 extern u32 Io_value;   //单位 mA
+extern u32 Io_protection_value; /* OCO Raw经保守默认换算，仅供硬保护 */
 extern u32 Po_value;   //单位0.1W
 extern u8 dim_bak_to_low_acin;
 extern void voio_timer(void);

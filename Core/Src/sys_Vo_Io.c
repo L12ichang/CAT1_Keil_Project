@@ -32,6 +32,7 @@ extern u16  ac_voltage_8209;   //交流电的电压，单位 V
 #define  OUTPUT_VOLTAGE  Vo_value
 #define  INPUT_VOLTAGE   ac_voltage_8209   
  u32 Io_value;
+ u32 Io_protection_value;
  u32 Po_value;
 u8 _dim;
 u8 dim_bak_to_low_acin=100;//最大100
@@ -495,19 +496,21 @@ void error_report_process(void)
                Vo_value= ((u32)ADC_Value2*53U)/100U;   //  电压单位0.1V   参考电压3.3V    39K+0.75K ，上报时会除以100按0.1V为单位上报  电压检测偏大0.001  //*((float)1-0.01)
                if(OUTPUT_CUR_SENSOR == 0)
                {
-                   Io_value = 0;
+                   Io_protection_value = 0U;
                }
                else
                {
-                   Io_value = ((u32)ADC_Value4*100000U)/((u32)OUTPUT_CUR_SENSOR*834U);      //  电流单位mA     参考电压3.3V    50毫欧/8.3333倍    100W以下
+                   Io_protection_value =
+                       ((u32)ADC_Value4 * 100000U) /
+                       ((u32)OUTPUT_CUR_SENSOR * 834U);
                }
-
+               Io_value = Io_protection_value;
                if (sys_product_profile_runtime_matches(
                        MID, OUTPUT_CUR_SENSOR, HWMAX_OUTCUR) == BOOL_TRUE)
                {
                    u16 calibrated_current_ma;
-                   if (sys_calibration_service_correct_output_current(
-                           (u16)Io_value, &calibrated_current_ma) == BOOL_TRUE)
+                   if (sys_calibration_service_correct_output_current_raw(
+                           ADC_Value4, &calibrated_current_ma) == BOOL_TRUE)
                    {
                        Io_value = calibrated_current_ma;
                    }
@@ -517,11 +520,12 @@ void error_report_process(void)
                /* Current compiled profile owns maximum power and fail current. */
                if (sys_product_profile_runtime_matches(
                        MID, OUTPUT_CUR_SENSOR, HWMAX_OUTCUR) != BOOL_TRUE ||
-                   Po_value >
+                   ((u32)Vo_value * Io_protection_value) / 1000U >
                        ((u32)sys_product_profile_current()->rated_power_w * 10U *
                         (1000U + sys_product_profile_current()->
                                      power_limit_tolerance_permille)) / 1000U ||
-                    sys_calibration_safety_is_absolute_overcurrent(Io_value) ==
+                    sys_calibration_safety_is_absolute_overcurrent(
+                        Io_protection_value) ==
                         BOOL_TRUE)
                {
                    Error_1_OL = 1U;

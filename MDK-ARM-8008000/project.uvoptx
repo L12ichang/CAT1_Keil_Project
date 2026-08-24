@@ -22,7 +22,7 @@
   </DaveTm>
 
   <Target>
-    <TargetName>program</TargetName>
+    <TargetName>CAT1_50W_Debug</TargetName>
     <ToolsetNumber>0x4</ToolsetNumber>
     <ToolsetName>ARM-ADS</ToolsetName>
     <TargetOption>
@@ -227,7 +227,7 @@
   </Target>
 
   <Target>
-    <TargetName>Release-MinSize</TargetName>
+    <TargetName>CAT1_50W</TargetName>
     <ToolsetNumber>0x4</ToolsetNumber>
     <ToolsetName>ARM-ADS</ToolsetName>
     <TargetOption>

@@ -9,5 +9,6 @@
 
 void zk_work_plan_init(void);
 void zk_work_plan_process(void);
+boolean_en zk_work_plan_persistent_defaults(u8 *payload, u16 length);
 
 #endif

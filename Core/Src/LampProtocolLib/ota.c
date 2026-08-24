@@ -17,6 +17,7 @@
 #include "hw_flash.h"
 #include "Queue.h"
 #include "mqtt_zk_protocol.h"
+#include "sys_persistent_storage.h"
 #include "watchdog.h"
 
 boolean_en get_checksum_status(void);
@@ -42,6 +43,27 @@ static u32 wait_data_timer=0;
 #endif
 static CONNECT_OTA_state_en ota_connect_state=CONNECT_OTA_STATE_IDLE;
  MCU_OTA_state_en  MCU_OTA_state=MCU_OTA_STATE_IDLE;
+
+static boolean_en ota_activate_verified_image(u32 checksum,
+                                              u32 size,
+                                              u16 device_type)
+{
+    if (zk_ota_report_mark_verified(checksum, size, device_type) != BOOL_TRUE)
+    {
+        OTA_LOGE("upgrade blocked: RUN1 verified state persist failed\r\n");
+        return BOOL_FALSE;
+    }
+    if (sys_persistent_ota_flag_mark() != BOOL_TRUE)
+    {
+        OTA_LOGE("upgrade blocked: Boot OTA flag program failed\r\n");
+        return BOOL_FALSE;
+    }
+
+    /* The physical flag now blocks Config commits.  Reset without more writes. */
+    MCU_OTA_state = MCU_OTA__COMPLETE;
+    iap_jump2boot();
+    return BOOL_FALSE;
+}
 #if OTA_USE_QHTTPREADFILE_UFS && !OTA_DEBUG_DOWNLOAD_ONLY
 static u8 OTA_DATA_IS_READY=0;
 static u8 OTA_DATA_IS_finish=0;
@@ -3259,16 +3281,13 @@ void _4G_OTA_machine(void)
               {
                     OTA_LOGI("stream verify ok: mark upgrade and jump boot size=%u\r\n",
                              (unsigned int)ota_stream_expected_size);
-                    zk_ota_report_mark_verified(ota_stream_header_checksum,
-                                                ota_stream_expected_size,
-                                                ota_stream_header_device_type);
-                    sys_data.sn = 0xaa5555aa;
-                    sys_data_store();
-                    ota_feed_watchdog_if_enabled();
-                    HAL_Delay(50);
-                    ota_feed_watchdog_if_enabled();
-                    MCU_OTA_state=MCU_OTA__COMPLETE;
-                    iap_jump2boot();
+                    if (ota_activate_verified_image(
+                            ota_stream_header_checksum,
+                            ota_stream_expected_size,
+                            ota_stream_header_device_type) != BOOL_TRUE)
+                    {
+                        ota_start_http_stop_cleanup("persistent_activate_failed");
+                    }
                     break;
               }
               OTA_LOGE("stream verify failed: no boot jump\r\n");
@@ -4047,8 +4066,6 @@ void  mcu_copy_firmware_machine(void)
              {
                   OTA_LOGE("download failed: no firmware data from module fs file=%s\r\n", firm_name_buffer);
                   printf("MCU_OTA_MCU_GETDATA timeout, no firmware data received\n");
-                  sys_data.sn = 3;
-                  sys_data_store();
                   changea_to_MQTT_modle();
                   last_server_big_pick = 0;
                   MCU_OTA_state = MCU_OTA__COMPLETE;
@@ -4107,16 +4124,25 @@ void  mcu_copy_firmware_machine(void)
                      {
                            OTA_LOGI("verify firmware complete result=ok size=%u\r\n", (unsigned int)firmware_total_size);
                            printf("---------------OTA_SUM_CHECK_OK\n");
-                           sys_data.sn=0xaa5555aa;//标记有新固件
-                           sys_data_store();
-                           MCU_OTA_state=MCU_OTA_MCU_FINISH;
+                           if (ota_activate_verified_image(
+                                   *((__IO u32 *)(OTABAKROM_STARTADDR +
+                                                   ADDR_CHECKSUM_OFFSET)),
+                                   *((__IO u32 *)(OTABAKROM_STARTADDR +
+                                                   ADDR_SIZE_OFFSET)) &
+                                       0x00FFFFFFU,
+                                   *((__IO u16 *)(OTABAKROM_STARTADDR +
+                                                   ADDR_TYPE_OFFSET))) !=
+                               BOOL_TRUE)
+                           {
+                               changea_to_MQTT_modle();
+                               last_server_big_pick=0;
+                               MCU_OTA_state=MCU_OTA__COMPLETE;
+                           }
                      }
                      else
                      {
                         OTA_LOGE("verify firmware failed: app checksum size=%u\r\n", (unsigned int)firmware_total_size);
                         printf("---------------OTA_SUM_CHECK_ERROR\n");
-                        sys_data.sn=3;//标记固件下载错误
-                        sys_data_store();
                         changea_to_MQTT_modle();//切到MQTT
                         last_server_big_pick=0;//这个时候归零
                         MCU_OTA_state=MCU_OTA__COMPLETE;
@@ -4128,38 +4154,11 @@ void  mcu_copy_firmware_machine(void)
                              SERVER_CHECSUM,
                              (unsigned int)firmware_total_size);
                     printf("------------OTA_XOR_CHECK_ERR\n");
-                    sys_data.sn=3;//标记固件下载错误
-                    sys_data_store();
-                    sbuff= ((u8*)(DATAROM_STARTADDR)) ;//打印
-                    printf_buf(sbuff,64);
-                    sbuff= ((u8*)(BAKDATAROM_STARTADDR)) ;//打印
-                    printf_buf(sbuff,64);
                     changea_to_MQTT_modle();//切到MQTT
                     last_server_big_pick=0;//这个时候归零
                     MCU_OTA_state=MCU_OTA__COMPLETE;
               }
                break;
-
-          case   MCU_OTA_MCU_FINISH:
-                    OTA_LOGI("upgrade start: mark new firmware and jump to boot\r\n");
-                    // 所有搬运与校验完成后，写入升级标记并跳转 Boot，交由引导程序执行正式升级。
-                    printf("---------OTA å®æ¯------\n");
-                    printf("---------ç³»ç»éå¯-------\n");
-                    last_server_big_pick=0;//清零标志，防止跳转失败后影响下次OTA
-                    server_big_pick_counter=0;
-                    save_byete_counter=0;
-                    firmware_total_size=0;
-                    SERVER_CHECSUM=0;
-                    sbuff= ((u8*)(DATAROM_STARTADDR)) ;
-                    printf_buf(sbuff,64);
-                    sbuff= ((u8*)(DATAROM_STARTADDR)) ;
-                    printf_buf(sbuff,64);
-                    HAL_Delay(50);
-                    //调到boot区
-                    extern void iap_jump2boot(void);  //-------------------如果没有打印数据延时的话会影响BOOT的跳转
-                    MCU_OTA_state=MCU_OTA__COMPLETE;//这个地方很重要，一定要放在iap_jump2boot()函数之前，否则跳转失败
-                    iap_jump2boot();
-      break;
 
       case MCU_OTA__COMPLETE:
       break;

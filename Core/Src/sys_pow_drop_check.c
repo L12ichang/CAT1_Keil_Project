@@ -7,8 +7,8 @@
 编辑日期：2024.5.4
 *************************************************************/
 #include "sys_pow_drop_check.h"
-#include "sys_data.h"
 #include "sys_bl0942.h"
+#include "zk_runtime_stats.h"
 
 #define TIMEOUT 600      //掉电存储6秒间隔
 #define POW_IDLE_STATE   0
@@ -78,7 +78,7 @@ void sys_pow_drop_check_process(void)
                if(power_downing_counter==0)//在允许的时间内
                {
                    sys_bl0942_power_down_save();
-                   sys_data_store();
+                   (void)zk_runtime_stats_powerdown_checkpoint();
                    power_downing_counter= TIMEOUT;  //放置存储限制时间
           
                    printf("sys_pow_drop_check=存储\r\n" );

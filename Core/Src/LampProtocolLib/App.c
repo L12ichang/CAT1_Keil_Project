@@ -126,9 +126,8 @@ u8 onSettemp_protectc_value( u32 intValue )
 
 u8 onSethwmax_outcur_value( u32 intValue )
 {
-    /* HWMAX belongs to the compiled hardware profile, not normal runtime control. */
-    (void)intValue;
-    return DOWNLOAD_PARAM_ERROR;
+    return (factory_user_set_hwmax_current(intValue) ==
+            SYS_PRODUCT_CURRENT_VALID) ? DOWNLOAD_SUCCESS : DOWNLOAD_PARAM_ERROR;
 }
 u8 onSet_setcur_value( u32 intValue )
 {

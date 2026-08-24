@@ -71,7 +71,7 @@ DOC_MARKERS = {
     "docs/map_size_compare.md": ("93212", "71648", "ota.o", "hw_uart3.o", "cjson.o"),
     "docs/固件体积优化_第一轮报告.md": ("71648", "cJSON", "RSetType 2", "release_minsize_acceptance_audit"),
     "docs/实机验证记录.md": ("J-Link", "MQTT", "BL0942", "NTC", "RTC", "OTA"),
-    "docs/第一轮验收矩阵.md": ("Release-MinSize", "PASS", "BL0942", "RTC", "计划"),
+    "docs/第一轮验收矩阵.md": ("PASS", "BL0942", "RTC", "计划"),
     "docs/第一轮完成度审计.md": ("summary=pass", "71648", "BL0942", "type=2"),
     "docs/当前优化镜像OTA闭环交接清单.md": ("release_minsize_ota_20260710_025602.bin", "mqtt_guarded_ota", "summary=pass"),
 }
@@ -464,15 +464,15 @@ def summarize_status(checks: dict[str, Any]) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Audit Release-MinSize acceptance evidence from current build artifacts.")
+    parser = argparse.ArgumentParser(description="Audit CAT1_50W release acceptance evidence from current build artifacts.")
     parser.add_argument("--project", type=Path, default=Path("MDK-ARM-8008000/project.uvprojx"))
-    parser.add_argument("--target", default="Release-MinSize")
-    parser.add_argument("--map", type=Path, default=Path("output/release_minsize_final_cat1.map"))
-    parser.add_argument("--image", type=Path, default=Path("output/release_minsize_final_cat1.bin"))
+    parser.add_argument("--target", default="CAT1_50W")
+    parser.add_argument("--map", type=Path, default=Path("MDK-ARM-8008000/out/CAT1_50W.map"))
+    parser.add_argument("--image", type=Path, default=Path("MDK-ARM-8008000/out/CAT1_50W.bin"))
     parser.add_argument("--guarded-ota-log", type=Path, default=Path("tools/ota_test/logs/mqtt_guarded_ota_20260710_142819.jsonl"))
     parser.add_argument("--device-type", default="0x0003")
     parser.add_argument("--max-size", default="0x1C000")
-    parser.add_argument("--max-rom", default="0x16000", help="Release target ceiling for this round; default is 88 KB.")
+    parser.add_argument("--max-rom", default="0x16000", help="CAT1_50W release target ceiling for this round; default is 88 KB.")
     parser.add_argument("--log-dir", type=Path, default=Path("tools/ota_test/logs"))
     args = parser.parse_args()
 
@@ -574,7 +574,7 @@ def main() -> int:
     follow_up_items = [
         {
             "id": "native_type2_sunrise_sunset",
-            "reason": "Release-MinSize disables device-side astronomy by design per the first-round size plan",
+            "reason": "CAT1_50W release disables device-side astronomy by design per the first-round size plan",
             "next_step": "keep using platform-converted ordinary concrete-time plans, or rebuild/test native type=2 support if product requirements change",
         },
         {
@@ -591,7 +591,7 @@ def main() -> int:
     }
 
     args.log_dir.mkdir(parents=True, exist_ok=True)
-    out_path = args.log_dir / f"release_minsize_acceptance_audit_{timestamp()}.json"
+    out_path = args.log_dir / f"cat1_50w_acceptance_audit_{timestamp()}.json"
     out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(out_path)
     print(json.dumps(payload, ensure_ascii=False, indent=2))

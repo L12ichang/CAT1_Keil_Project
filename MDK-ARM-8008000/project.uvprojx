@@ -7,7 +7,7 @@
 
   <Targets>
     <Target>
-      <TargetName>program</TargetName>
+      <TargetName>CAT1_50W_Debug</TargetName>
       <ToolsetNumber>0x4</ToolsetNumber>
       <ToolsetName>ARM-ADS</ToolsetName>
       <pCCUsed>5060750::V5.06 update 6 (build 750)::.\ARMCC</pCCUsed>
@@ -49,7 +49,7 @@
             <InvalidFlash>1</InvalidFlash>
           </TargetStatus>
           <OutputDirectory>out\</OutputDirectory>
-          <OutputName>cat1</OutputName>
+          <OutputName>CAT1_50W_Debug</OutputName>
           <CreateExecutable>1</CreateExecutable>
           <CreateLib>0</CreateLib>
           <CreateHexFile>1</CreateHexFile>
@@ -83,7 +83,7 @@
             <RunUserProg1>0</RunUserProg1>
             <RunUserProg2>1</RunUserProg2>
             <UserProg1Name>fromelf.exe --bincombined --bincombined_base=0x8008000 -o "$L@L.bin" "#L"</UserProg1Name>
-            <UserProg2Name>.\out\hex2bin_arm.bat</UserProg2Name>
+            <UserProg2Name>.\out\hex2bin_arm.bat CAT1_50W_Debug</UserProg2Name>
             <UserProg1Dos16Mode>0</UserProg1Dos16Mode>
             <UserProg2Dos16Mode>0</UserProg2Dos16Mode>
             <nStopA1X>0</nStopA1X>
@@ -338,7 +338,7 @@
             <v6Rtti>0</v6Rtti>
             <VariousControls>
               <MiscControls></MiscControls>
-              <Define>USE_HAL_DRIVER,STM32F103xE,APROM_OFFSET,SYS_PRODUCT_PROFILE_SELECT=50,APP_LOG_ENABLE=1,APP_OTA_LOG_ENABLE=1,ZK_ENABLE_SUNRISE_PLAN=1,BL0942_USE_FLOAT_XCAP_COMPENSATION=1,LEGACY_DATAPOINT_PROTOCOL_ENABLE=1,LEGACY_APP_PROCESS_ENABLE=1,LEGACY_ACTIVE_ENABLE=1</Define>
+              <Define>USE_HAL_DRIVER,STM32F103xE,APROM_OFFSET,PRODUCT_TARGET_50W,APP_LOG_ENABLE=1,APP_OTA_LOG_ENABLE=1,ZK_ENABLE_SUNRISE_PLAN=1,BL0942_USE_FLOAT_XCAP_COMPENSATION=1,LEGACY_DATAPOINT_PROTOCOL_ENABLE=1,LEGACY_APP_PROCESS_ENABLE=1,LEGACY_ACTIVE_ENABLE=1</Define>
               <Undefine></Undefine>
               <IncludePath>../Core/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F1xx/Include;../Drivers/CMSIS/Include;..\Core\Src;..\Core\Src\LampProtocolLib;..\Core\Src\gateway;..\Core\Src\CJSON</IncludePath>
             </VariousControls>
@@ -1640,6 +1640,16 @@
               <FilePath>..\Core\Src\sys_calibration_safety.c</FilePath>
             </File>
             <File>
+              <FileName>sys_persistent_record.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_persistent_record.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_persistent_storage.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_persistent_storage.c</FilePath>
+            </File>
+            <File>
               <FileName>sys_calibration_storage.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\sys_calibration_storage.c</FilePath>
@@ -1648,11 +1658,6 @@
               <FileName>sys_calibration_flash.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\sys_calibration_flash.c</FilePath>
-            </File>
-            <File>
-              <FileName>sys_calibration_boot_inhibit.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Core\Src\sys_calibration_boot_inhibit.c</FilePath>
             </File>
             <File>
               <FileName>sys_bl0942_frame.c</FileName>
@@ -1698,11 +1703,6 @@
               <FileName>factory_user_data.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\factory_user_data.c</FilePath>
-            </File>
-            <File>
-              <FileName>data_backup.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Core\Src\data_backup.c</FilePath>
             </File>
           </Files>
         </Group>
@@ -1925,7 +1925,7 @@
       </Groups>
     </Target>
     <Target>
-      <TargetName>Release-MinSize</TargetName>
+      <TargetName>CAT1_50W</TargetName>
       <ToolsetNumber>0x4</ToolsetNumber>
       <ToolsetName>ARM-ADS</ToolsetName>
       <pCCUsed>5060750::V5.06 update 6 (build 750)::.\ARMCC</pCCUsed>
@@ -1967,7 +1967,7 @@
             <InvalidFlash>1</InvalidFlash>
           </TargetStatus>
           <OutputDirectory>out\</OutputDirectory>
-          <OutputName>cat1</OutputName>
+          <OutputName>CAT1_50W</OutputName>
           <CreateExecutable>1</CreateExecutable>
           <CreateLib>0</CreateLib>
           <CreateHexFile>1</CreateHexFile>
@@ -2001,7 +2001,7 @@
             <RunUserProg1>0</RunUserProg1>
             <RunUserProg2>1</RunUserProg2>
             <UserProg1Name>fromelf.exe --bincombined --bincombined_base=0x8008000 -o "$L@L.bin" "#L"</UserProg1Name>
-            <UserProg2Name>.\out\hex2bin_arm.bat</UserProg2Name>
+            <UserProg2Name>.\out\hex2bin_arm.bat CAT1_50W</UserProg2Name>
             <UserProg1Dos16Mode>0</UserProg1Dos16Mode>
             <UserProg2Dos16Mode>0</UserProg2Dos16Mode>
             <nStopA1X>0</nStopA1X>
@@ -2256,7 +2256,7 @@
             <v6Rtti>0</v6Rtti>
             <VariousControls>
               <MiscControls></MiscControls>
-              <Define>USE_HAL_DRIVER,STM32F103xE,APROM_OFFSET,SYS_PRODUCT_PROFILE_SELECT=50,APP_LOG_ENABLE=0,APP_OTA_LOG_ENABLE=0,APP_HEX_LOG_ENABLE=0,APP_PERF_PROFILE_ENABLE=0,APP_PWM_DEBUG_ENABLE=0,OTA_RAW_HEX_LOG_ENABLE=0,OTA_DEBUG_DOWNLOAD_ONLY=0,OTA_STREAM_TO_BACKUP_DEBUG=0,OTA_DEBUG_CLEAR_ALL_UFS=0,ZK_ENABLE_SUNRISE_PLAN=0,BL0942_USE_FLOAT_XCAP_COMPENSATION=0,ZK_PROTOCOL_ONLY=1,LEGACY_DATAPOINT_PROTOCOL_ENABLE=0,LEGACY_APP_PROCESS_ENABLE=0,LEGACY_ACTIVE_ENABLE=0</Define>
+              <Define>USE_HAL_DRIVER,STM32F103xE,APROM_OFFSET,PRODUCT_TARGET_50W,APP_LOG_ENABLE=0,APP_OTA_LOG_ENABLE=0,APP_HEX_LOG_ENABLE=0,APP_PERF_PROFILE_ENABLE=0,APP_PWM_DEBUG_ENABLE=0,OTA_RAW_HEX_LOG_ENABLE=0,OTA_DEBUG_DOWNLOAD_ONLY=0,OTA_STREAM_TO_BACKUP_DEBUG=0,OTA_DEBUG_CLEAR_ALL_UFS=0,ZK_ENABLE_SUNRISE_PLAN=0,BL0942_USE_FLOAT_XCAP_COMPENSATION=0,ZK_PROTOCOL_ONLY=1,LEGACY_DATAPOINT_PROTOCOL_ENABLE=0,LEGACY_APP_PROCESS_ENABLE=0,LEGACY_ACTIVE_ENABLE=0</Define>
               <Undefine></Undefine>
               <IncludePath>../Core/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F1xx/Include;../Drivers/CMSIS/Include;..\Core\Src;..\Core\Src\LampProtocolLib;..\Core\Src\gateway;..\Core\Src\CJSON</IncludePath>
             </VariousControls>
@@ -3558,6 +3558,16 @@
               <FilePath>..\Core\Src\sys_calibration_safety.c</FilePath>
             </File>
             <File>
+              <FileName>sys_persistent_record.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_persistent_record.c</FilePath>
+            </File>
+            <File>
+              <FileName>sys_persistent_storage.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sys_persistent_storage.c</FilePath>
+            </File>
+            <File>
               <FileName>sys_calibration_storage.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\sys_calibration_storage.c</FilePath>
@@ -3566,11 +3576,6 @@
               <FileName>sys_calibration_flash.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\sys_calibration_flash.c</FilePath>
-            </File>
-            <File>
-              <FileName>sys_calibration_boot_inhibit.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Core\Src\sys_calibration_boot_inhibit.c</FilePath>
             </File>
             <File>
               <FileName>sys_bl0942_frame.c</FileName>
@@ -3616,11 +3621,6 @@
               <FileName>factory_user_data.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\factory_user_data.c</FilePath>
-            </File>
-            <File>
-              <FileName>data_backup.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Core\Src\data_backup.c</FilePath>
             </File>
           </Files>
         </Group>
@@ -3919,7 +3919,8 @@
       <component Cclass="CMSIS" Cgroup="CORE" Cvendor="ARM" Cversion="5.6.0" condition="ARMv6_7_8-M Device">
         <package name="CMSIS" schemaVersion="1.7.7" url="http://www.keil.com/pack/" vendor="ARM" version="5.9.0"/>
         <targetInfos>
-          <targetInfo name="program"/>
+          <targetInfo name="CAT1_50W_Debug"/>
+          <targetInfo name="CAT1_50W"/>
         </targetInfos>
       </component>
     </components>

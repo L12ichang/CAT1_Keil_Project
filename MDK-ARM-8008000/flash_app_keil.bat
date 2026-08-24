@@ -4,7 +4,7 @@ setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 
 set "BOOT_BIN=D:\keil_work\CAT1_Keil_Project\CAT1_Keil_Project\boot.bin"
-set "APP_BIN=%~dp0out\cat1.bin"
+set "APP_BIN=%~dp0out\CAT1_50W.bin"
 set "MERGED_BIN=%~dp0out\boot_app_merged.bin"
 set "APP_OFFSET=0x00008000"
 

@@ -25,6 +25,7 @@ clang \
   -DUSE_HAL_DRIVER \
   -DSTM32F103xE \
   -DAPROM_OFFSET \
+  -DPRODUCT_TARGET_50W \
   -I"${ROOT_DIR}/Core/Inc" \
   -I"${ROOT_DIR}/Core/Src" \
   -I"${ROOT_DIR}/Core/Src/CJSON" \

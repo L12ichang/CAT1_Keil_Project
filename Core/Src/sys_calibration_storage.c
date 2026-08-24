@@ -7,168 +7,102 @@
 编辑日期：2026.8.4
 *************************************************************/
 #include "sys_calibration_storage.h"
+#include "sys_calibration_driver_protocol.h"
+#include "sys_persistent_record.h"
+#include "sys_product_profile.h"
 #include <string.h>
 
-static u32 sys_calibration_storage_record_crc(
-    const sys_calibration_storage_record_st *record)
+static const sys_persistent_record_descriptor_st
+    _sys_calibration_v3_codec_descriptor =
 {
-    u8 header[34U];
-    u32 index = 0U;
-    u32 crc;
+    {'C', 'A', 'L', '4'},
+    4U,
+    SYS_CALIBRATION_STORAGE_V3_RECORD_LENGTH,
+    SYS_CALIBRATION_STORAGE_V3_PAYLOAD_LENGTH,
+    0U,
+    0U,
+    0x800U,
+    0x800U
+};
 
-    header[index++] = (u8)(record->magic >> 24U);
-    header[index++] = (u8)(record->magic >> 16U);
-    header[index++] = (u8)(record->magic >> 8U);
-    header[index++] = (u8)record->magic;
-    header[index++] = (u8)(record->format_version >> 8U);
-    header[index++] = (u8)record->format_version;
-    header[index++] = (u8)(record->payload_length >> 8U);
-    header[index++] = (u8)record->payload_length;
-    header[index++] = (u8)(record->generation >> 24U);
-    header[index++] = (u8)(record->generation >> 16U);
-    header[index++] = (u8)(record->generation >> 8U);
-    header[index++] = (u8)record->generation;
-    header[index++] = (u8)(record->context.profile_id >> 8U);
-    header[index++] = (u8)record->context.profile_id;
-    header[index++] = (u8)(record->context.profile_version >> 8U);
-    header[index++] = (u8)record->context.profile_version;
-    header[index++] = (u8)(record->context.profile_fingerprint_crc32 >> 24U);
-    header[index++] = (u8)(record->context.profile_fingerprint_crc32 >> 16U);
-    header[index++] = (u8)(record->context.profile_fingerprint_crc32 >> 8U);
-    header[index++] = (u8)record->context.profile_fingerprint_crc32;
-    header[index++] = (u8)(record->context.calibration_voltage_01v >> 8U);
-    header[index++] = (u8)record->context.calibration_voltage_01v;
-    header[index++] = (u8)(record->context.configured_rated_current_ma >> 8U);
-    header[index++] = (u8)record->context.configured_rated_current_ma;
-    header[index++] = (u8)(record->context.calibrated_max_current_ma >> 8U);
-    header[index++] = (u8)record->context.calibrated_max_current_ma;
-    header[index++] = (u8)(record->context.table_crc32 >> 24U);
-    header[index++] = (u8)(record->context.table_crc32 >> 16U);
-    header[index++] = (u8)(record->context.table_crc32 >> 8U);
-    header[index++] = (u8)record->context.table_crc32;
-    header[index++] = (u8)(record->payload_crc32 >> 24U);
-    header[index++] = (u8)(record->payload_crc32 >> 16U);
-    header[index++] = (u8)(record->payload_crc32 >> 8U);
-    header[index++] = (u8)record->payload_crc32;
-    crc = sys_calibration_storage_crc32(header, index);
-    return sys_calibration_storage_crc32(record->payload,
-                                         record->payload_length) ^ crc;
-}
-
-u32 sys_calibration_storage_crc32(const u8 *data, u32 length)
+boolean_en sys_calibration_storage_v3_payload_header_validate(
+    const u8 payload[SYS_CALIBRATION_STORAGE_V3_PAYLOAD_LENGTH])
 {
-    u32 crc = 0xFFFFFFFFUL;
-    u32 index;
-    u8 bit;
-
-    if (data == NULL && length != 0U)
-    {
-        return 0U;
-    }
-    for (index = 0U; index < length; ++index)
-    {
-        crc ^= data[index];
-        for (bit = 0U; bit < 8U; ++bit)
-        {
-            crc = (crc & 1U) ? ((crc >> 1U) ^ 0xEDB88320UL) :
-                  (crc >> 1U);
-        }
-    }
-    return crc ^ 0xFFFFFFFFUL;
-}
-
-boolean_en sys_calibration_storage_record_build(
-    sys_calibration_storage_record_st *record,
-    u32 generation,
-    const sys_calibration_context_st *context,
-    const u8 *payload,
-    u16 payload_length)
-{
-    if (record == NULL || context == NULL || payload == NULL ||
-        payload_length == 0U ||
-        payload_length > SYS_CALIBRATION_STORAGE_PAYLOAD_MAX ||
-        sys_product_profile_context_validate(context, BOOL_TRUE) != BOOL_TRUE ||
-        context->table_crc32 !=
-            sys_calibration_storage_crc32(payload, payload_length))
+    if (payload == NULL || memcmp(payload, "CALP", 4U) != 0 ||
+        sys_persistent_get_u16_le(payload + 0x04U) != 1U ||
+        sys_persistent_get_u16_le(payload + 0x06U) !=
+            SYS_CALIBRATION_STORAGE_V3_PAYLOAD_LENGTH ||
+        payload[0x10U] != 11U || payload[0x11U] != 20U ||
+        sys_persistent_get_u16_le(payload + 0x12U) != 0x001FU)
     {
         return BOOL_FALSE;
     }
-
-    memset(record, 0xFF, sizeof(*record));
-    record->magic = SYS_CALIBRATION_STORAGE_MAGIC;
-    record->format_version = SYS_CALIBRATION_STORAGE_FORMAT_VERSION;
-    record->payload_length = payload_length;
-    record->generation = generation;
-    record->context = *context;
-    memcpy(record->payload, payload, payload_length);
-    record->payload_crc32 = sys_calibration_storage_crc32(payload, payload_length);
-    record->record_crc32 = sys_calibration_storage_record_crc(record);
-    record->commit_word = SYS_CALIBRATION_STORAGE_COMMIT_WORD;
     return BOOL_TRUE;
 }
 
-boolean_en sys_calibration_storage_record_is_committed(
-    const sys_calibration_storage_record_st *record)
+boolean_en sys_calibration_storage_v3_payload_validate(
+    const u8 payload[SYS_CALIBRATION_STORAGE_V3_PAYLOAD_LENGTH])
 {
-    return (record != NULL &&
-            record->commit_word == SYS_CALIBRATION_STORAGE_COMMIT_WORD) ?
-           BOOL_TRUE : BOOL_FALSE;
+    const sys_product_profile_st *profile = sys_product_profile_current();
+    sys_calibration_payload_st decoded;
+
+    if (sys_calibration_storage_v3_payload_header_validate(payload) != BOOL_TRUE ||
+        sys_calibration_payload_decode(
+            payload,
+            SYS_CALIBRATION_STORAGE_V3_PAYLOAD_LENGTH,
+            &decoded) != BOOL_TRUE ||
+        sys_calibration_payload_validate(&decoded) != BOOL_TRUE ||
+        sys_calibration_payload_matches_product(&decoded, profile) != BOOL_TRUE ||
+        sys_calibration_payload_within_product_limits(&decoded, profile) !=
+            BOOL_TRUE)
+    {
+        return BOOL_FALSE;
+    }
+    return BOOL_TRUE;
 }
 
-boolean_en sys_calibration_storage_record_validate(
-    const sys_calibration_storage_record_st *record)
+boolean_en sys_calibration_storage_v3_record_build(
+    sys_calibration_storage_v3_record_st *record,
+    u32 generation,
+    const u8 payload[SYS_CALIBRATION_STORAGE_V3_PAYLOAD_LENGTH])
 {
     if (record == NULL ||
-        record->magic != SYS_CALIBRATION_STORAGE_MAGIC ||
-        record->format_version != SYS_CALIBRATION_STORAGE_FORMAT_VERSION ||
-        record->payload_length == 0U ||
-        record->payload_length > SYS_CALIBRATION_STORAGE_PAYLOAD_MAX ||
-        sys_product_profile_context_validate(&record->context, BOOL_TRUE) != BOOL_TRUE ||
-        sys_calibration_storage_record_is_committed(record) != BOOL_TRUE ||
-        sys_calibration_storage_crc32(record->payload, record->payload_length) !=
-            record->payload_crc32 ||
-        record->context.table_crc32 != record->payload_crc32 ||
-        sys_calibration_storage_record_crc(record) != record->record_crc32)
+        sys_calibration_storage_v3_payload_validate(payload) != BOOL_TRUE)
     {
         return BOOL_FALSE;
     }
-    return BOOL_TRUE;
+    return sys_persistent_record_build(
+        &_sys_calibration_v3_codec_descriptor,
+        generation,
+        payload,
+        record->bytes,
+        sizeof(record->bytes));
 }
 
-boolean_en sys_calibration_storage_select_newest(
-    const sys_calibration_storage_record_st *first,
-    const sys_calibration_storage_record_st *second,
-    const sys_calibration_storage_record_st **selected)
+boolean_en sys_calibration_storage_v3_record_validate(
+    const sys_calibration_storage_v3_record_st *record,
+    u32 *generation,
+    u32 *payload_crc32)
 {
-    boolean_en first_valid;
-    boolean_en second_valid;
+    sys_persistent_record_meta_st meta;
 
-    if (selected == NULL)
+    if (record == NULL ||
+        sys_persistent_record_validate(&_sys_calibration_v3_codec_descriptor,
+                                       record->bytes,
+                                       sizeof(record->bytes),
+                                       &meta) != BOOL_TRUE ||
+        sys_calibration_storage_v3_payload_validate(
+            record->bytes + SYS_PERSISTENT_HEADER_LENGTH) != BOOL_TRUE)
     {
         return BOOL_FALSE;
     }
-    *selected = NULL;
-    first_valid = sys_calibration_storage_record_validate(first);
-    second_valid = sys_calibration_storage_record_validate(second);
-    if (first_valid != BOOL_TRUE && second_valid != BOOL_TRUE)
+    if (generation != NULL)
     {
-        return BOOL_FALSE;
+        *generation = meta.generation;
     }
-    if (first_valid == BOOL_TRUE && second_valid != BOOL_TRUE)
+    if (payload_crc32 != NULL)
     {
-        *selected = first;
-    }
-    else if (second_valid == BOOL_TRUE && first_valid != BOOL_TRUE)
-    {
-        *selected = second;
-    }
-    else if ((s32)(first->generation - second->generation) >= 0)
-    {
-        *selected = first;
-    }
-    else
-    {
-        *selected = second;
+        *payload_crc32 = meta.payload_crc32;
     }
     return BOOL_TRUE;
 }

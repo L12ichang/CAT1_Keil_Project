@@ -2,111 +2,92 @@
 #define SYS_CALIBRATION_DRIVER_PROTOCOL_H
 
 #include "type.h"
+#include "sys_product_profile.h"
 
-#define SYS_CALIBRATION_DRIVER_PROTOCOL_VERSION       1U
-#define SYS_CALIBRATION_DRIVER_FRAME_HEADER            0x3AU
-#define SYS_CALIBRATION_DRIVER_FRAME_TAIL_0           0x0DU
-#define SYS_CALIBRATION_DRIVER_FRAME_TAIL_1           0x0AU
-#define SYS_CALIBRATION_DRIVER_FRAME_OVERHEAD          7U
-#define SYS_CALIBRATION_DRIVER_MAX_PAYLOAD_LENGTH     198U
-#define SYS_CALIBRATION_DRIVER_TABLE_PAYLOAD_LENGTH   198U
-#define SYS_CALIBRATION_DRIVER_TABLE_FRAME_LENGTH     205U
-#define SYS_CALIBRATION_DRIVER_POINT_COUNT             11U
-#define SYS_CALIBRATION_DRIVER_LEVEL_STEP              20U
-#define SYS_CALIBRATION_DRIVER_ACK_VALUE             0x55U
+#define SYS_CALIBRATION_PAYLOAD_MAGIC_0              0x43U
+#define SYS_CALIBRATION_PAYLOAD_MAGIC_1              0x41U
+#define SYS_CALIBRATION_PAYLOAD_MAGIC_2              0x4CU
+#define SYS_CALIBRATION_PAYLOAD_MAGIC_3              0x50U
+#define SYS_CALIBRATION_PAYLOAD_VERSION                  1U
+#define SYS_CALIBRATION_PAYLOAD_LENGTH                 244U
+#define SYS_CALIBRATION_PAYLOAD_HEX_LENGTH             488U
+#define SYS_CALIBRATION_PAYLOAD_POINT_COUNT             11U
+#define SYS_CALIBRATION_PAYLOAD_LEVEL_STEP              20U
+#define SYS_CALIBRATION_PAYLOAD_VALID_FLAGS          0x001FU
 
-#define SYS_CALIBRATION_DRIVER_CMD_SET                0x24U
-#define SYS_CALIBRATION_DRIVER_CMD_SET_ACK            0x25U
-#define SYS_CALIBRATION_DRIVER_CMD_QUERY              0x26U
-#define SYS_CALIBRATION_DRIVER_CMD_QUERY_REPLY        0x27U
-
-#define SYS_CALIBRATION_DRIVER_OFFSET_MODE             0x03U
-#define SYS_CALIBRATION_DRIVER_OFFSET_TABLE            0x04U
-#define SYS_CALIBRATION_DRIVER_OFFSET_LEVEL            0x05U
-#define SYS_CALIBRATION_DRIVER_OFFSET_MAX_CONTEXT      0x07U
-#define SYS_CALIBRATION_DRIVER_OFFSET_MEASURE           0x08U
+#define SYS_CALIBRATION_PAYLOAD_HEADER_OFFSET         0x000U
+#define SYS_CALIBRATION_PAYLOAD_OUTPUT_OFFSET         0x014U
+#define SYS_CALIBRATION_PAYLOAD_OCO_OFFSET            0x040U
+#define SYS_CALIBRATION_PAYLOAD_BL_CURRENT_OFFSET     0x06CU
+#define SYS_CALIBRATION_PAYLOAD_BL_POWER_OFFSET       0x0AEU
+#define SYS_CALIBRATION_PAYLOAD_BL_VOLTAGE_OFFSET     0x0F0U
 
 typedef struct
 {
-    u8 command;
-    u8 offset;
-    u8 length;
-    u8 data[SYS_CALIBRATION_DRIVER_MAX_PAYLOAD_LENGTH];
-} sys_calibration_driver_message_st;
+    u16 logical_pwm;
+    u16 reference_output_current_ma;
+} sys_calibration_output_point_st;
 
 typedef struct
 {
-    u8 level;
-    u8 power_factor_percent;
-    u16 input_voltage_01v;
-    u16 input_current_ma;
-    u16 input_power_01w;
-    u16 instrument_output_current_ma;
-    u16 instrument_output_power_01w;
-    u16 device_output_current_ma;
-    u16 device_output_power_01w;
-    u16 input_current_ad;
-} sys_calibration_driver_point_st;
+    u16 oco_adc_raw;
+    u16 reference_output_current_ma;
+} sys_calibration_oco_point_st;
 
 typedef struct
 {
-    sys_calibration_driver_point_st point[SYS_CALIBRATION_DRIVER_POINT_COUNT];
-} sys_calibration_driver_table_st;
+    u32 bl_current_raw;
+    u16 reference_input_current_ma;
+} sys_calibration_bl_current_point_st;
 
 typedef struct
 {
-    u32 input_ac_voltage_float_bits;
-    u16 maximum_output_voltage_01v;
-    u16 maximum_output_current_ma;
-} sys_calibration_driver_max_context_st;
+    s32 bl_power_raw;
+    u16 reference_input_power_01w;
+} sys_calibration_bl_power_point_st;
 
 typedef struct
 {
-    u16 device_output_current_ma;
-    u16 device_output_power_01w;
-    u16 input_current_ad;
-} sys_calibration_driver_measurement_st;
+    u16 profile_id;
+    u16 profile_version;
+    u32 profile_fingerprint;
+    u8 point_count;
+    u8 level_step;
+    u16 valid_flags;
+    sys_calibration_output_point_st output[SYS_CALIBRATION_PAYLOAD_POINT_COUNT];
+    sys_calibration_oco_point_st oco[SYS_CALIBRATION_PAYLOAD_POINT_COUNT];
+    sys_calibration_bl_current_point_st bl_current[SYS_CALIBRATION_PAYLOAD_POINT_COUNT];
+    sys_calibration_bl_power_point_st bl_power[SYS_CALIBRATION_PAYLOAD_POINT_COUNT];
+    u32 voltage_gain_q24;
+} sys_calibration_payload_st;
 
-extern u8 sys_calibration_driver_checksum(u8 command,
-                                           u8 offset,
-                                           u8 length,
-                                           const u8 *data);
-
-extern boolean_en sys_calibration_driver_encode(
-    u8 command,
-    u8 offset,
+extern u32 sys_calibration_payload_crc32_iso_hdlc(
     const u8 *data,
-    u8 length,
-    u8 *frame,
-    u16 frame_capacity,
-    u16 *frame_length);
-
-extern boolean_en sys_calibration_driver_decode(
-    const u8 *frame,
-    u16 frame_length,
-    sys_calibration_driver_message_st *message);
-
-extern boolean_en sys_calibration_driver_validate_message(
-    const sys_calibration_driver_message_st *message);
-
-extern boolean_en sys_calibration_driver_table_decode(
+    u16 length);
+extern boolean_en sys_calibration_payload_validate(
+    const sys_calibration_payload_st *payload);
+extern boolean_en sys_calibration_payload_matches_product(
+    const sys_calibration_payload_st *payload,
+    const sys_product_profile_st *profile);
+extern boolean_en sys_calibration_payload_within_product_limits(
+    const sys_calibration_payload_st *payload,
+    const sys_product_profile_st *profile);
+extern boolean_en sys_calibration_payload_encode(
+    const sys_calibration_payload_st *payload,
+    u8 *encoded,
+    u16 encoded_capacity);
+extern boolean_en sys_calibration_payload_decode(
+    const u8 *encoded,
+    u16 encoded_length,
+    sys_calibration_payload_st *payload);
+extern boolean_en sys_calibration_payload_hex_encode(
     const u8 *payload,
     u16 payload_length,
-    sys_calibration_driver_table_st *table);
-
-extern boolean_en sys_calibration_driver_table_encode(
-    const sys_calibration_driver_table_st *table,
+    char *hex,
+    u16 hex_capacity);
+extern boolean_en sys_calibration_payload_hex_decode(
+    const char *hex,
     u8 *payload,
     u16 payload_capacity);
-
-extern boolean_en sys_calibration_driver_max_context_decode(
-    const u8 *payload,
-    u16 payload_length,
-    sys_calibration_driver_max_context_st *context);
-
-extern boolean_en sys_calibration_driver_measurement_decode(
-    const u8 *payload,
-    u16 payload_length,
-    sys_calibration_driver_measurement_st *measurement);
 
 #endif

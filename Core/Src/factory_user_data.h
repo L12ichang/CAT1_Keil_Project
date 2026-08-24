@@ -91,6 +91,8 @@ extern sys_product_current_validation_en factory_user_validate_runtime_current(
     u32 configured_current_ma);
 extern sys_product_current_validation_en factory_user_set_runtime_current(
     u32 configured_current_ma);
+extern sys_product_current_validation_en factory_user_set_hwmax_current(
+    u32 hwmax_current_ma);
 extern u16 factory_user_get_bound_output_voltage_01v(void);
 extern sys_product_current_validation_en factory_user_validate_candidate(
     const u8 *factory_buffer);

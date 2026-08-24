@@ -91,13 +91,17 @@ void fac_128_data_default(void)
     {
        SCHEDULE_SIZE=7;//默认单日最大调光动作数
     }
-    if (sys_product_profile_runtime_matches(
-            MID, OUTPUT_CUR_SENSOR, HWMAX_OUTCUR) == BOOL_TRUE &&
-        sys_product_profile_validate_runtime_current(
-            sys_product_profile_current(), BOUND_OUTPUT_VOLTAGE_01V,
-            SET_OUTCUR) != SYS_PRODUCT_CURRENT_VALID)
+    if (HWMAX_OUTCUR > SYS_PRODUCT_PROFILE_CURRENT_HARDWARE_MAX_MA)
+    {
+        HWMAX_OUTCUR = FACTORY_DEFAULT_HWMAX_OUTCUR_MA;
+    }
+    if (SET_OUTCUR > HWMAX_OUTCUR)
     {
         SET_OUTCUR = FACTORY_DEFAULT_SET_OUTCUR_MA;
+        if (SET_OUTCUR > HWMAX_OUTCUR)
+        {
+            SET_OUTCUR = HWMAX_OUTCUR;
+        }
     }
     factory_user_sync_product_fields();
 
@@ -158,40 +162,31 @@ sys_product_current_validation_en factory_user_validate_runtime_current(
     u32 configured_current_ma)
 {
     const sys_product_profile_st *profile = sys_product_profile_current();
-    sys_product_current_validation_en result;
-    u16 calibrated_max_current_ma = 0U;
-    boolean_en calibrated_max_available;
+    (void)bound_voltage_01v;
     if (profile == NULL ||
         sys_product_profile_runtime_matches(MID, OUTPUT_CUR_SENSOR,
                                             HWMAX_OUTCUR) != BOOL_TRUE)
     {
         return SYS_PRODUCT_CURRENT_PROFILE_INCOMPLETE;
     }
-    result = sys_product_profile_validate_runtime_current(
-        profile, bound_voltage_01v, configured_current_ma);
-    if (result != SYS_PRODUCT_CURRENT_VALID)
+    if (configured_current_ma == 0U)
     {
-        return result;
+        return SYS_PRODUCT_CURRENT_ZERO;
     }
-    calibrated_max_available =
-        sys_calibration_service_get_calibrated_max_current_ma(
-            bound_voltage_01v, &calibrated_max_current_ma);
-    return sys_product_profile_validate_calibrated_current(
-        configured_current_ma, calibrated_max_available,
-        calibrated_max_current_ma);
+    if (configured_current_ma > HWMAX_OUTCUR)
+    {
+        return SYS_PRODUCT_CURRENT_HW_MAX;
+    }
+    return SYS_PRODUCT_CURRENT_VALID;
 }
 
 sys_product_current_validation_en factory_user_validate_candidate(
     const u8 *factory_buffer)
 {
     const sys_product_profile_st *profile = sys_product_profile_current();
-    u16 bound_voltage_01v;
     u16 configured_current_ma;
     u16 hw_max_current_ma;
     u16 rs3_mohm;
-    u16 calibrated_max_current_ma = 0U;
-    sys_product_current_validation_en result;
-    boolean_en calibrated_max_available;
 
     if (sys_calibration_service_is_output_authorized() == BOOL_TRUE)
     {
@@ -202,48 +197,64 @@ sys_product_current_validation_en factory_user_validate_candidate(
     {
         return SYS_PRODUCT_CURRENT_PROFILE_INCOMPLETE;
     }
-    bound_voltage_01v = factory_user_get_u16be(factory_buffer, 0x08U);
     configured_current_ma = factory_user_get_u16be(factory_buffer, 0x10U);
     hw_max_current_ma = factory_user_get_u16be(factory_buffer, 0x12U);
     rs3_mohm = factory_user_get_u16be(factory_buffer, 0x14U);
     if (factory_buffer[0x05] != profile->mid ||
-        hw_max_current_ma != profile->hw_max_current_ma ||
         rs3_mohm != profile->rs3_mohm)
     {
         return SYS_PRODUCT_CURRENT_PROFILE_INCOMPLETE;
     }
-    result = sys_product_profile_validate_runtime_current(
-        profile, bound_voltage_01v, configured_current_ma);
-    if (result != SYS_PRODUCT_CURRENT_VALID ||
-        bound_voltage_01v != BOUND_OUTPUT_VOLTAGE_01V)
+    if (hw_max_current_ma == 0U ||
+        hw_max_current_ma > profile->hw_max_current_ma)
     {
-        /* A voltage-only rebind is allowed, but output remains gated until recalibration. */
-        if (result == SYS_PRODUCT_CURRENT_VALID &&
-            configured_current_ma == SET_OUTCUR)
-        {
-            return SYS_PRODUCT_CURRENT_VALID;
-        }
-        return result;
+        return SYS_PRODUCT_CURRENT_HW_MAX;
     }
-    calibrated_max_available =
-        sys_calibration_service_get_calibrated_max_current_ma(
-            bound_voltage_01v, &calibrated_max_current_ma);
-    if (calibrated_max_available != BOOL_TRUE &&
-        configured_current_ma == SET_OUTCUR)
+    if (configured_current_ma == 0U)
     {
-        /* Idempotent SET / unrelated Factory fields do not create a new
-           uncalibrated current setting; nonzero output remains gated. */
-        return SYS_PRODUCT_CURRENT_VALID;
+        return SYS_PRODUCT_CURRENT_ZERO;
     }
-    return sys_product_profile_validate_calibrated_current(
-        configured_current_ma, calibrated_max_available,
-        calibrated_max_current_ma);
+    return (configured_current_ma <= hw_max_current_ma) ?
+           SYS_PRODUCT_CURRENT_VALID : SYS_PRODUCT_CURRENT_HW_MAX;
+}
+
+sys_product_current_validation_en factory_user_set_hwmax_current(
+    u32 hwmax_current_ma)
+{
+    const sys_product_profile_st *profile = sys_product_profile_current();
+    u16 previous_hwmax;
+
+    if (sys_calibration_service_is_output_authorized() == BOOL_TRUE)
+    {
+        return SYS_PRODUCT_CURRENT_CALIBRATION_ACTIVE;
+    }
+    if (sys_product_profile_is_complete(profile) != BOOL_TRUE)
+    {
+        return SYS_PRODUCT_CURRENT_PROFILE_INCOMPLETE;
+    }
+    if (hwmax_current_ma == 0U || hwmax_current_ma > profile->hw_max_current_ma ||
+        SET_OUTCUR > hwmax_current_ma)
+    {
+        return SYS_PRODUCT_CURRENT_HW_MAX;
+    }
+    previous_hwmax = HWMAX_OUTCUR;
+    HWMAX_OUTCUR = (u16)hwmax_current_ma;
+    factory_user_sync_product_fields();
+    if (sys_data_store_checked() != BOOL_TRUE)
+    {
+        HWMAX_OUTCUR = previous_hwmax;
+        factory_user_sync_product_fields();
+        return SYS_PRODUCT_CURRENT_PROFILE_INCOMPLETE;
+    }
+    sys_pwm_reload();
+    return SYS_PRODUCT_CURRENT_VALID;
 }
 
 sys_product_current_validation_en factory_user_set_runtime_current(
     u32 configured_current_ma)
 {
     sys_product_current_validation_en result;
+    u16 previous_set;
     if (sys_calibration_service_is_output_authorized() == BOOL_TRUE)
     {
         return SYS_PRODUCT_CURRENT_CALIBRATION_ACTIVE;
@@ -255,9 +266,16 @@ sys_product_current_validation_en factory_user_set_runtime_current(
     {
         return result;
     }
+    previous_set = SET_OUTCUR;
     SET_OUTCUR = (u16)configured_current_ma;
     factory_user_sync_product_fields();
-    sys_data_store();
+    if (sys_data_store_checked() != BOOL_TRUE)
+    {
+        SET_OUTCUR = previous_set;
+        factory_user_sync_product_fields();
+        return SYS_PRODUCT_CURRENT_PROFILE_INCOMPLETE;
+    }
+    sys_pwm_reload();
     return SYS_PRODUCT_CURRENT_VALID;
 }
 

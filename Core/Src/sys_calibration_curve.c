@@ -77,6 +77,121 @@ boolean_en sys_calibration_curve_interpolate(
     return BOOL_TRUE;
 }
 
+boolean_en sys_calibration_curve_interpolate_u16(
+    const u16 *x,
+    const u16 *y,
+    u32 count,
+    u16 input,
+    u16 *output)
+{
+    u32 index;
+    u32 span;
+    u32 position;
+    u32 delta;
+
+    if (x == NULL || y == NULL || output == NULL || count < 2U ||
+        input < x[0] || input > x[count - 1U])
+    {
+        return BOOL_FALSE;
+    }
+    for (index = 1U; index < count; ++index)
+    {
+        if (x[index] <= x[index - 1U] || y[index] < y[index - 1U])
+        {
+            return BOOL_FALSE;
+        }
+        if (input <= x[index])
+        {
+            span = (u32)x[index] - x[index - 1U];
+            position = (u32)input - x[index - 1U];
+            delta = (u32)y[index] - y[index - 1U];
+            *output = (u16)((u32)y[index - 1U] +
+                            (delta * position + span / 2U) / span);
+            return BOOL_TRUE;
+        }
+    }
+    *output = y[count - 1U];
+    return BOOL_TRUE;
+}
+
+boolean_en sys_calibration_curve_interpolate_u32(
+    const u32 *x,
+    const u16 *y,
+    u32 count,
+    u32 input,
+    u16 *output)
+{
+    u32 index;
+    u32 span;
+    u32 position;
+    u32 delta;
+    u64 scaled;
+
+    if (x == NULL || y == NULL || output == NULL || count < 2U ||
+        input < x[0] || input > x[count - 1U])
+    {
+        return BOOL_FALSE;
+    }
+    for (index = 1U; index < count; ++index)
+    {
+        if (x[index] <= x[index - 1U] || y[index] < y[index - 1U])
+        {
+            return BOOL_FALSE;
+        }
+        if (input <= x[index])
+        {
+            span = x[index] - x[index - 1U];
+            position = input - x[index - 1U];
+            delta = (u32)y[index] - y[index - 1U];
+            scaled = (u64)delta * position + span / 2U;
+            *output = (u16)((u32)y[index - 1U] +
+                            (u32)(scaled / span));
+            return BOOL_TRUE;
+        }
+    }
+    *output = y[count - 1U];
+    return BOOL_TRUE;
+}
+
+boolean_en sys_calibration_curve_interpolate_s32(
+    const s32 *x,
+    const u16 *y,
+    u32 count,
+    s32 input,
+    u16 *output)
+{
+    u32 index;
+    u32 span;
+    u32 position;
+    u32 delta;
+    u64 scaled;
+
+    if (x == NULL || y == NULL || output == NULL || count < 2U ||
+        input < x[0] || input > x[count - 1U])
+    {
+        return BOOL_FALSE;
+    }
+    for (index = 1U; index < count; ++index)
+    {
+        if (x[index] <= x[index - 1U] || y[index] < y[index - 1U])
+        {
+            return BOOL_FALSE;
+        }
+        if (input <= x[index])
+        {
+            span = (u32)(x[index] - x[index - 1U]);
+            position = (u32)(input - x[index - 1U]);
+            delta = (u32)y[index] - y[index - 1U];
+            scaled = (u64)delta * position + span / 2U;
+            *output = (u16)((u32)y[index - 1U] +
+                            (u32)(scaled / span));
+            return BOOL_TRUE;
+        }
+    }
+    *output = y[count - 1U];
+    return BOOL_TRUE;
+}
+
 boolean_en sys_calibration_curve_get_iv_limit(
     u32 index,
     sys_calibration_iv_limit_st *limit)

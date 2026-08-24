@@ -7,6 +7,7 @@
 编辑日期：2026.8.4
 *************************************************************/
 #include "sys_calibration_snapshot.h"
+#include "sys_bl0942_frame.h"
 #include <string.h>
 
 static volatile u32 _meter_write_seq;
@@ -322,6 +323,10 @@ boolean_en sys_calibration_snapshot_read_aggregate(
     snapshot->meter_age_ms = sys_calibration_snapshot_age(now_tick_ms,
                                                            snapshot->meter.tick_ms,
                                                            snapshot->meter.valid_flags);
+    snapshot->bl_fresh = (snapshot->meter_age_ms !=
+                              SYS_CALIBRATION_SNAPSHOT_AGE_INVALID &&
+                          snapshot->meter_age_ms <=
+                              SYS_BL0942_FRESH_MAX_AGE_MS) ? 1U : 0U;
     snapshot->adc_age_ms = sys_calibration_snapshot_age(now_tick_ms,
                                                          snapshot->adc.tick_ms,
                                                          snapshot->adc.valid_flags);

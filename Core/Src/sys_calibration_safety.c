@@ -118,14 +118,16 @@ u16 sys_calibration_safety_arbitrate_pwm(
     boolean_en emergency_stop,
     boolean_en feedback_fresh)
 {
-    if (requested_pwm == 0U || boot_inhibited == BOOL_TRUE ||
-        emergency_stop == BOOL_TRUE)
+    if (requested_pwm == 0U || emergency_stop == BOOL_TRUE ||
+        (boot_inhibited == BOOL_TRUE &&
+         source != SYS_CALIBRATION_OUTPUT_SOURCE_CALIBRATION))
     {
         return 0U;
     }
 
     if (source != SYS_CALIBRATION_OUTPUT_SOURCE_NORMAL &&
         source != SYS_CALIBRATION_OUTPUT_SOURCE_OFFLINE_PLAN &&
+        source != SYS_CALIBRATION_OUTPUT_SOURCE_CALIBRATION &&
         source != SYS_CALIBRATION_OUTPUT_SOURCE_FACTORY_DIRECT)
     {
         return 0U;
@@ -134,6 +136,12 @@ u16 sys_calibration_safety_arbitrate_pwm(
     if (source == SYS_CALIBRATION_OUTPUT_SOURCE_FACTORY_DIRECT &&
         (SYS_CALIBRATION_FACTORY_DIRECT_PWM_ENABLED == 0U ||
          feedback_fresh != BOOL_TRUE))
+    {
+        return 0U;
+    }
+
+    if (source == SYS_CALIBRATION_OUTPUT_SOURCE_CALIBRATION &&
+        feedback_fresh != BOOL_TRUE)
     {
         return 0U;
     }

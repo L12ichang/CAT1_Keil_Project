@@ -20,6 +20,24 @@ extern boolean_en sys_calibration_curve_interpolate(
     u32 count,
     u16 level,
     u16 *value);
+extern boolean_en sys_calibration_curve_interpolate_u16(
+    const u16 *x,
+    const u16 *y,
+    u32 count,
+    u16 input,
+    u16 *output);
+extern boolean_en sys_calibration_curve_interpolate_u32(
+    const u32 *x,
+    const u16 *y,
+    u32 count,
+    u32 input,
+    u16 *output);
+extern boolean_en sys_calibration_curve_interpolate_s32(
+    const s32 *x,
+    const u16 *y,
+    u32 count,
+    s32 input,
+    u16 *output);
 extern boolean_en sys_calibration_curve_get_iv_limit(
     u32 index,
     sys_calibration_iv_limit_st *limit);

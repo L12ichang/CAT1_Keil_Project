@@ -10,7 +10,9 @@
 #include "sys_data.h"
 #include "hw_flash.h"
 #include "factory_user_data.h"
-#include "data_backup.h"
+#include "sys_persistent_storage.h"
+#include "zk_property.h"
+#include "zk_work_plan.h"
 sys_data_st sys_data  __attribute__ ((aligned(4)))={  .temp_protect.temp_protect=100,.temp_protect.enable=BOOL_TRUE};
 
 #define FLAG_RESET_DATA   0x1113
@@ -73,11 +75,19 @@ void struct_data_checksum_make(void* dat, u16 size)
 void sys_data_default(void)
 {
     sys_data.mac=0x80;
+    sys_data.lamp_power=100U;
     fac_128_data_default();//工厂128字节默认值
 }
 
 boolean_en flash_store(u8* buf, u16 size, u32 addr_main)
 {
+    if (buf == NULL || size == 0U ||
+        addr_main < CAT1_FLASH_OTA_BACKUP_START ||
+        addr_main > CAT1_FLASH_OTA_BACKUP_END ||
+        (u32)size > CAT1_FLASH_OTA_BACKUP_END - addr_main)
+    {
+        return BOOL_FALSE;
+    }
     hw_flash_write_bytes(addr_main, buf, size);
     if (user_flash_check(addr_main, buf, size) != BOOL_TRUE)
     {
@@ -86,90 +96,48 @@ boolean_en flash_store(u8* buf, u16 size, u32 addr_main)
     }
     return BOOL_TRUE;
 }
-boolean_en data_store_data(u8* buf, u16 size, u32 addr_main)
-{
-    if(size>6*1024||addr_main+size>APROM_STARTADDR)
-    {
-      return BOOL_FALSE;
-    }
-    if(memcmp((const void *)addr_main, buf, size) == 0)
-    {
-      return BOOL_TRUE;
-    }
-    hw_flash_write_bytes(addr_main, buf, size);
-    // *(uint32_t *)0x400220D0=0x1;
-    return BOOL_TRUE;
-}
-
-boolean_en data_load_data(u8* buf, u16 size, u32 addr_main)
-{
-  hw_flash_read_bytes( addr_main,buf, size);
-  return BOOL_TRUE;
-}
-
-
-
 /************************************
 功能描述：从flash加载用户数据
 输入参数：     无
 输出返回：无
 *************************************/
 void sys_data_load(void)
-{ 
-   #if  1
-       
-         if(data_load_data((u8*)&sys_data, sizeof(sys_data), DATAROM_STARTADDR)==BOOL_TRUE)
-        {
-             if( struct_data_check((u8*)&sys_data,sizeof(sys_data)))//主区校验OK
-            {
-                printf("主区数据\n");
-                log_u32(10, 0);
-                factory_user_load_data();   
-               
-            }
-            else   
-            {
-                   data_load_data((u8*)&sys_data, sizeof(sys_data), BAKDATAROM_STARTADDR) ; 
-                  if( struct_data_check((u8*)&sys_data,sizeof(sys_data)))//校验备份区
-                  {
-                      printf("备份区数据\n");
-                     factory_user_load_data(); 
-                  }
-                  else   //备份区也错，就默认
-                  {
-                    sys_data_default(); 
-                  }
-                   
-            }
-        }
-        
-        else
-        {
-           //printf("default2\n");
-             log_u32(10, 1);
+{
+    u8 factory_and_device[SYS_PERSISTENT_CONFIG_FACTORY_LENGTH +
+                          SYS_PERSISTENT_CONFIG_DEVICE_LENGTH];
 
-           
-        }
-      #else
-         if(data_load_data((u8*)&sys_data, sizeof(sys_data), DATAROM_STARTADDR)==BOOL_FALSE)
-        {
-               //printf("default\n");
-                log_u32(10, 0);
-               sys_data_default();
-        } 
-        else
-        {
-              //printf("default2\n");
-             log_u32(10, 1);
-            if(sys_data.mac==0xffffffff)
-            {
-               sys_data.mac =0x80;      
-            } 
-            factory_user_load_data();    
-        }       
+    memset(&sys_data, 0, sizeof(sys_data));
+    /* lamp_power is a RAM-only derating percentage; boot always starts at 100%. */
+    sys_data.lamp_power = 100U;
+    if (sys_persistent_config_read_section(
+            SYS_PERSISTENT_CONFIG_FACTORY_OFFSET,
+            factory_and_device,
+            sizeof(factory_and_device),
+            NULL) == BOOL_TRUE)
+    {
+        memcpy(sys_data.fa_Parambuf,
+               factory_and_device,
+               SYS_PERSISTENT_CONFIG_FACTORY_LENGTH);
+        sys_data.mac = sys_persistent_get_u32_le(
+            factory_and_device + SYS_PERSISTENT_CONFIG_FACTORY_LENGTH);
+        factory_user_load_data();
+        return;
+    }
 
-      #endif
-         
+    /* Development V3 policy: defaults + one bounded 12 KiB format, no migration. */
+    sys_data.mac = 0x80U;
+    memset(sys_data.fa_Parambuf, 0xFF, sizeof(sys_data.fa_Parambuf));
+    factory_user_load_data();
+    if (sys_persistent_layout_initialize_with_defaults(
+            sys_data.fa_Parambuf,
+            sys_data.mac,
+            zk_device_config_persistent_defaults,
+            zk_work_plan_persistent_defaults,
+            sys_persistent_ota_flag_is_set()) != BOOL_TRUE)
+    {
+        /* OTA-pending or Flash failure: defaults remain RAM-only and fail closed. */
+        log_u32(10, 1);
+    }
 }
 
 
@@ -178,26 +146,31 @@ void sys_data_load(void)
 输入参数：无
 输出返回：无
 *************************************/
+boolean_en sys_data_store_checked(void)
+{
+    u8 factory_and_device[SYS_PERSISTENT_CONFIG_FACTORY_LENGTH +
+                          SYS_PERSISTENT_CONFIG_DEVICE_LENGTH];
+
+    memcpy(factory_and_device,
+           sys_data.fa_Parambuf,
+           SYS_PERSISTENT_CONFIG_FACTORY_LENGTH);
+    sys_persistent_put_u32_le(
+        factory_and_device + SYS_PERSISTENT_CONFIG_FACTORY_LENGTH,
+        sys_data.mac);
+    if (sys_persistent_config_update_section(
+            SYS_PERSISTENT_CONFIG_FACTORY_OFFSET,
+            factory_and_device,
+            sizeof(factory_and_device),
+            NULL) != BOOL_TRUE)
+    {
+        printf("sys_data_store fail\n");
+        return BOOL_FALSE;
+    }
+    return BOOL_TRUE;
+}
+
 void sys_data_store(void)
 {
-    #if 1 
-    //新算法：写数据同时写主区副区 
-   //读数据校验主区OK导出数据，若NG导副区然后写主副两区，若主副两区都NG按默认配置！
-       struct_data_checksum_make((u8*)&sys_data,sizeof(sys_data));
-    if(data_store_data((u8*)&sys_data, sizeof(sys_data), DATAROM_STARTADDR) == BOOL_FALSE)
-    {
-        printf("sys_data_store fail\n");
-    }   
-     if(data_store_data((u8*)&sys_data, sizeof(sys_data), BAKDATAROM_STARTADDR) == BOOL_FALSE)  //数据备份
-    {
-        printf("sys_data_store_bakrom_fail\n");
-    }  
-   #else     //旧启用备份功能会导致掉电数据异常
-        if(data_backup_store_data((u8*)&sys_data, sizeof(sys_data), DATAROM_STARTADDR,BAKDATAROM_STARTADDR,DATA_BACKUP_SYS_DATA) == BOOL_FALSE)
-    {
-        printf("sys_data_store fail\n");
-    }  
-   #endif
-    
+    (void)sys_data_store_checked();
 }
 

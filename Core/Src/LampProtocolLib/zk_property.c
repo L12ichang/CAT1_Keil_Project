@@ -2,72 +2,21 @@
 #include "zk_protocol_internal.h"
 #include "Portable.h"
 #include "NbDriver.h"
-#include "crc16_modbus.h"
 #include "factory_user_data.h"
 #include "sys_data.h"
 #include "sys_pwm.h"
-#include "hw_flash.h"
-#include "flash_address_assignment.h"
+#include "sys_persistent_storage.h"
 #include <string.h>
 
 extern uint8 simCardICCID[22];
 
 static zk_device_config_t zk_dev_cfg;
 
-#define ZK_PROPERTY_FLASH_MAGIC 0x5A4B5052UL
-#define ZK_PROPERTY_FLASH_VERSION 1U
-#define ZK_PROPERTY_FLASH_MAIN_ADDR CAT1_FLASH_PROPERTY_MAIN_START
-#define ZK_PROPERTY_FLASH_BACKUP_ADDR CAT1_FLASH_PROPERTY_BACKUP_START
-#define ZK_RUNTIME_FLASH_OFFSET 0x200UL
 #define ZK_FACTORY_PROFILE_PROTECTED_ERROR 20
-#define ZK_FACTORY_BOUND_VOLTAGE_ERROR     21
 #define ZK_FACTORY_CURRENT_ZERO_ERROR      22
-#define ZK_FACTORY_CURRENT_IV_ERROR        23
-#define ZK_FACTORY_CURRENT_POWER_ERROR     24
 #define ZK_FACTORY_CURRENT_HWMAX_ERROR     25
-#define ZK_FACTORY_CURRENT_ABSOLUTE_ERROR  26
 #define ZK_FACTORY_PROFILE_MISMATCH_ERROR  27
 #define ZK_FACTORY_CALIBRATION_ACTIVE_ERROR 28
-#define ZK_FACTORY_CALIBRATED_MAX_MISSING_ERROR 29
-#define ZK_FACTORY_EXCEEDS_CALIBRATED_MAX_ERROR 30
-
-#define ZK_STATIC_ASSERT_CONCAT_(a, b) a##b
-#define ZK_STATIC_ASSERT_CONCAT(a, b) ZK_STATIC_ASSERT_CONCAT_(a, b)
-#define ZK_STATIC_ASSERT(cond) typedef char ZK_STATIC_ASSERT_CONCAT(zk_static_assert_, __LINE__)[(cond) ? 1 : -1]
-
-typedef struct
-{
-    u32 magic;
-    u16 version;
-    u16 size;
-    u32 seq;
-    s32 lng;
-    s32 lat;
-    s32 zone;
-    s32 cns;
-    s32 dimTp;
-    s32 polar;
-    s32 dlmt;
-    s32 ulmt;
-    s32 rti;
-    s32 rtPwr;
-    s32 di;
-    s32 sBri;
-    s32 sBriTm;
-    char svrIp[32];
-    s32 svrPort;
-    s32 uPeriod;
-    s32 hPeriod;
-    s32 tPeriod;
-    s32 almValue[17];       /* 告警触发阈值，索引=almId-10000 */
-    s32 almRecValue[17];    /* 告警恢复阈值 */
-    s32 almEn[17];          /* 告警使能标志 */
-    u32 checksum;
-} zk_property_flash_record_t;
-
-ZK_STATIC_ASSERT(sizeof(zk_property_flash_record_t) <= ZK_RUNTIME_FLASH_OFFSET);
-
-static u32 zk_property_flash_seq = 0;
 
 /*
  * 属性模块持有 zk_dev_cfg：协议核心只通过 getter 读取，属性写入先写
@@ -94,158 +43,152 @@ static void zk_property_copy_digits(char *dst, int dst_size, const char *src, in
     dst[out] = '\0';
 }
 
-static u16 zk_property_flash_checksum(zk_property_flash_record_t *record)
+static void zk_property_put_s32(u8 *payload, u16 offset, s32 value)
 {
-    return crc16_modbus_get((unsigned char *)record,
-                            sizeof(*record) - sizeof(record->checksum));
+    sys_persistent_put_u32_le(payload + offset, (u32)value);
 }
 
-static void zk_property_record_from_config(zk_property_flash_record_t *record,
-                                           const zk_device_config_t *config,
-                                           u32 seq)
+static s32 zk_property_get_s32(const u8 *payload, u16 offset)
 {
-    memset(record, 0, sizeof(*record));
-    record->magic = ZK_PROPERTY_FLASH_MAGIC;
-    record->version = ZK_PROPERTY_FLASH_VERSION;
-    record->size = (u16)sizeof(*record);
-    record->seq = seq;
-    record->lng = (s32)config->lng;
-    record->lat = (s32)config->lat;
-    record->zone = config->zone;
-    record->cns = config->cns;
-    record->dimTp = config->dimTp;
-    record->polar = config->polar;
-    record->dlmt = config->dlmt;
-    record->ulmt = config->ulmt;
-    record->rti = config->rti;
-    record->rtPwr = config->rtPwr;
-    record->di = config->di;
-    record->sBri = config->sBri;
-    record->sBriTm = config->sBriTm;
-    strncpy(record->svrIp, config->svrIp, sizeof(record->svrIp) - 1);
-    record->svrPort = config->svrPort;
-    record->uPeriod = config->uPeriod;
-    record->hPeriod = config->hPeriod;
-    record->tPeriod = config->tPeriod;
-    /* 保存告警阈值配置 */
-    memcpy(record->almValue, config->almValue, sizeof(record->almValue));
-    memcpy(record->almRecValue, config->almRecValue, sizeof(record->almRecValue));
-    memcpy(record->almEn, config->almEn, sizeof(record->almEn));
-    record->checksum = zk_property_flash_checksum(record);
+    return (s32)sys_persistent_get_u32_le(payload + offset);
 }
 
-static boolean_en zk_property_record_valid(zk_property_flash_record_t *record)
+static void zk_property_persistent_encode(const zk_device_config_t *config,
+                                          u8 payload[SYS_PERSISTENT_CONFIG_PROPERTY_LENGTH])
 {
-    if (record->magic != ZK_PROPERTY_FLASH_MAGIC ||
-        record->version != ZK_PROPERTY_FLASH_VERSION ||
-        record->size != sizeof(*record))
+    u8 index;
+
+    memset(payload, 0, SYS_PERSISTENT_CONFIG_PROPERTY_LENGTH);
+    zk_property_put_s32(payload, 0x000U, (s32)config->lng);
+    zk_property_put_s32(payload, 0x004U, (s32)config->lat);
+    zk_property_put_s32(payload, 0x008U, config->zone);
+    zk_property_put_s32(payload, 0x00CU, config->cns);
+    zk_property_put_s32(payload, 0x010U, config->dimTp);
+    zk_property_put_s32(payload, 0x014U, config->polar);
+    zk_property_put_s32(payload, 0x018U, config->dlmt);
+    zk_property_put_s32(payload, 0x01CU, config->ulmt);
+    zk_property_put_s32(payload, 0x020U, config->rti);
+    zk_property_put_s32(payload, 0x024U, config->rtPwr);
+    zk_property_put_s32(payload, 0x028U, config->di);
+    zk_property_put_s32(payload, 0x02CU, config->sBri);
+    zk_property_put_s32(payload, 0x030U, config->sBriTm);
+    memcpy(payload + 0x034U, config->svrIp, 32U);
+    zk_property_put_s32(payload, 0x054U, config->svrPort);
+    zk_property_put_s32(payload, 0x058U, config->uPeriod);
+    zk_property_put_s32(payload, 0x05CU, config->hPeriod);
+    zk_property_put_s32(payload, 0x060U, config->tPeriod);
+    for (index = 0U; index < 17U; ++index)
     {
-        return BOOL_FALSE;
+        zk_property_put_s32(payload, (u16)(0x064U + index * 4U),
+                            config->almValue[index]);
+        zk_property_put_s32(payload, (u16)(0x0A8U + index * 4U),
+                            config->almRecValue[index]);
+        zk_property_put_s32(payload, (u16)(0x0ECU + index * 4U),
+                            config->almEn[index]);
     }
-    return ((u16)record->checksum == zk_property_flash_checksum(record)) ? BOOL_TRUE : BOOL_FALSE;
 }
 
-static void zk_property_record_to_config(zk_device_config_t *config,
-                                         zk_property_flash_record_t *record)
+static void zk_property_persistent_decode(
+    zk_device_config_t *config,
+    const u8 payload[SYS_PERSISTENT_CONFIG_PROPERTY_LENGTH])
 {
-    config->lng = record->lng;
-    config->lat = record->lat;
-    config->zone = record->zone;
-    config->cns = record->cns;
-    config->dimTp = record->dimTp;
-    config->polar = record->polar;
-    config->dlmt = record->dlmt;
-    config->ulmt = record->ulmt;
-    config->rti = record->rti;
-    config->rtPwr = record->rtPwr;
-    config->di = record->di;
-    config->sBri = record->sBri;
-    config->sBriTm = record->sBriTm;
-    strncpy(config->svrIp, record->svrIp, sizeof(config->svrIp) - 1);
-    config->svrIp[sizeof(config->svrIp) - 1] = '\0';
-    config->svrPort = record->svrPort;
-    config->uPeriod = record->uPeriod;
-    config->hPeriod = record->hPeriod;
-    config->tPeriod = record->tPeriod;
-    /* 从Flash恢复告警阈值配置 */
-    memcpy(config->almValue, record->almValue, sizeof(config->almValue));
-    memcpy(config->almRecValue, record->almRecValue, sizeof(config->almRecValue));
-    memcpy(config->almEn, record->almEn, sizeof(config->almEn));
-}
+    u8 index;
 
-static boolean_en zk_property_flash_read_record(u32 addr,
-                                                zk_property_flash_record_t *record)
-{
-    hw_flash_read_bytes(addr, (u8 *)record, sizeof(*record));
-    return zk_property_record_valid(record);
-}
-
-static boolean_en zk_property_flash_write_record(u32 addr,
-                                                 zk_property_flash_record_t *record)
-{
-    hw_flash_write_bytes(addr, (u8 *)record, sizeof(*record));
-    return user_flash_check(addr, (u8 *)record, sizeof(*record));
+    config->lng = zk_property_get_s32(payload, 0x000U);
+    config->lat = zk_property_get_s32(payload, 0x004U);
+    config->zone = zk_property_get_s32(payload, 0x008U);
+    config->cns = zk_property_get_s32(payload, 0x00CU);
+    config->dimTp = zk_property_get_s32(payload, 0x010U);
+    config->polar = zk_property_get_s32(payload, 0x014U);
+    config->dlmt = zk_property_get_s32(payload, 0x018U);
+    config->ulmt = zk_property_get_s32(payload, 0x01CU);
+    config->rti = zk_property_get_s32(payload, 0x020U);
+    config->rtPwr = zk_property_get_s32(payload, 0x024U);
+    config->di = zk_property_get_s32(payload, 0x028U);
+    config->sBri = zk_property_get_s32(payload, 0x02CU);
+    config->sBriTm = zk_property_get_s32(payload, 0x030U);
+    memcpy(config->svrIp, payload + 0x034U, 32U);
+    config->svrIp[31] = '\0';
+    config->svrPort = zk_property_get_s32(payload, 0x054U);
+    config->uPeriod = zk_property_get_s32(payload, 0x058U);
+    config->hPeriod = zk_property_get_s32(payload, 0x05CU);
+    config->tPeriod = zk_property_get_s32(payload, 0x060U);
+    for (index = 0U; index < 17U; ++index)
+    {
+        config->almValue[index] =
+            zk_property_get_s32(payload, (u16)(0x064U + index * 4U));
+        config->almRecValue[index] =
+            zk_property_get_s32(payload, (u16)(0x0A8U + index * 4U));
+        config->almEn[index] =
+            zk_property_get_s32(payload, (u16)(0x0ECU + index * 4U));
+    }
 }
 
 static boolean_en zk_property_flash_load(zk_device_config_t *config)
 {
-    zk_property_flash_record_t main_record;
-    zk_property_flash_record_t backup_record;
-    zk_property_flash_record_t *selected;
-    boolean_en main_ok;
-    boolean_en backup_ok;
+    u8 payload[SYS_PERSISTENT_CONFIG_PROPERTY_LENGTH];
 
-    main_ok = zk_property_flash_read_record(ZK_PROPERTY_FLASH_MAIN_ADDR, &main_record);
-    backup_ok = zk_property_flash_read_record(ZK_PROPERTY_FLASH_BACKUP_ADDR, &backup_record);
-
-    /* 主/备页都有效时按 seq 选择最新记录，任一页损坏仍可从另一页恢复。 */
-    selected = NULL;
-    if (main_ok == BOOL_TRUE && backup_ok == BOOL_TRUE)
+    if (sys_persistent_config_read_section(
+            SYS_PERSISTENT_CONFIG_PROPERTY_OFFSET,
+            payload,
+            sizeof(payload),
+            NULL) != BOOL_TRUE)
     {
-        selected = (main_record.seq >= backup_record.seq) ? &main_record : &backup_record;
-    }
-    else if (main_ok == BOOL_TRUE)
-    {
-        selected = &main_record;
-    }
-    else if (backup_ok == BOOL_TRUE)
-    {
-        selected = &backup_record;
-    }
-
-    if (selected == NULL)
-    {
-        zk_property_flash_seq = 0;
         return BOOL_FALSE;
     }
-
-    zk_property_record_to_config(config, selected);
-    zk_property_flash_seq = selected->seq;
+    zk_property_persistent_decode(config, payload);
     return BOOL_TRUE;
 }
 
-static boolean_en zk_property_flash_store_config(const zk_device_config_t *config)
+static boolean_en zk_property_flash_store_config(
+    const zk_device_config_t *config)
 {
-    zk_property_flash_record_t record;
-    u32 next_seq;
-    boolean_en main_ok;
-    boolean_en backup_ok;
+    u8 payload[SYS_PERSISTENT_CONFIG_PROPERTY_LENGTH];
 
-    next_seq = zk_property_flash_seq + 1U;
-    if (next_seq == 0U)
-    {
-        next_seq = 1U;
-    }
+    zk_property_persistent_encode(config, payload);
+    return sys_persistent_config_update_section(
+        SYS_PERSISTENT_CONFIG_PROPERTY_OFFSET,
+        payload,
+        sizeof(payload),
+        NULL);
+}
 
-    zk_property_record_from_config(&record, config, next_seq);
-    main_ok = zk_property_flash_write_record(ZK_PROPERTY_FLASH_MAIN_ADDR, &record);
-    backup_ok = zk_property_flash_write_record(ZK_PROPERTY_FLASH_BACKUP_ADDR, &record);
-    if (main_ok == BOOL_TRUE || backup_ok == BOOL_TRUE)
+static boolean_en zk_property_flash_store_transaction(
+    const zk_device_config_t *config,
+    boolean_en store_property,
+    const u8 *factory_buf,
+    boolean_en store_factory)
+{
+    u8 property_payload[SYS_PERSISTENT_CONFIG_PROPERTY_LENGTH];
+    sys_persistent_section_update_st updates[2];
+    u8 update_count = 0U;
+
+    if (store_property == BOOL_TRUE)
     {
-        zk_property_flash_seq = next_seq;
-        return BOOL_TRUE;
+        if (config == NULL)
+        {
+            return BOOL_FALSE;
+        }
+        zk_property_persistent_encode(config, property_payload);
+        updates[update_count].offset = SYS_PERSISTENT_CONFIG_PROPERTY_OFFSET;
+        updates[update_count].data = property_payload;
+        updates[update_count].length = sizeof(property_payload);
+        ++update_count;
     }
-    return BOOL_FALSE;
+    if (store_factory == BOOL_TRUE)
+    {
+        if (factory_buf == NULL)
+        {
+            return BOOL_FALSE;
+        }
+        updates[update_count].offset = SYS_PERSISTENT_CONFIG_FACTORY_OFFSET;
+        updates[update_count].data = factory_buf;
+        updates[update_count].length = SYS_PERSISTENT_CONFIG_FACTORY_LENGTH;
+        ++update_count;
+    }
+    return (update_count != 0U) ?
+           sys_persistent_config_update_sections(updates, update_count, NULL) :
+           BOOL_TRUE;
 }
 
 static void zk_device_config_refresh_iccid_field(zk_device_config_t *config)
@@ -313,6 +256,19 @@ static void zk_device_config_set_defaults(zk_device_config_t *config)
     config->almValue[14] = 0;    config->almRecValue[14] = 0;    config->almEn[14] = 1; /* 10014-过功率（动态按SET_OUTCUR×Vo计算） */
     config->almValue[15] = 0;    config->almRecValue[15] = 0;    config->almEn[15] = 1; /* 10015-TC过温（动态取INNRE_TEMP_PRO） */
     config->almValue[16] = 0;    config->almRecValue[16] = 0;    config->almEn[16] = 1; /* 10016-控制器过温（动态取INNRE_TEMP_PRO） */
+}
+
+boolean_en zk_device_config_persistent_defaults(u8 *payload, u16 length)
+{
+    zk_device_config_t defaults;
+
+    if (payload == NULL || length != SYS_PERSISTENT_CONFIG_PROPERTY_LENGTH)
+    {
+        return BOOL_FALSE;
+    }
+    zk_device_config_set_defaults(&defaults);
+    zk_property_persistent_encode(&defaults, payload);
+    return BOOL_TRUE;
 }
 
 void zk_device_config_init(void)
@@ -668,24 +624,12 @@ static int zk_factory_current_validation_error(
     {
         case SYS_PRODUCT_CURRENT_VALID:
             return 0;
-        case SYS_PRODUCT_CURRENT_VOLTAGE_UNBOUND:
-            return ZK_FACTORY_BOUND_VOLTAGE_ERROR;
         case SYS_PRODUCT_CURRENT_ZERO:
             return ZK_FACTORY_CURRENT_ZERO_ERROR;
-        case SYS_PRODUCT_CURRENT_IV_LIMIT:
-            return ZK_FACTORY_CURRENT_IV_ERROR;
-        case SYS_PRODUCT_CURRENT_POWER_LIMIT:
-            return ZK_FACTORY_CURRENT_POWER_ERROR;
         case SYS_PRODUCT_CURRENT_HW_MAX:
             return ZK_FACTORY_CURRENT_HWMAX_ERROR;
-        case SYS_PRODUCT_CURRENT_ABSOLUTE_FAIL:
-            return ZK_FACTORY_CURRENT_ABSOLUTE_ERROR;
         case SYS_PRODUCT_CURRENT_CALIBRATION_ACTIVE:
             return ZK_FACTORY_CALIBRATION_ACTIVE_ERROR;
-        case SYS_PRODUCT_CURRENT_CALIBRATION_MAX_UNAVAILABLE:
-            return ZK_FACTORY_CALIBRATED_MAX_MISSING_ERROR;
-        case SYS_PRODUCT_CURRENT_EXCEEDS_CALIBRATED_MAX:
-            return ZK_FACTORY_EXCEEDS_CALIBRATED_MAX_ERROR;
         default:
             return ZK_FACTORY_PROFILE_MISMATCH_ERROR;
     }
@@ -730,7 +674,7 @@ static int zk_apply_factory_config(cJSON *factory, u8 *factory_buf, int *changed
         }
         if (value < 0 || value > 65535)
         {
-            return ZK_FACTORY_BOUND_VOLTAGE_ERROR;
+            return 3;
         }
         zk_factory_buf_set_u16be(factory_buf, 0x08, (u16)value);
         *changed = 1;
@@ -754,10 +698,12 @@ static int zk_apply_factory_config(cJSON *factory, u8 *factory_buf, int *changed
         {
             return err;
         }
-        if (value != (int)profile->hw_max_current_ma)
+        if (value <= 0 || value > (int)profile->hw_max_current_ma)
         {
-            return ZK_FACTORY_PROFILE_PROTECTED_ERROR;
+            return ZK_FACTORY_CURRENT_HWMAX_ERROR;
         }
+        zk_factory_buf_set_u16be(factory_buf, 0x12, (u16)value);
+        *changed = 1;
     }
     if (zk_json_pick_config_number(factory, "OUTPUT_CUR_SENSOR", &value, &err) == BOOL_TRUE)
     {
@@ -1315,17 +1261,24 @@ boolean_en zk_handle_property_write(cJSON *root, const zk_message_header_t *head
         return BOOL_TRUE;
     }
 
-    if (persist_needed != 0)
+    if (persist_needed != 0 || factory_changed != 0)
     {
-        if (zk_property_flash_store_config(&candidate) == BOOL_FALSE)
+        if (zk_property_flash_store_transaction(
+                &candidate,
+                (persist_needed != 0) ? BOOL_TRUE : BOOL_FALSE,
+                factory_buf,
+                (factory_changed != 0) ? BOOL_TRUE : BOOL_FALSE) == BOOL_FALSE)
         {
             zk_publish_simple_response(header, ZK_FLASH_SAVE_ERROR);
             return BOOL_TRUE;
         }
-        zk_dev_cfg = candidate;
-        if (reset_period_timers != 0)
+        if (persist_needed != 0)
         {
-            zk_reset_config_period_timers();
+            zk_dev_cfg = candidate;
+            if (reset_period_timers != 0)
+            {
+                zk_reset_config_period_timers();
+            }
         }
     }
     if (update_rtc != 0)
@@ -1336,7 +1289,6 @@ boolean_en zk_handle_property_write(cJSON *root, const zk_message_header_t *head
     {
         memcpy(sys_data.fa_Parambuf, factory_buf, sizeof(factory_buf));
         factory_user_load_data();
-        sys_data_store();
         sys_pwm_reload();
     }
 

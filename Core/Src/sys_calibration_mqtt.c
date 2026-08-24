@@ -1,104 +1,165 @@
 /*************************************************************
-程序功能：SV=cal隔离校准会话与结果回读接口
+程序功能：Calibration MQTT Protocol V3字符串合同
 开发环境：keil 5.37
 芯片型号：STM32F103CBT6/HK32F103CCT6A
-开发人员：黎长彩
-单位名称：广东东菱电源科技有限公司
-编辑日期：2026.8.4
 *************************************************************/
 #include "sys_calibration_mqtt.h"
 #include "zk_protocol_internal.h"
 #include "sys_calibration_service.h"
-#include "sys_calibration_storage.h"
 #include "sys_calibration_driver_protocol.h"
-#include "sys_calibration_curve.h"
 #include "sys_product_profile.h"
-#include "factory_user_data.h"
-#include "sys_calibration_safety.h"
-#include "sys_calibration_snapshot.h"
 #include "sys_bl0942.h"
-#include "sys_Vo_Io.h"
+#include "factory_user_data.h"
 #include "main.h"
 
-#include <stdio.h>
 #include <string.h>
 
-#define SYS_CALIBRATION_RAW_SCHEMA_VERSION 1U
-#define SYS_CALIBRATION_RAW_MAX_AGE_MS     500U
+#define SYS_CALIBRATION_MQTT_CAPABILITIES       0x00FFU
+#define SYS_CALIBRATION_MQTT_RAW_MAX_AGE_MS       500U
+#define SYS_CALIBRATION_MQTT_OP_TEXT_LENGTH         12U
 
-#define SYS_CALIBRATION_MQTT_PROTOCOL_VERSION 2U
-
-static const char *sys_calibration_mqtt_result_reason(
-    sys_calibration_result_en result)
+typedef enum
 {
-    static const char *const reason[] =
+    SYS_CALIBRATION_MQTT_OP_INVALID = 0,
+    SYS_CALIBRATION_MQTT_OP_CAP,
+    SYS_CALIBRATION_MQTT_OP_BEGIN,
+    SYS_CALIBRATION_MQTT_OP_HEARTBEAT,
+    SYS_CALIBRATION_MQTT_OP_SET_POINT,
+    SYS_CALIBRATION_MQTT_OP_RAW,
+    SYS_CALIBRATION_MQTT_OP_STAGE,
+    SYS_CALIBRATION_MQTT_OP_APPLY,
+    SYS_CALIBRATION_MQTT_OP_SET_OUTPUT,
+    SYS_CALIBRATION_MQTT_OP_COMMIT,
+    SYS_CALIBRATION_MQTT_OP_READ,
+    SYS_CALIBRATION_MQTT_OP_ABORT,
+    SYS_CALIBRATION_MQTT_OP_RELEASE,
+    SYS_CALIBRATION_MQTT_OP_DIAG
+} sys_calibration_mqtt_operation_en;
+
+typedef struct
+{
+    sys_calibration_mqtt_operation_en operation;
+    char operation_text[SYS_CALIBRATION_MQTT_OP_TEXT_LENGTH];
+    sys_calibration_result_en result;
+    sys_calibration_service_status_st status;
+    u32 session_id;
+    u32 seq;
+    u32 lease_ms;
+    u32 payload_crc32;
+    u32 generation;
+    u16 level;
+    u16 payload_length;
+    u8 percent;
+    boolean_en raw_valid;
+    boolean_en payload_valid;
+    boolean_en diag_valid;
+    sys_calibration_raw_st raw;
+    sys_bl0942_diag_st diag;
+    u8 payload[SYS_CALIBRATION_PAYLOAD_LENGTH];
+} sys_calibration_mqtt_response_st;
+
+typedef struct
+{
+    boolean_en valid;
+    u32 session_id;
+    u32 seq;
+    u32 parameter_digest;
+    sys_calibration_mqtt_operation_en operation;
+    sys_calibration_mqtt_response_st response;
+} sys_calibration_mqtt_replay_st;
+
+static sys_calibration_mqtt_replay_st _replay;
+/* MQTT dispatch is synchronous. Keeping the large request/response work area
+ * static avoids a roughly 1.1 KiB handler stack frame on the Cortex-M3. */
+static sys_calibration_mqtt_response_st _working_response;
+static sys_calibration_payload_st _working_decoded_payload;
+
+static const char *sys_calibration_mqtt_operation_text(
+    sys_calibration_mqtt_operation_en operation)
+{
+    static const char *const text[] =
     {
         "",
-        "NOT_AVAILABLE",
-        "INVALID_STATE",
-        "INVALID_ARGUMENT",
-        "LEASE_EXPIRED",
-        "BUSY",
-        "PROTOCOL_ERROR",
-        "SAFETY_NOT_READY",
-        "DUPLICATE",
-        "FLASH_GATED",
-        "HARDWARE_FAULT",
-        "CONTEXT_MISMATCH"
+        "CAP",
+        "BEGIN",
+        "HEARTBEAT",
+        "SET_POINT",
+        "RAW",
+        "STAGE",
+        "APPLY",
+        "SET_OUTPUT",
+        "COMMIT",
+        "READ",
+        "ABORT",
+        "RELEASE",
+        "DIAG"
     };
-    if ((u32)result >= (u32)(sizeof(reason) / sizeof(reason[0])))
+
+    if ((u32)operation >= (u32)(sizeof(text) / sizeof(text[0])))
     {
-        return "UNKNOWN_RESULT";
+        return "";
     }
-    return reason[(u32)result];
+    return text[(u32)operation];
 }
 
-static void sys_calibration_mqtt_add_profile_catalog(cJSON *dt)
+static sys_calibration_mqtt_operation_en sys_calibration_mqtt_parse_operation(
+    const char *text)
 {
-    static const u16 profile_ids[] = {50U, 75U, 100U, 150U, 200U, 240U};
-    static char profiles_csv[768U];
-    const sys_product_profile_st *profile;
-    u32 index;
-    u32 used = 0U;
-    int written;
+    sys_calibration_mqtt_operation_en operation;
 
-    if (dt == NULL)
+    if (text == NULL)
     {
-        return;
+        return SYS_CALIBRATION_MQTT_OP_INVALID;
     }
-    /* Keep CAPABILITIES inside the fixed 4 KiB cJSON pool / 2 KiB TX buffer. */
-    cJSON_AddStringToObject(dt, "profilesCodec", "PROFILE_CSV_V1");
-    profiles_csv[0] = '\0';
-    for (index = 0U; index <
-         (u32)(sizeof(profile_ids) / sizeof(profile_ids[0])); ++index)
+    for (operation = SYS_CALIBRATION_MQTT_OP_CAP;
+         operation <= SYS_CALIBRATION_MQTT_OP_DIAG;
+         operation = (sys_calibration_mqtt_operation_en)((u32)operation + 1U))
     {
-        profile = sys_product_profile_find(profile_ids[index]);
-        if (profile == NULL || profile->model_code == NULL ||
-            profile->block_code == NULL || used >= sizeof(profiles_csv))
+        if (strcmp(text, sys_calibration_mqtt_operation_text(operation)) == 0)
         {
-            profiles_csv[0] = '\0';
-            break;
+            return operation;
         }
-        written = snprintf(
-            &profiles_csv[used], sizeof(profiles_csv) - used,
-            "%s%u,%s,%u,%u,%u,%u,%u,%u,%u,%u,%s",
-            (index == 0U) ? "" : ";", profile->profile_id,
-            profile->model_code, profile->mid, profile->rated_power_w,
-            profile->default_runtime_current_ma, profile->rs3_mohm,
-            profile->hw_max_current_ma, profile->absolute_fail_current_ma,
-            profile->build_enabled == BOOL_TRUE ? 1U : 0U,
-            profile->nonzero_calibration_enabled == BOOL_TRUE ? 1U : 0U,
-            profile->block_code);
-        if (written < 0 || (u32)written >= sizeof(profiles_csv) - used)
-        {
-            profiles_csv[0] = '\0';
-            break;
-        }
-        used += (u32)written;
     }
-    cJSON_AddStringToObject(
-        dt, "profilesCsv",
-        profiles_csv[0] == '\0' ? "CATALOG_ENCODING_FAILED" : profiles_csv);
+    return SYS_CALIBRATION_MQTT_OP_INVALID;
+}
+
+static boolean_en sys_calibration_mqtt_is_sessionless(
+    sys_calibration_mqtt_operation_en operation)
+{
+    return (operation == SYS_CALIBRATION_MQTT_OP_CAP ||
+            operation == SYS_CALIBRATION_MQTT_OP_DIAG) ?
+           BOOL_TRUE : BOOL_FALSE;
+}
+
+static const char *sys_calibration_mqtt_expected_ct(
+    sys_calibration_mqtt_operation_en operation)
+{
+    if (operation == SYS_CALIBRATION_MQTT_OP_CAP ||
+        operation == SYS_CALIBRATION_MQTT_OP_RAW ||
+        operation == SYS_CALIBRATION_MQTT_OP_READ ||
+        operation == SYS_CALIBRATION_MQTT_OP_DIAG)
+    {
+        return ZK_CT_READ;
+    }
+    return ZK_CT_WRITE;
+}
+
+static void sys_calibration_mqtt_copy_operation(
+    char destination[SYS_CALIBRATION_MQTT_OP_TEXT_LENGTH],
+    const char *source)
+{
+    u8 index = 0U;
+
+    if (source != NULL)
+    {
+        while (source[index] != '\0' &&
+               index + 1U < SYS_CALIBRATION_MQTT_OP_TEXT_LENGTH)
+        {
+            destination[index] = source[index];
+            ++index;
+        }
+    }
+    destination[index] = '\0';
 }
 
 static boolean_en sys_calibration_mqtt_read_u32(
@@ -113,13 +174,13 @@ static boolean_en sys_calibration_mqtt_read_u32(
     {
         return BOOL_FALSE;
     }
-    node = cJSON_GetObjectItem(object, key);
+    node = cJSON_GetObjectItemCaseSensitive(object, key);
     if (node == NULL || !cJSON_IsNumber(node))
     {
         return BOOL_FALSE;
     }
     number = cJSON_GetNumberValue(node);
-    if (number < 0.0 || number > 4294967295.0 ||
+    if (number != number || number < 0.0 || number > 4294967295.0 ||
         number != (double)(u32)number)
     {
         return BOOL_FALSE;
@@ -144,906 +205,731 @@ static boolean_en sys_calibration_mqtt_read_u16(
     return BOOL_TRUE;
 }
 
-static boolean_en sys_calibration_mqtt_read_context(
-    cJSON *dt,
-    boolean_en require_table_crc,
-    sys_calibration_context_st *context)
-{
-    const sys_product_profile_st *profile = sys_product_profile_current();
-    cJSON *object;
-    cJSON *model_code;
-    u32 context_version;
-    u32 binding_crc32;
-
-    if (dt == NULL || context == NULL || profile == NULL)
-    {
-        return BOOL_FALSE;
-    }
-    object = cJSON_GetObjectItem(dt, "profileContext");
-    if (object == NULL || !cJSON_IsObject(object) ||
-        cJSON_GetObjectItem(dt, "profileId") != NULL ||
-        cJSON_GetObjectItem(dt, "modelCode") != NULL ||
-        cJSON_GetObjectItem(dt, "profileVersion") != NULL ||
-        cJSON_GetObjectItem(dt, "profileFingerprint") != NULL ||
-        cJSON_GetObjectItem(dt, "calibrationVoltage01V") != NULL ||
-        cJSON_GetObjectItem(dt, "configuredRatedCurrentMa") != NULL ||
-        cJSON_GetObjectItem(dt, "calibratedMaxCurrentMa") != NULL ||
-        cJSON_GetObjectItem(dt, "tableCrc32") != NULL ||
-        cJSON_GetObjectItem(object, "calibrationVoltageV") != NULL ||
-        sys_calibration_mqtt_read_u32(object, "contextVersion",
-                                     &context_version) != BOOL_TRUE ||
-        context_version != SYS_CALIBRATION_CONTEXT_VERSION ||
-        sys_calibration_mqtt_read_u16(object, "profileId",
-                                     &context->profile_id) != BOOL_TRUE ||
-        sys_calibration_mqtt_read_u16(object, "profileVersion",
-                                     &context->profile_version) != BOOL_TRUE ||
-        sys_calibration_mqtt_read_u32(object, "profileFingerprint",
-                                     &context->profile_fingerprint_crc32) != BOOL_TRUE ||
-        sys_calibration_mqtt_read_u16(object, "calibrationVoltage01V",
-                                     &context->calibration_voltage_01v) != BOOL_TRUE ||
-        sys_calibration_mqtt_read_u16(object, "configuredRatedCurrentMa",
-                                     &context->configured_rated_current_ma) != BOOL_TRUE ||
-        sys_calibration_mqtt_read_u16(object, "calibratedMaxCurrentMa",
-                                     &context->calibrated_max_current_ma) != BOOL_TRUE ||
-        sys_calibration_mqtt_read_u32(object, "tableCrc32",
-                                     &context->table_crc32) != BOOL_TRUE ||
-        sys_calibration_mqtt_read_u32(dt, "profileBindingCrc32",
-                                     &binding_crc32) != BOOL_TRUE)
-    {
-        return BOOL_FALSE;
-    }
-    model_code = cJSON_GetObjectItem(object, "modelCode");
-    if (model_code == NULL || !cJSON_IsString(model_code) ||
-        model_code->valuestring == NULL ||
-        strcmp(model_code->valuestring, profile->model_code) != 0 ||
-        context->configured_rated_current_ma != SET_OUTCUR)
-    {
-        return BOOL_FALSE;
-    }
-    return (sys_product_profile_context_validate(
-                context, require_table_crc) == BOOL_TRUE &&
-            binding_crc32 ==
-                sys_product_profile_context_binding_crc32(context)) ?
-           BOOL_TRUE : BOOL_FALSE;
-}
-
-static boolean_en sys_calibration_mqtt_read_payload(
+static boolean_en sys_calibration_mqtt_read_u8(
     cJSON *object,
     const char *key,
-    u8 *payload,
-    u16 capacity,
-    u16 *length)
+    u8 *value)
 {
-    cJSON *array;
-    cJSON *item;
-    const char *hex;
-    int count;
-    int index;
-    double number;
+    u32 number;
 
-    if (object == NULL || key == NULL || payload == NULL || length == NULL)
+    if (sys_calibration_mqtt_read_u32(object, key, &number) != BOOL_TRUE ||
+        number > 255U)
     {
         return BOOL_FALSE;
     }
-    array = cJSON_GetObjectItem(object, key);
-    if (array == NULL)
+    *value = (u8)number;
+    return BOOL_TRUE;
+}
+
+static boolean_en sys_calibration_mqtt_field_allowed(
+    sys_calibration_mqtt_operation_en operation,
+    const char *key)
+{
+    if (key == NULL)
     {
         return BOOL_FALSE;
     }
-    if (cJSON_IsString(array) && array->valuestring != NULL)
+    if (strcmp(key, "v") == 0 || strcmp(key, "op") == 0)
     {
-        u16 hex_length = (u16)strlen(array->valuestring);
-        u16 byte_length;
-        u16 hex_index;
-        u8 high;
-        u8 low;
-
-        if (hex_length == 0U || (hex_length & 1U) != 0U ||
-            hex_length > (u16)(capacity * 2U))
-        {
-            return BOOL_FALSE;
-        }
-        byte_length = (u16)(hex_length / 2U);
-        for (hex_index = 0U; hex_index < hex_length; hex_index += 2U)
-        {
-            hex = array->valuestring;
-            if (hex[hex_index] >= '0' && hex[hex_index] <= '9')
-            {
-                high = (u8)(hex[hex_index] - '0');
-            }
-            else if (hex[hex_index] >= 'A' && hex[hex_index] <= 'F')
-            {
-                high = (u8)(hex[hex_index] - 'A' + 10U);
-            }
-            else if (hex[hex_index] >= 'a' && hex[hex_index] <= 'f')
-            {
-                high = (u8)(hex[hex_index] - 'a' + 10U);
-            }
-            else
-            {
-                return BOOL_FALSE;
-            }
-            if (hex[hex_index + 1U] >= '0' && hex[hex_index + 1U] <= '9')
-            {
-                low = (u8)(hex[hex_index + 1U] - '0');
-            }
-            else if (hex[hex_index + 1U] >= 'A' &&
-                     hex[hex_index + 1U] <= 'F')
-            {
-                low = (u8)(hex[hex_index + 1U] - 'A' + 10U);
-            }
-            else if (hex[hex_index + 1U] >= 'a' &&
-                     hex[hex_index + 1U] <= 'f')
-            {
-                low = (u8)(hex[hex_index + 1U] - 'a' + 10U);
-            }
-            else
-            {
-                return BOOL_FALSE;
-            }
-            payload[hex_index / 2U] = (u8)((high << 4U) | low);
-        }
-        *length = byte_length;
         return BOOL_TRUE;
     }
-    if (!cJSON_IsArray(array))
+    if (sys_calibration_mqtt_is_sessionless(operation) != BOOL_TRUE &&
+        (strcmp(key, "sid") == 0 || strcmp(key, "seq") == 0))
+    {
+        return BOOL_TRUE;
+    }
+    switch (operation)
+    {
+        case SYS_CALIBRATION_MQTT_OP_BEGIN:
+            return (strcmp(key, "profileId") == 0 ||
+                    strcmp(key, "profileFingerprint") == 0 ||
+                    strcmp(key, "leaseMs") == 0) ? BOOL_TRUE : BOOL_FALSE;
+        case SYS_CALIBRATION_MQTT_OP_HEARTBEAT:
+            return strcmp(key, "leaseMs") == 0 ? BOOL_TRUE : BOOL_FALSE;
+        case SYS_CALIBRATION_MQTT_OP_SET_POINT:
+            return strcmp(key, "level") == 0 ? BOOL_TRUE : BOOL_FALSE;
+        case SYS_CALIBRATION_MQTT_OP_STAGE:
+            return (strcmp(key, "payloadLength") == 0 ||
+                    strcmp(key, "payloadCrc32") == 0 ||
+                    strcmp(key, "payloadHex") == 0) ? BOOL_TRUE : BOOL_FALSE;
+        case SYS_CALIBRATION_MQTT_OP_SET_OUTPUT:
+            return strcmp(key, "percent") == 0 ? BOOL_TRUE : BOOL_FALSE;
+        default:
+            return BOOL_FALSE;
+    }
+}
+
+static boolean_en sys_calibration_mqtt_request_fields_valid(
+    cJSON *dt,
+    sys_calibration_mqtt_operation_en operation)
+{
+    cJSON *node;
+    cJSON *previous;
+
+    if (dt == NULL)
     {
         return BOOL_FALSE;
     }
-    count = cJSON_GetArraySize(array);
-    if (count <= 0 || (u32)count > capacity)
+    for (node = dt->child; node != NULL; node = node->next)
     {
-        return BOOL_FALSE;
-    }
-    for (index = 0; index < count; ++index)
-    {
-        item = cJSON_GetArrayItem(array, index);
-        if (item == NULL || !cJSON_IsNumber(item))
+        if (sys_calibration_mqtt_field_allowed(
+                operation, node->string) != BOOL_TRUE)
         {
             return BOOL_FALSE;
         }
-        number = cJSON_GetNumberValue(item);
-        if (number < 0.0 || number > 255.0 ||
-            number != (double)(u8)number)
+        for (previous = dt->child; previous != node; previous = previous->next)
         {
-            return BOOL_FALSE;
+            if (previous->string != NULL && node->string != NULL &&
+                strcmp(previous->string, node->string) == 0)
+            {
+                return BOOL_FALSE;
+            }
         }
-        payload[index] = (u8)number;
     }
-    *length = (u16)count;
     return BOOL_TRUE;
 }
 
-static void sys_calibration_mqtt_add_profile_context(
-    cJSON *parent,
-    const char *key,
-    const sys_calibration_context_st *context)
+static u32 sys_calibration_mqtt_digest_byte(u32 digest, u8 value)
 {
-    const sys_product_profile_st *profile = sys_product_profile_current();
-    cJSON *object;
-
-    if (parent == NULL || key == NULL || context == NULL || profile == NULL)
-    {
-        return;
-    }
-    object = zk_cjson_create_tx_object("cal.profileContext");
-    if (object == NULL)
-    {
-        return;
-    }
-    cJSON_AddNumberToObject(object, "contextVersion",
-                            SYS_CALIBRATION_CONTEXT_VERSION);
-    cJSON_AddNumberToObject(object, "profileId", context->profile_id);
-    cJSON_AddStringToObject(object, "modelCode", profile->model_code);
-    cJSON_AddNumberToObject(object, "profileVersion",
-                            context->profile_version);
-    cJSON_AddNumberToObject(object, "profileFingerprint",
-                            context->profile_fingerprint_crc32);
-    cJSON_AddNumberToObject(object, "calibrationVoltage01V",
-                            context->calibration_voltage_01v);
-    cJSON_AddNumberToObject(object, "configuredRatedCurrentMa",
-                            context->configured_rated_current_ma);
-    cJSON_AddNumberToObject(object, "calibratedMaxCurrentMa",
-                            context->calibrated_max_current_ma);
-    cJSON_AddNumberToObject(object, "tableCrc32", context->table_crc32);
-    cJSON_AddItemToObject(parent, key, object);
+    digest ^= value;
+    return digest * 16777619UL;
 }
 
-static void sys_calibration_mqtt_add_payload(cJSON *readback)
+static u32 sys_calibration_mqtt_digest_u32(u32 digest, u32 value)
 {
-    u8 payload[SYS_CALIBRATION_DRIVER_TABLE_PAYLOAD_LENGTH];
-    char hex[SYS_CALIBRATION_DRIVER_TABLE_PAYLOAD_LENGTH * 2U + 1U];
-    static const char digits[] = "0123456789ABCDEF";
-    u16 length;
-    u16 index;
-
-    if (readback == NULL || sys_calibration_service_get_staged_payload(
-                          payload, sizeof(payload), &length) != BOOL_TRUE)
-    {
-        return;
-    }
-    for (index = 0U; index < length; ++index)
-    {
-        hex[index * 2U] = digits[payload[index] >> 4U];
-        hex[index * 2U + 1U] = digits[payload[index] & 0x0FU];
-    }
-    hex[length * 2U] = '\0';
-    cJSON_AddStringToObject(readback, "payloadHex", hex);
+    digest = sys_calibration_mqtt_digest_byte(digest, (u8)value);
+    digest = sys_calibration_mqtt_digest_byte(digest, (u8)(value >> 8U));
+    digest = sys_calibration_mqtt_digest_byte(digest, (u8)(value >> 16U));
+    return sys_calibration_mqtt_digest_byte(digest, (u8)(value >> 24U));
 }
 
-static void sys_calibration_mqtt_add_status(
-    cJSON *dt,
-    const sys_calibration_service_status_st *status,
-    boolean_en include_payload)
+static u32 sys_calibration_mqtt_parameter_digest(
+    sys_calibration_mqtt_operation_en operation,
+    u32 first,
+    u32 second,
+    u32 third)
 {
-    cJSON *readback;
-    sys_calibration_context_st committed_context;
+    u32 digest = 2166136261UL;
 
-    if (dt == NULL || status == NULL)
-    {
-        return;
-    }
-    readback = zk_cjson_create_tx_object("cal.readback");
-    if (readback == NULL)
-    {
-        return;
-    }
-    cJSON_AddNumberToObject(readback, "state", status->state);
-    cJSON_AddNumberToObject(readback, "sessionId", status->session_id);
-    cJSON_AddNumberToObject(readback, "leaseDeadlineMs", status->lease_deadline_ms);
-    cJSON_AddNumberToObject(readback, "lastSeq", status->last_request_seq);
-    cJSON_AddNumberToObject(readback, "currentLevel", status->current_level);
-    cJSON_AddNumberToObject(readback, "payloadLength", status->staged_length);
-    cJSON_AddNumberToObject(
-        readback, "tableCrc32",
-        status->context_valid == BOOL_TRUE ? status->context.table_crc32 : 0U);
-    cJSON_AddNumberToObject(readback, "committedGeneration",
-                            status->committed_generation);
-    cJSON_AddBoolToObject(readback, "staged", status->staged_valid == BOOL_TRUE);
-    cJSON_AddBoolToObject(readback, "committed",
-                          status->committed_valid == BOOL_TRUE);
-    cJSON_AddBoolToObject(readback, "safetyReady", status->safety_ready == BOOL_TRUE);
-    cJSON_AddBoolToObject(readback, "bootInhibit",
-                          status->boot_inhibit_active == BOOL_TRUE);
-    cJSON_AddBoolToObject(readback, "persistenceReady",
-                          status->persistence_ready == BOOL_TRUE);
-    cJSON_AddBoolToObject(readback, "commitAvailable",
-                          status->commit_available == BOOL_TRUE);
-    cJSON_AddBoolToObject(readback, "contextValid",
-                          status->context_valid == BOOL_TRUE);
-    if (status->context_valid == BOOL_TRUE)
-    {
-        sys_calibration_mqtt_add_profile_context(
-            readback, "profileContext", &status->context);
-        cJSON_AddNumberToObject(
-            readback, "profileBindingCrc32",
-            sys_product_profile_context_binding_crc32(&status->context));
-    }
-    if (sys_calibration_service_get_committed_context(
-            &committed_context) == BOOL_TRUE)
-    {
-        cJSON_AddNumberToObject(readback, "committedTableCrc32",
-                                committed_context.table_crc32);
-        cJSON_AddNumberToObject(
-            readback, "committedProfileBindingCrc32",
-            sys_product_profile_context_binding_crc32(&committed_context));
-    }
-    else
-    {
-        cJSON_AddNumberToObject(readback, "committedTableCrc32", 0U);
-        cJSON_AddNumberToObject(readback,
-                                "committedProfileBindingCrc32", 0U);
-    }
-    if (include_payload == BOOL_TRUE)
-    {
-        sys_calibration_mqtt_add_payload(readback);
-    }
-    cJSON_AddItemToObject(dt, "readback", readback);
+    digest = sys_calibration_mqtt_digest_u32(digest, (u32)operation);
+    digest = sys_calibration_mqtt_digest_u32(digest, first);
+    digest = sys_calibration_mqtt_digest_u32(digest, second);
+    return sys_calibration_mqtt_digest_u32(digest, third);
 }
 
-static boolean_en sys_calibration_mqtt_add_raw_readback(
-    cJSON *dt,
+static void sys_calibration_mqtt_response_init(
+    sys_calibration_mqtt_response_st *response,
+    sys_calibration_mqtt_operation_en operation,
+    const char *operation_text,
+    u32 session_id,
+    u32 seq,
     const sys_calibration_service_status_st *status)
 {
-    cJSON *readback;
-
-    if (dt == NULL || status == NULL)
+    memset(response, 0, sizeof(*response));
+    response->operation = operation;
+    response->session_id = session_id;
+    response->seq = seq;
+    response->result = SYS_CALIBRATION_RESULT_BAD_REQUEST;
+    sys_calibration_mqtt_copy_operation(response->operation_text,
+                                        operation_text);
+    if (status != NULL)
     {
-        return BOOL_FALSE;
+        response->status = *status;
     }
-    readback = zk_cjson_create_tx_object("cal.raw.readback");
-    if (readback == NULL)
-    {
-        return BOOL_FALSE;
-    }
-    cJSON_AddNumberToObject(readback, "sessionId", status->session_id);
-    cJSON_AddNumberToObject(readback, "lastSeq", status->last_request_seq);
-    cJSON_AddNumberToObject(readback, "currentLevel", status->current_level);
-    cJSON_AddItemToObject(dt, "readback", readback);
-    return (zk_cjson_tx_allocation_ok() == BOOL_TRUE &&
-            cJSON_GetObjectItem(dt, "readback") == readback) ?
-           BOOL_TRUE : BOOL_FALSE;
 }
 
-static boolean_en sys_calibration_mqtt_raw_snapshot_ready(
-    u32 now_ms,
-    const sys_calibration_service_status_st *status,
-    sys_calibration_snapshot_aggregate_st *snapshot)
-{
-    if (status == NULL || snapshot == NULL)
-    {
-        return BOOL_FALSE;
-    }
-    /* Meter diagnostics are best-effort; ADC/PWM are the required RAW sources. */
-    (void)sys_calibration_snapshot_read_aggregate(now_ms, snapshot);
-    if (status->current_level > 200U ||
-        (status->current_level % 2U) != 0U ||
-        (snapshot->valid_flags & SYS_CALIBRATION_AGGREGATE_ADC_PRESENT) == 0U ||
-        (snapshot->valid_flags & SYS_CALIBRATION_AGGREGATE_PWM_PRESENT) == 0U ||
-        (snapshot->adc.valid_flags & SYS_CALIBRATION_ADC_SAMPLE_VALID) == 0U ||
-        (snapshot->pwm.valid_flags & SYS_CALIBRATION_PWM_SAMPLE_VALID) == 0U ||
-        snapshot->adc_age_ms > SYS_CALIBRATION_RAW_MAX_AGE_MS ||
-        snapshot->pwm.requested_percent != (status->current_level / 2U))
-    {
-        return BOOL_FALSE;
-    }
-    return BOOL_TRUE;
-}
-
-static boolean_en sys_calibration_mqtt_add_raw(
+static boolean_en sys_calibration_mqtt_add_common_response(
     cJSON *dt,
-    const sys_calibration_snapshot_aggregate_st *snapshot)
+    const sys_calibration_mqtt_response_st *response)
 {
-    cJSON *raw;
-    cJSON *meter;
-    cJSON *adc;
-    cJSON *pwm;
-
-    if (dt == NULL || snapshot == NULL)
+    if (dt == NULL || response == NULL)
     {
         return BOOL_FALSE;
     }
-    raw = zk_cjson_create_tx_object("cal.raw");
-    meter = zk_cjson_create_tx_object("cal.raw.meter");
-    adc = zk_cjson_create_tx_object("cal.raw.adc");
-    pwm = zk_cjson_create_tx_object("cal.raw.pwm");
-    if (raw == NULL || meter == NULL || adc == NULL || pwm == NULL)
+    cJSON_AddNumberToObject(dt, "v", SYS_CALIBRATION_PROTOCOL_VERSION);
+    cJSON_AddStringToObject(dt, "op", response->operation_text);
+    if (sys_calibration_mqtt_is_sessionless(response->operation) != BOOL_TRUE)
     {
-        cJSON_Delete(raw);
-        cJSON_Delete(meter);
-        cJSON_Delete(adc);
-        cJSON_Delete(pwm);
-        return BOOL_FALSE;
+        cJSON_AddNumberToObject(dt, "sid", response->session_id);
+        cJSON_AddNumberToObject(dt, "seq", response->seq);
     }
-    cJSON_AddNumberToObject(raw, "schemaVersion",
-                            SYS_CALIBRATION_RAW_SCHEMA_VERSION);
-    cJSON_AddBoolToObject(raw, "available", 1);
-    cJSON_AddNumberToObject(raw, "validFlags", snapshot->valid_flags);
-    cJSON_AddNumberToObject(raw, "meterAdcSkewMs", snapshot->meter_adc_skew_ms);
-    cJSON_AddNumberToObject(raw, "meterPwmSkewMs", snapshot->meter_pwm_skew_ms);
-    cJSON_AddNumberToObject(raw, "inputVoltage01V", ac_voltage_8209);
-    cJSON_AddNumberToObject(raw, "inputCurrentMa", Z_ac_current);
-    cJSON_AddNumberToObject(raw, "inputPower001W", ac_powerpa);
-    cJSON_AddNumberToObject(raw, "outputVoltage01V", Vo_value);
-    cJSON_AddNumberToObject(raw, "outputCurrentMa", Io_value);
-    cJSON_AddNumberToObject(raw, "outputPower01W", Po_value);
-    cJSON_AddNumberToObject(meter, "seq", snapshot->meter.seq);
-    cJSON_AddNumberToObject(meter, "ageMs", snapshot->meter_age_ms);
-    cJSON_AddNumberToObject(meter, "validFlags", snapshot->meter.valid_flags);
-    cJSON_AddNumberToObject(meter, "iRmsRaw", snapshot->meter.i_rms_raw);
-    cJSON_AddNumberToObject(meter, "vRmsRaw", snapshot->meter.v_rms_raw);
-    cJSON_AddNumberToObject(meter, "iFastRmsRaw", snapshot->meter.i_fast_rms_raw);
-    cJSON_AddNumberToObject(meter, "wattRaw", snapshot->meter.watt_raw);
-    cJSON_AddNumberToObject(meter, "cfCntRaw", snapshot->meter.cf_cnt_raw);
-    cJSON_AddNumberToObject(meter, "freqRaw", snapshot->meter.freq_raw);
-    cJSON_AddNumberToObject(meter, "statusRaw", snapshot->meter.status_raw);
-    cJSON_AddNumberToObject(meter, "frameErrors", bl0942_checksum_error_count);
-    cJSON_AddNumberToObject(meter, "timeoutErrors", bl0942_timeout_count);
-    cJSON_AddNumberToObject(meter, "uartErrors", bl0942_uart_error_count);
-    cJSON_AddNumberToObject(meter, "compatFrames", bl0942_compat_frame_count);
-    cJSON_AddNumberToObject(adc, "seq", snapshot->adc.seq);
-    cJSON_AddNumberToObject(adc, "ageMs", snapshot->adc_age_ms);
-    cJSON_AddNumberToObject(adc, "validFlags", snapshot->adc.valid_flags);
-    cJSON_AddNumberToObject(adc, "ntcRaw", snapshot->adc.ntc_raw);
-    cJSON_AddNumberToObject(adc, "voutRaw", snapshot->adc.vout_raw);
-    cJSON_AddNumberToObject(adc, "leakRaw", snapshot->adc.leak_raw);
-    cJSON_AddNumberToObject(adc, "ioutRaw", snapshot->adc.iout_raw);
-    cJSON_AddNumberToObject(pwm, "seq", snapshot->pwm.seq);
-    cJSON_AddNumberToObject(pwm, "ageMs", snapshot->pwm_age_ms);
-    cJSON_AddNumberToObject(pwm, "requestedPercent",
-                            snapshot->pwm.requested_percent);
-    cJSON_AddNumberToObject(pwm, "protectedPercent",
-                            snapshot->pwm.protected_percent);
-    cJSON_AddNumberToObject(pwm, "logicalPwm", snapshot->pwm.logical_pwm);
-    cJSON_AddNumberToObject(pwm, "ccr", snapshot->pwm.ccr);
-    cJSON_AddNumberToObject(pwm, "ocoOn", snapshot->pwm.oco_on);
-    cJSON_AddItemToObject(raw, "meter", meter);
-    cJSON_AddItemToObject(raw, "adc", adc);
-    cJSON_AddItemToObject(raw, "pwm", pwm);
-    cJSON_AddItemToObject(dt, "raw", raw);
-    return (zk_cjson_tx_allocation_ok() == BOOL_TRUE &&
-            cJSON_GetObjectItem(dt, "raw") == raw) ? BOOL_TRUE : BOOL_FALSE;
+    cJSON_AddNumberToObject(dt, "rc", response->result);
+    cJSON_AddNumberToObject(dt, "st", response->status.state);
+    return zk_cjson_tx_allocation_ok();
 }
 
-static void sys_calibration_mqtt_add_active_profile(
+static void sys_calibration_mqtt_add_cap(
     cJSON *dt,
-    const sys_product_profile_st *profile,
-    u16 maximum_current_ma,
-    u16 calibrated_max_current_ma)
+    const sys_calibration_mqtt_response_st *response)
 {
-    cJSON *active;
+    const sys_product_profile_st *profile = sys_product_profile_current();
+    boolean_en has_calibration = response->status.committed_valid;
 
-    if (dt == NULL || profile == NULL)
+    cJSON_AddNumberToObject(dt, "profileId", profile->profile_id);
+    cJSON_AddNumberToObject(dt, "profileVersion", profile->profile_version);
+    cJSON_AddNumberToObject(dt, "profileFingerprint", profile->fingerprint_crc32);
+    cJSON_AddNumberToObject(dt, "mid", profile->mid);
+    cJSON_AddNumberToObject(dt, "hardwareRevision", profile->hardware_revision);
+    cJSON_AddNumberToObject(dt, "ratedPowerW", profile->rated_power_w);
+    cJSON_AddNumberToObject(dt, "rs3Mohm", profile->rs3_mohm);
+    cJSON_AddNumberToObject(dt, "hardwareMaxMa", profile->hw_max_current_ma);
+    cJSON_AddNumberToObject(dt, "hwMaxMa", HWMAX_OUTCUR);
+    cJSON_AddNumberToObject(dt, "setOutcurMa", SET_OUTCUR);
+    cJSON_AddNumberToObject(dt, "pwmFullScale", profile->pwm_full_scale);
+    cJSON_AddNumberToObject(dt, "pwmPolarity", profile->pwm_polarity);
+    cJSON_AddNumberToObject(dt, "ocoHardwareRevision",
+                            profile->oco_hardware_revision);
+    cJSON_AddNumberToObject(dt, "pointCount", SYS_CALIBRATION_POINT_COUNT);
+    cJSON_AddNumberToObject(dt, "levelStep", SYS_CALIBRATION_LEVEL_STEP);
+    cJSON_AddNumberToObject(dt, "payloadVersion",
+                            SYS_CALIBRATION_PAYLOAD_VERSION);
+    cJSON_AddNumberToObject(dt, "storageFormatVersion", 4U);
+    cJSON_AddNumberToObject(dt, "rawMaxAgeMs",
+                            SYS_CALIBRATION_MQTT_RAW_MAX_AGE_MS);
+    cJSON_AddNumberToObject(dt, "capabilities",
+                            SYS_CALIBRATION_MQTT_CAPABILITIES);
+    cJSON_AddNumberToObject(dt, "hasCalibration",
+                            has_calibration == BOOL_TRUE ? 1U : 0U);
+    cJSON_AddNumberToObject(
+        dt, "generation",
+        has_calibration == BOOL_TRUE ? response->status.committed_generation : 0U);
+    cJSON_AddNumberToObject(
+        dt, "payloadLength",
+        has_calibration == BOOL_TRUE ? response->status.committed_length : 0U);
+    cJSON_AddNumberToObject(
+        dt, "payloadCrc32",
+        has_calibration == BOOL_TRUE ? response->status.committed_crc32 : 0U);
+    cJSON_AddNumberToObject(dt, "safetyReady",
+                            response->status.safety_ready == BOOL_TRUE ? 1U : 0U);
+    cJSON_AddNumberToObject(
+        dt, "persistenceReady",
+        response->status.persistence_ready == BOOL_TRUE ? 1U : 0U);
+    cJSON_AddNumberToObject(dt, "faultFlags", response->status.fault_flags);
+}
+
+static void sys_calibration_mqtt_add_raw(
+    cJSON *dt,
+    const sys_calibration_raw_st *raw)
+{
+    cJSON_AddNumberToObject(dt, "level", raw->level);
+    cJSON_AddNumberToObject(dt, "actualPwm", raw->actual_pwm);
+    cJSON_AddNumberToObject(dt, "ocoRaw", raw->oco_raw);
+    cJSON_AddNumberToObject(dt, "blVoltageRaw", raw->bl_voltage_raw);
+    cJSON_AddNumberToObject(dt, "blCurrentRaw", raw->bl_current_raw);
+    cJSON_AddNumberToObject(dt, "blPowerRaw", raw->bl_power_raw);
+    cJSON_AddNumberToObject(dt, "correctedOutputCurrentMa",
+                            raw->corrected_output_current_ma);
+    cJSON_AddNumberToObject(dt, "correctedInputVoltage01V",
+                            raw->corrected_input_voltage_01v);
+    cJSON_AddNumberToObject(dt, "correctedInputCurrentMa",
+                            raw->corrected_input_current_ma);
+    cJSON_AddNumberToObject(dt, "correctedInputPower01W",
+                            raw->corrected_input_power_01w);
+    cJSON_AddNumberToObject(dt, "outputVoltage01V", raw->output_voltage_01v);
+    cJSON_AddNumberToObject(dt, "blAgeMs", raw->bl_age_ms);
+    cJSON_AddNumberToObject(dt, "validFlags", raw->valid_flags);
+    cJSON_AddNumberToObject(dt, "faultFlags", raw->fault_flags);
+}
+
+static void sys_calibration_mqtt_add_diag(
+    cJSON *dt,
+    const sys_bl0942_diag_st *diag)
+{
+    cJSON_AddNumberToObject(dt, "validFrameCount", diag->valid_frame_count);
+    cJSON_AddNumberToObject(dt, "oreCount", diag->ore_count);
+    cJSON_AddNumberToObject(dt, "feCount", diag->fe_count);
+    cJSON_AddNumberToObject(dt, "neCount", diag->ne_count);
+    cJSON_AddNumberToObject(dt, "timeoutCount", diag->timeout_count);
+    cJSON_AddNumberToObject(dt, "uartErrorCount", diag->uart_error_count);
+    cJSON_AddNumberToObject(dt, "recoveryCount", diag->recovery_count);
+    cJSON_AddNumberToObject(dt, "recoveryFailCount", diag->recovery_fail_count);
+    cJSON_AddNumberToObject(dt, "lastValidFrameTick",
+                            diag->last_valid_frame_tick);
+    cJSON_AddNumberToObject(dt, "blAgeMs", diag->bl_age_ms);
+    cJSON_AddNumberToObject(dt, "blFresh", diag->bl_fresh);
+    cJSON_AddNumberToObject(dt, "uartGState", diag->uart_g_state);
+    cJSON_AddNumberToObject(dt, "uartRxState", diag->uart_rx_state);
+    cJSON_AddNumberToObject(dt, "uartErrorCode", diag->uart_error_code);
+}
+
+static boolean_en sys_calibration_mqtt_add_operation_response(
+    cJSON *dt,
+    const sys_calibration_mqtt_response_st *response)
+{
+    char payload_hex[SYS_CALIBRATION_PAYLOAD_HEX_LENGTH + 1U];
+
+    if (response->operation == SYS_CALIBRATION_MQTT_OP_CAP)
     {
-        return;
+        sys_calibration_mqtt_add_cap(dt, response);
     }
-    active = zk_cjson_create_tx_object("cal.activeProfile");
-    if (active == NULL)
+    else if (response->operation == SYS_CALIBRATION_MQTT_OP_DIAG &&
+             response->result == SYS_CALIBRATION_RESULT_OK &&
+             response->diag_valid == BOOL_TRUE)
     {
-        return;
+        sys_calibration_mqtt_add_diag(dt, &response->diag);
     }
-    cJSON_AddNumberToObject(active, "profileId", profile->profile_id);
-    cJSON_AddStringToObject(active, "modelCode", profile->model_code);
-    cJSON_AddNumberToObject(active, "profileVersion",
-                            profile->profile_version);
-    cJSON_AddNumberToObject(active, "profileFingerprint",
-                            profile->fingerprint_crc32);
-    cJSON_AddNumberToObject(active, "mid", profile->mid);
-    cJSON_AddNumberToObject(active, "ratedPowerW", profile->rated_power_w);
-    cJSON_AddNumberToObject(active, "rs3Mohm", profile->rs3_mohm);
-    cJSON_AddNumberToObject(active, "hwMaxCurrentMa",
-                            profile->hw_max_current_ma);
-    cJSON_AddNumberToObject(active, "absoluteFailCurrentMa",
-                            profile->absolute_fail_current_ma);
-    cJSON_AddNumberToObject(active, "boundOutputVoltage01V",
-                            BOUND_OUTPUT_VOLTAGE_01V);
-    cJSON_AddNumberToObject(active, "maxCurrentAtVoltageMa",
-                            maximum_current_ma);
-    cJSON_AddNumberToObject(active, "configuredRatedCurrentMa", SET_OUTCUR);
-    cJSON_AddNumberToObject(active, "calibratedMaxCurrentMa",
-                            calibrated_max_current_ma);
-    cJSON_AddBoolToObject(active, "buildEnabled",
-                          profile->build_enabled == BOOL_TRUE);
-    cJSON_AddItemToObject(dt, "activeProfile", active);
+    else if (response->operation == SYS_CALIBRATION_MQTT_OP_RAW &&
+             (response->result == SYS_CALIBRATION_RESULT_OK ||
+              response->result == SYS_CALIBRATION_RESULT_DATA_STALE ||
+              response->result == SYS_CALIBRATION_RESULT_HARDWARE_FAULT) &&
+             response->raw_valid == BOOL_TRUE)
+    {
+        sys_calibration_mqtt_add_raw(dt, &response->raw);
+    }
+    else if (response->result == SYS_CALIBRATION_RESULT_OK)
+    {
+        switch (response->operation)
+        {
+            case SYS_CALIBRATION_MQTT_OP_BEGIN:
+                cJSON_AddNumberToObject(dt, "profileId",
+                    sys_product_profile_current()->profile_id);
+                cJSON_AddNumberToObject(dt, "profileFingerprint",
+                    sys_product_profile_current()->fingerprint_crc32);
+                cJSON_AddNumberToObject(dt, "leaseMs", response->lease_ms);
+                break;
+            case SYS_CALIBRATION_MQTT_OP_HEARTBEAT:
+                cJSON_AddNumberToObject(dt, "leaseMs", response->lease_ms);
+                break;
+            case SYS_CALIBRATION_MQTT_OP_SET_POINT:
+                cJSON_AddNumberToObject(dt, "level", response->status.current_level);
+                cJSON_AddNumberToObject(dt, "actualPwm", response->status.actual_pwm);
+                break;
+            case SYS_CALIBRATION_MQTT_OP_STAGE:
+            case SYS_CALIBRATION_MQTT_OP_APPLY:
+                cJSON_AddNumberToObject(dt, "payloadLength",
+                                        response->payload_length);
+                cJSON_AddNumberToObject(dt, "payloadCrc32",
+                                        response->payload_crc32);
+                break;
+            case SYS_CALIBRATION_MQTT_OP_SET_OUTPUT:
+                cJSON_AddNumberToObject(dt, "percent", response->percent);
+                cJSON_AddNumberToObject(dt, "actualPwm", response->status.actual_pwm);
+                break;
+            case SYS_CALIBRATION_MQTT_OP_COMMIT:
+                cJSON_AddNumberToObject(dt, "generation", response->generation);
+                cJSON_AddNumberToObject(dt, "payloadLength",
+                                        response->payload_length);
+                cJSON_AddNumberToObject(dt, "payloadCrc32",
+                                        response->payload_crc32);
+                break;
+            case SYS_CALIBRATION_MQTT_OP_READ:
+                if (response->payload_valid != BOOL_TRUE ||
+                    sys_calibration_payload_hex_encode(
+                        response->payload, response->payload_length,
+                        payload_hex, (u16)sizeof(payload_hex)) != BOOL_TRUE)
+                {
+                    return BOOL_FALSE;
+                }
+                cJSON_AddNumberToObject(dt, "generation", response->generation);
+                cJSON_AddNumberToObject(dt, "payloadLength",
+                                        response->payload_length);
+                cJSON_AddNumberToObject(dt, "payloadCrc32",
+                                        response->payload_crc32);
+                cJSON_AddStringToObject(dt, "payloadHex", payload_hex);
+                break;
+            default:
+                break;
+        }
+    }
+    return zk_cjson_tx_allocation_ok();
 }
 
 static int sys_calibration_mqtt_send_response(
-    const zk_message_header_t *request,
-    const char *operation,
-    sys_calibration_result_en result,
-    const sys_calibration_service_status_st *status,
-    boolean_en capabilities,
-    u32 seq)
+    const zk_message_header_t *header,
+    const sys_calibration_mqtt_response_st *response)
 {
-    const sys_product_profile_st *profile = sys_product_profile_current();
-    u16 maximum_current_ma = 0U;
-    u16 calibrated_max_current_ma = 0U;
-    boolean_en runtime_profile_valid;
-    sys_product_current_validation_en envelope_result;
-    sys_product_current_validation_en runtime_current_result;
-    boolean_en first_calibration_allowed;
-    boolean_en runtime_nonzero_allowed;
-    boolean_en calibration_nonzero_allowed;
-    boolean_en commit_available;
-    const char *block_code;
     cJSON *root;
     cJSON *dt;
-    sys_calibration_snapshot_aggregate_st raw_snapshot;
-    boolean_en raw_operation;
-    int send_result;
+    int result;
 
-    raw_operation = (operation != NULL && strcmp(operation, "RAW") == 0) ?
-                    BOOL_TRUE : BOOL_FALSE;
-    if (raw_operation == BOOL_TRUE && result == SYS_CALIBRATION_RESULT_OK &&
-        sys_calibration_mqtt_raw_snapshot_ready(
-            HAL_GetTick(), status, &raw_snapshot) != BOOL_TRUE)
-    {
-        result = SYS_CALIBRATION_RESULT_NOT_AVAILABLE;
-    }
-
-rebuild_response:
-    root = zk_create_root_from_header(request, 1, (int)result);
+    root = zk_create_root_from_header(header, 1, (int)response->result);
     if (root == NULL)
     {
         return -1;
     }
-    dt = zk_cjson_create_tx_object("cal.DT");
+    dt = zk_cjson_create_tx_object("cal.v3.DT");
     if (dt == NULL)
     {
         cJSON_Delete(root);
         return -1;
     }
     cJSON_AddItemToObject(root, "DT", dt);
-    cJSON_AddStringToObject(dt, "op", operation == NULL ? "" : operation);
-    cJSON_AddNumberToObject(dt, "seq", seq);
-    cJSON_AddNumberToObject(dt, "result", (int)result);
-    cJSON_AddBoolToObject(dt, "ack", result == SYS_CALIBRATION_RESULT_OK);
-    runtime_profile_valid = sys_product_profile_runtime_matches(
-        MID, OUTPUT_CUR_SENSOR, HWMAX_OUTCUR);
-    envelope_result = sys_product_profile_validate_runtime_current(
-        profile, BOUND_OUTPUT_VOLTAGE_01V, SET_OUTCUR);
-    runtime_current_result = factory_user_validate_runtime_current(
-        BOUND_OUTPUT_VOLTAGE_01V, SET_OUTCUR);
-    (void)sys_product_profile_compute_i100_ma(
-        profile, BOUND_OUTPUT_VOLTAGE_01V, &maximum_current_ma);
-    (void)sys_calibration_service_get_calibrated_max_current_ma(
-        BOUND_OUTPUT_VOLTAGE_01V, &calibrated_max_current_ma);
-    cJSON_AddNumberToObject(dt, "protocolVersion",
-                            SYS_CALIBRATION_MQTT_PROTOCOL_VERSION);
-    if (capabilities == BOOL_TRUE)
+    if (sys_calibration_mqtt_add_common_response(dt, response) != BOOL_TRUE ||
+        sys_calibration_mqtt_add_operation_response(dt, response) != BOOL_TRUE ||
+        zk_cjson_tx_allocation_ok() != BOOL_TRUE)
     {
-        commit_available =
-            (SYS_CALIBRATION_FLASH_COMMIT_ENABLED != 0U &&
-             runtime_profile_valid == BOOL_TRUE && status != NULL &&
-             status->commit_available == BOOL_TRUE &&
-             status->persistence_ready == BOOL_TRUE) ? BOOL_TRUE : BOOL_FALSE;
-        first_calibration_allowed =
-            (SYS_CALIBRATION_NONZERO_OUTPUT_ENABLED != 0U &&
-             sys_product_profile_is_complete(profile) == BOOL_TRUE &&
-             profile->nonzero_calibration_enabled == BOOL_TRUE &&
-             runtime_profile_valid == BOOL_TRUE &&
-             envelope_result == SYS_PRODUCT_CURRENT_VALID && status != NULL &&
-             status->safety_ready == BOOL_TRUE &&
-             status->persistence_ready == BOOL_TRUE &&
-             status->commit_available == BOOL_TRUE) ? BOOL_TRUE : BOOL_FALSE;
-        runtime_nonzero_allowed =
-            (SYS_CALIBRATION_NONZERO_OUTPUT_ENABLED != 0U &&
-             runtime_profile_valid == BOOL_TRUE &&
-             runtime_current_result == SYS_PRODUCT_CURRENT_VALID &&
-             sys_calibration_service_runtime_context_matches_voltage(
-                 BOUND_OUTPUT_VOLTAGE_01V) == BOOL_TRUE && status != NULL &&
-             status->safety_ready == BOOL_TRUE &&
-             status->boot_inhibit_active != BOOL_TRUE) ? BOOL_TRUE : BOOL_FALSE;
-        calibration_nonzero_allowed =
-            (first_calibration_allowed == BOOL_TRUE ||
-             sys_calibration_service_is_output_authorized() == BOOL_TRUE) ?
-            BOOL_TRUE : BOOL_FALSE;
-
-        cJSON_AddBoolToObject(dt, "protocolFrozen",
-                              SYS_CALIBRATION_MQTT_V2_FIELDS_FROZEN != 0U);
-        cJSON_AddNumberToObject(dt, "driverProtocolVersion",
-                                SYS_CALIBRATION_DRIVER_PROTOCOL_VERSION);
-        cJSON_AddNumberToObject(dt, "tablePoints",
-                                SYS_CALIBRATION_DRIVER_POINT_COUNT);
-        cJSON_AddNumberToObject(dt, "levelStep",
-                                SYS_CALIBRATION_DRIVER_LEVEL_STEP);
-        sys_calibration_mqtt_add_profile_catalog(dt);
-        sys_calibration_mqtt_add_active_profile(
-            dt, profile, maximum_current_ma, calibrated_max_current_ma);
-        cJSON_AddBoolToObject(dt, "firstCalibrationAllowed",
-                              first_calibration_allowed == BOOL_TRUE);
-        cJSON_AddBoolToObject(dt, "runtimeNonzeroOutputAllowed",
-                              runtime_nonzero_allowed == BOOL_TRUE);
-        cJSON_AddBoolToObject(dt, "calibrationNonzeroOutputAllowed",
-                              calibration_nonzero_allowed == BOOL_TRUE);
-        cJSON_AddBoolToObject(
-            dt, "configuredRatedCurrentWriteReadbackAvailable",
-            runtime_profile_valid == BOOL_TRUE);
-        cJSON_AddBoolToObject(dt, "validationPercentOutputAvailable",
-                              SYS_CALIBRATION_CODEC_AVAILABLE != 0U);
-        cJSON_AddBoolToObject(dt, "rawMeasurementSupported", 1);
-        cJSON_AddNumberToObject(dt, "rawSchemaVersion",
-                                SYS_CALIBRATION_RAW_SCHEMA_VERSION);
-        cJSON_AddNumberToObject(dt, "rawMaxAgeMs",
-                                SYS_CALIBRATION_RAW_MAX_AGE_MS);
-        cJSON_AddBoolToObject(dt, "commitAvailable",
-                              commit_available == BOOL_TRUE);
-        cJSON_AddBoolToObject(dt, "safetyReady",
-                              status != NULL &&
-                              status->safety_ready == BOOL_TRUE);
-        if (sys_product_profile_is_complete(profile) != BOOL_TRUE)
-        {
-            block_code = profile->block_code;
-        }
-        else if (runtime_profile_valid != BOOL_TRUE)
-        {
-            block_code = "RUNTIME_FACTORY_PROFILE_MISMATCH";
-        }
-        else if (envelope_result != SYS_PRODUCT_CURRENT_VALID)
-        {
-            block_code = sys_product_profile_current_validation_reason(
-                envelope_result);
-        }
-        else if (status == NULL || status->safety_ready != BOOL_TRUE)
-        {
-            block_code = "SAFETY_NOT_READY";
-        }
-        else if (status->persistence_ready != BOOL_TRUE)
-        {
-            block_code = "PERSISTENCE_NOT_READY";
-        }
-        else if (runtime_current_result ==
-                 SYS_PRODUCT_CURRENT_CALIBRATION_MAX_UNAVAILABLE)
-        {
-            block_code = "FIRST_CALIBRATION_REQUIRED";
-        }
-        else if (runtime_current_result != SYS_PRODUCT_CURRENT_VALID)
-        {
-            block_code = sys_product_profile_current_validation_reason(
-                runtime_current_result);
-        }
-        else if (sys_calibration_service_runtime_context_matches_voltage(
-                     BOUND_OUTPUT_VOLTAGE_01V) != BOOL_TRUE)
-        {
-            block_code = "CALIBRATION_CONTEXT_VOLTAGE_MISMATCH";
-        }
-        else
-        {
-            block_code = "OK";
-        }
-        cJSON_AddStringToObject(dt, "blockCode", block_code);
+        cJSON_Delete(root);
+        return -1;
     }
-    else
-    {
-        cJSON_AddStringToObject(dt, "blockCode",
-                                sys_calibration_mqtt_result_reason(result));
-    }
-    if (capabilities != BOOL_TRUE)
-    {
-        if (raw_operation == BOOL_TRUE)
-        {
-            if (sys_calibration_mqtt_add_raw_readback(dt, status) != BOOL_TRUE)
-            {
-                cJSON_Delete(root);
-                return -1;
-            }
-        }
-        else
-        {
-            sys_calibration_mqtt_add_status(
-                dt, status,
-                (operation != NULL &&
-                 strcmp(operation, "READBACK") == 0) ? BOOL_TRUE : BOOL_FALSE);
-        }
-    }
-    if (raw_operation == BOOL_TRUE && result == SYS_CALIBRATION_RESULT_OK)
-    {
-        if (sys_calibration_mqtt_add_raw(dt, &raw_snapshot) != BOOL_TRUE)
-        {
-            cJSON_Delete(root);
-            result = SYS_CALIBRATION_RESULT_NOT_AVAILABLE;
-            goto rebuild_response;
-        }
-    }
-    send_result = zk_send_json_root(root, NULL);
+    result = zk_send_json_root(root, NULL);
     cJSON_Delete(root);
-    return send_result;
+    return result;
+}
+
+static void sys_calibration_mqtt_cache_response(
+    u32 parameter_digest,
+    const sys_calibration_mqtt_response_st *response)
+{
+    _replay.valid = BOOL_TRUE;
+    _replay.session_id = response->session_id;
+    _replay.seq = response->seq;
+    _replay.parameter_digest = parameter_digest;
+    _replay.operation = response->operation;
+    _replay.response = *response;
+}
+
+static u8 sys_calibration_mqtt_replay_check(
+    sys_calibration_mqtt_operation_en operation,
+    u32 session_id,
+    u32 seq,
+    u32 parameter_digest)
+{
+    if (_replay.valid != BOOL_TRUE || _replay.session_id != session_id)
+    {
+        return 0U;
+    }
+    if (_replay.seq == seq)
+    {
+        return (_replay.operation == operation &&
+                _replay.parameter_digest == parameter_digest) ? 1U : 2U;
+    }
+    return (seq < _replay.seq) ? 3U : 0U;
+}
+
+static boolean_en sys_calibration_mqtt_session_fields_valid(
+    cJSON *dt,
+    u32 *session_id,
+    u32 *seq)
+{
+    return (sys_calibration_mqtt_read_u32(dt, "sid", session_id) == BOOL_TRUE &&
+            sys_calibration_mqtt_read_u32(dt, "seq", seq) == BOOL_TRUE &&
+            *session_id != 0U && *seq != 0U) ? BOOL_TRUE : BOOL_FALSE;
 }
 
 boolean_en sys_calibration_mqtt_handle(
     cJSON *root,
     const zk_message_header_t *header)
 {
+    const sys_product_profile_st *profile = sys_product_profile_current();
     cJSON *dt;
     cJSON *op_node;
-    const char *operation;
+    cJSON *payload_hex_node;
+    const char *operation_text = "";
+    sys_calibration_mqtt_operation_en operation = SYS_CALIBRATION_MQTT_OP_INVALID;
+    sys_calibration_mqtt_response_st *response = &_working_response;
+    sys_calibration_service_status_st status;
+    sys_calibration_payload_st *decoded_payload = &_working_decoded_payload;
+    sys_calibration_result_en result = SYS_CALIBRATION_RESULT_BAD_REQUEST;
+    u32 version = 0U;
     u32 session_id = 0U;
     u32 seq = 0U;
-    u32 protocol_version = 0U;
-    u32 lease_ms;
-    u16 level;
-    u16 target_percent;
-    u16 length;
-    u8 payload[SYS_CALIBRATION_DRIVER_TABLE_FRAME_LENGTH];
-    sys_calibration_context_st request_context;
-    sys_calibration_context_st active_context;
-    sys_calibration_result_en result;
-    sys_calibration_service_status_st status;
-    boolean_en capabilities = BOOL_FALSE;
+    u32 lease_ms = 0U;
+    u32 profile_fingerprint = 0U;
+    u32 payload_crc32 = 0U;
+    u32 generation = 0U;
+    u32 parameter_digest = 0U;
+    u16 profile_id = 0U;
+    u16 level = 0U;
+    u16 payload_length = 0U;
+    u16 read_length = 0U;
+    u8 percent = 0U;
+    u8 replay_result;
+    boolean_en request_cacheable = BOOL_FALSE;
 
     if (root == NULL || header == NULL || strcmp(header->sv, ZK_SV_CAL) != 0)
     {
         return BOOL_FALSE;
     }
-    dt = cJSON_GetObjectItem(root, "DT");
-    op_node = (dt != NULL) ? cJSON_GetObjectItem(dt, "op") : NULL;
-    if (dt == NULL || !cJSON_IsObject(dt) || op_node == NULL ||
-        !cJSON_IsString(op_node) || op_node->valuestring == NULL)
-    {
-        (void)sys_calibration_service_get_status(&status);
-        (void)sys_calibration_mqtt_send_response(
-            header, "", SYS_CALIBRATION_RESULT_PROTOCOL_ERROR, &status,
-            BOOL_FALSE, 0U);
-        return BOOL_TRUE;
-    }
-    operation = op_node->valuestring;
+    memset(&status, 0, sizeof(status));
+    status.state = SYS_CALIBRATION_STATE_IDLE;
     (void)sys_calibration_service_get_status(&status);
 
-    if (sys_calibration_mqtt_read_u32(
-            dt, "protocolVersion", &protocol_version) != BOOL_TRUE ||
-        protocol_version != SYS_CALIBRATION_MQTT_PROTOCOL_VERSION)
+    dt = cJSON_GetObjectItemCaseSensitive(root, "DT");
+    op_node = dt != NULL ?
+              cJSON_GetObjectItemCaseSensitive(dt, "op") : NULL;
+    if (dt != NULL && cJSON_IsObject(dt) && op_node != NULL &&
+        cJSON_IsString(op_node) && op_node->valuestring != NULL)
     {
-        result = SYS_CALIBRATION_RESULT_PROTOCOL_ERROR;
+        operation_text = op_node->valuestring;
+        operation = sys_calibration_mqtt_parse_operation(operation_text);
     }
-    else if (((strcmp(operation, "CAPABILITIES") == 0 ||
-          strcmp(operation, "RAW") == 0 ||
-          strcmp(operation, "READBACK") == 0) &&
-         strcmp(header->ct, ZK_CT_READ) != 0) ||
-        ((strcmp(operation, "CAPABILITIES") != 0 &&
-          strcmp(operation, "RAW") != 0 &&
-          strcmp(operation, "READBACK") != 0) &&
-         strcmp(header->ct, ZK_CT_WRITE) != 0))
-    {
-        result = SYS_CALIBRATION_RESULT_PROTOCOL_ERROR;
-    }
-    else if (strcmp(operation, "CAPABILITIES") == 0)
-    {
-        capabilities = BOOL_TRUE;
-        result = SYS_CALIBRATION_RESULT_OK;
-    }
-    else if (sys_calibration_mqtt_read_u32(dt, "sessionId", &session_id) !=
-                 BOOL_TRUE ||
-             sys_calibration_mqtt_read_u32(dt, "seq", &seq) != BOOL_TRUE)
-    {
-        result = SYS_CALIBRATION_RESULT_PROTOCOL_ERROR;
-    }
-    else if (strcmp(operation, "BEGIN") == 0)
-    {
-        if (sys_calibration_mqtt_read_u32(dt, "leaseMs", &lease_ms) != BOOL_TRUE)
-        {
-            result = SYS_CALIBRATION_RESULT_PROTOCOL_ERROR;
-        }
-        else if (sys_calibration_mqtt_read_context(
-                     dt, BOOL_FALSE, &request_context) != BOOL_TRUE)
-        {
-            result = SYS_CALIBRATION_RESULT_CONTEXT_MISMATCH;
-            sys_calibration_service_force_fault();
-            (void)sys_calibration_service_get_status(&status);
-        }
-        else
-        {
-            result = sys_calibration_service_begin_context_seq(
-                session_id, HAL_GetTick(), lease_ms, seq, &request_context,
-                &status);
-        }
-    }
-    else if (strcmp(operation, "HEARTBEAT") == 0)
-    {
-        if (sys_calibration_mqtt_read_u32(dt, "leaseMs", &lease_ms) != BOOL_TRUE)
-        {
-            result = SYS_CALIBRATION_RESULT_PROTOCOL_ERROR;
-        }
-        else
-        {
-            result = sys_calibration_service_heartbeat_seq(
-                session_id, HAL_GetTick(), lease_ms, seq, &status);
-        }
-    }
-    else if (strcmp(operation, "SET_POINT") == 0)
-    {
-        if (sys_calibration_mqtt_read_u16(dt, "level", &level) != BOOL_TRUE)
-        {
-            result = SYS_CALIBRATION_RESULT_PROTOCOL_ERROR;
-        }
-        else
-        {
-            result = sys_calibration_service_set_point_seq(
-                session_id, HAL_GetTick(), seq, level, &status);
-        }
-    }
-    else if (strcmp(operation, "SET_VALIDATION_PERCENT") == 0)
-    {
-        if (sys_calibration_mqtt_read_u16(
-                dt, "targetPercent", &target_percent) != BOOL_TRUE ||
-            target_percent == 0U || target_percent >= 100U)
-        {
-            result = SYS_CALIBRATION_RESULT_PROTOCOL_ERROR;
-        }
-        else
-        {
-            result = sys_calibration_service_set_validation_percent_seq(
-                session_id, HAL_GetTick(), seq, (u8)target_percent, &status);
-        }
-    }
-    else if (strcmp(operation, "RAW") == 0)
-    {
-        if (cJSON_GetObjectItem(dt, "frame") != NULL ||
-            cJSON_GetObjectItem(dt, "direction") != NULL)
-        {
-            result = SYS_CALIBRATION_RESULT_PROTOCOL_ERROR;
-        }
-        else
-        {
-            result = sys_calibration_service_snapshot_seq(
-                session_id, HAL_GetTick(), seq, &status);
-        }
-    }
-    else if (strcmp(operation, "STAGE_CONFIG") == 0)
-    {
-        if (!cJSON_IsString(cJSON_GetObjectItem(dt, "payloadHex")) ||
-            sys_calibration_mqtt_read_payload(
-                dt, "payloadHex", payload, sizeof(payload), &length) != BOOL_TRUE ||
-            sys_calibration_mqtt_read_context(
-                dt, BOOL_TRUE, &request_context) != BOOL_TRUE ||
-            request_context.table_crc32 !=
-                sys_calibration_storage_crc32(payload, length) ||
-            sys_calibration_service_get_context(&active_context) != BOOL_TRUE ||
-            sys_product_profile_context_equal(
-                &request_context, &active_context, BOOL_FALSE) != BOOL_TRUE)
-        {
-            result = SYS_CALIBRATION_RESULT_CONTEXT_MISMATCH;
-            sys_calibration_service_force_fault();
-            (void)sys_calibration_service_get_status(&status);
-        }
-        else
-        {
-            result = sys_calibration_service_stage_config_context_seq(
-                session_id, HAL_GetTick(), seq, &request_context,
-                payload, length, &status);
-        }
-    }
-    else if (strcmp(operation, "APPLY") == 0)
-    {
-        if (sys_calibration_mqtt_read_context(
-                dt, BOOL_TRUE, &request_context) != BOOL_TRUE ||
-            sys_calibration_service_get_context(&active_context) != BOOL_TRUE ||
-            sys_product_profile_context_equal(
-                &request_context, &active_context, BOOL_TRUE) != BOOL_TRUE)
-        {
-            result = SYS_CALIBRATION_RESULT_CONTEXT_MISMATCH;
-            sys_calibration_service_force_fault();
-            (void)sys_calibration_service_get_status(&status);
-        }
-        else
-        {
-            result = sys_calibration_service_apply_seq(
-                session_id, HAL_GetTick(), seq, &status);
-        }
-    }
-    else if (strcmp(operation, "READBACK") == 0)
-    {
-        if (sys_calibration_mqtt_read_context(
-                dt, BOOL_TRUE, &request_context) != BOOL_TRUE ||
-            sys_calibration_service_get_context(&active_context) != BOOL_TRUE ||
-            sys_product_profile_context_equal(
-                &request_context, &active_context, BOOL_TRUE) != BOOL_TRUE)
-        {
-            result = SYS_CALIBRATION_RESULT_CONTEXT_MISMATCH;
-            sys_calibration_service_force_fault();
-            (void)sys_calibration_service_get_status(&status);
-        }
-        else
-        {
-            result = sys_calibration_service_readback_seq(
-                session_id, HAL_GetTick(), seq, &status);
-        }
-    }
-    else if (strcmp(operation, "COMMIT") == 0)
-    {
-        if (sys_calibration_mqtt_read_context(
-                dt, BOOL_TRUE, &request_context) != BOOL_TRUE)
-        {
-            result = SYS_CALIBRATION_RESULT_CONTEXT_MISMATCH;
-            sys_calibration_service_force_fault();
-            (void)sys_calibration_service_get_status(&status);
-        }
-        else
-        {
-            result = sys_calibration_service_commit_context_seq(
-                session_id, HAL_GetTick(), seq, &request_context, &status);
-        }
-    }
-    else if (strcmp(operation, "ABORT") == 0)
-    {
-        result = sys_calibration_service_abort_seq(
-            session_id, HAL_GetTick(), seq, &status);
-    }
-    else if (strcmp(operation, "RELEASE") == 0)
-    {
-        result = sys_calibration_service_release_seq(
-            session_id, HAL_GetTick(), seq, &status);
-    }
-    else
-    {
-        result = SYS_CALIBRATION_RESULT_PROTOCOL_ERROR;
-    }
+    sys_calibration_mqtt_response_init(response, operation, operation_text,
+                                       0U, 0U, &status);
 
-    /* 结果先由service缓存，发布忙时同一sessionId+seq可重发相同结果和回读。 */
-    if (sys_calibration_mqtt_send_response(
-            header, operation, result, &status, capabilities, seq) != 0)
+    if (dt == NULL || !cJSON_IsObject(dt) ||
+        sys_calibration_mqtt_read_u32(dt, "v", &version) != BOOL_TRUE ||
+        version != SYS_CALIBRATION_PROTOCOL_VERSION ||
+        operation == SYS_CALIBRATION_MQTT_OP_INVALID ||
+        strcmp(header->ct, sys_calibration_mqtt_expected_ct(operation)) != 0 ||
+        sys_calibration_mqtt_request_fields_valid(dt, operation) != BOOL_TRUE)
     {
-        /* 消费已完成；下一次相同seq请求会重新尝试发布缓存结果。 */
+        (void)sys_calibration_mqtt_send_response(header, response);
         return BOOL_TRUE;
     }
+
+    if (sys_calibration_mqtt_is_sessionless(operation) == BOOL_TRUE)
+    {
+        if (cJSON_GetObjectItemCaseSensitive(dt, "sid") != NULL ||
+            cJSON_GetObjectItemCaseSensitive(dt, "seq") != NULL)
+        {
+            (void)sys_calibration_mqtt_send_response(header, response);
+            return BOOL_TRUE;
+        }
+        response->result = SYS_CALIBRATION_RESULT_OK;
+        if (operation == SYS_CALIBRATION_MQTT_OP_DIAG)
+        {
+            response->diag_valid = sys_bl0942_get_diag(HAL_GetTick(),
+                                                        &response->diag);
+            if (response->diag_valid != BOOL_TRUE)
+            {
+                response->result = SYS_CALIBRATION_RESULT_HARDWARE_FAULT;
+            }
+        }
+        (void)sys_calibration_mqtt_send_response(header, response);
+        return BOOL_TRUE;
+    }
+
+    if (sys_calibration_mqtt_session_fields_valid(
+            dt, &session_id, &seq) != BOOL_TRUE)
+    {
+        (void)sys_calibration_mqtt_send_response(header, response);
+        return BOOL_TRUE;
+    }
+    response->session_id = session_id;
+    response->seq = seq;
+
+    switch (operation)
+    {
+        case SYS_CALIBRATION_MQTT_OP_BEGIN:
+            if (sys_calibration_mqtt_read_u16(dt, "profileId", &profile_id) !=
+                    BOOL_TRUE ||
+                sys_calibration_mqtt_read_u32(
+                    dt, "profileFingerprint", &profile_fingerprint) != BOOL_TRUE ||
+                sys_calibration_mqtt_read_u32(dt, "leaseMs", &lease_ms) !=
+                    BOOL_TRUE || seq != 1U)
+            {
+                break;
+            }
+            request_cacheable = BOOL_TRUE;
+            parameter_digest = sys_calibration_mqtt_parameter_digest(
+                operation, profile_id, profile_fingerprint, lease_ms);
+            if (lease_ms < SYS_CALIBRATION_LEASE_MIN_MS ||
+                lease_ms > SYS_CALIBRATION_LEASE_MAX_MS)
+            {
+                result = SYS_CALIBRATION_RESULT_RANGE_ERROR;
+            }
+            else if (profile_id != profile->profile_id ||
+                     profile_fingerprint != profile->fingerprint_crc32)
+            {
+                result = SYS_CALIBRATION_RESULT_PROFILE_MISMATCH;
+            }
+            else
+            {
+                result = SYS_CALIBRATION_RESULT_OK;
+            }
+            response->lease_ms = lease_ms;
+            break;
+        case SYS_CALIBRATION_MQTT_OP_HEARTBEAT:
+            if (sys_calibration_mqtt_read_u32(dt, "leaseMs", &lease_ms) !=
+                BOOL_TRUE)
+            {
+                break;
+            }
+            request_cacheable = BOOL_TRUE;
+            parameter_digest = sys_calibration_mqtt_parameter_digest(
+                operation, lease_ms, 0U, 0U);
+            result = (lease_ms >= SYS_CALIBRATION_LEASE_MIN_MS &&
+                      lease_ms <= SYS_CALIBRATION_LEASE_MAX_MS) ?
+                     SYS_CALIBRATION_RESULT_OK :
+                     SYS_CALIBRATION_RESULT_RANGE_ERROR;
+            response->lease_ms = lease_ms;
+            break;
+        case SYS_CALIBRATION_MQTT_OP_SET_POINT:
+            if (sys_calibration_mqtt_read_u16(dt, "level", &level) != BOOL_TRUE)
+            {
+                break;
+            }
+            request_cacheable = BOOL_TRUE;
+            parameter_digest = sys_calibration_mqtt_parameter_digest(
+                operation, level, 0U, 0U);
+            result = (level <= SYS_CALIBRATION_LEVEL_MAX &&
+                      (level % SYS_CALIBRATION_LEVEL_STEP) == 0U) ?
+                     SYS_CALIBRATION_RESULT_OK :
+                     SYS_CALIBRATION_RESULT_RANGE_ERROR;
+            response->level = level;
+            break;
+        case SYS_CALIBRATION_MQTT_OP_STAGE:
+            payload_hex_node = cJSON_GetObjectItemCaseSensitive(
+                dt, "payloadHex");
+            if (sys_calibration_mqtt_read_u16(
+                    dt, "payloadLength", &payload_length) != BOOL_TRUE ||
+                sys_calibration_mqtt_read_u32(
+                    dt, "payloadCrc32", &payload_crc32) != BOOL_TRUE ||
+                payload_hex_node == NULL || !cJSON_IsString(payload_hex_node) ||
+                payload_hex_node->valuestring == NULL ||
+                payload_length != SYS_CALIBRATION_PAYLOAD_LENGTH ||
+                sys_calibration_payload_hex_decode(
+                    payload_hex_node->valuestring, response->payload,
+                    (u16)sizeof(response->payload)) != BOOL_TRUE)
+            {
+                break;
+            }
+            request_cacheable = BOOL_TRUE;
+            parameter_digest = sys_calibration_mqtt_parameter_digest(
+                operation, payload_length, payload_crc32,
+                sys_calibration_payload_crc32_iso_hdlc(
+                    response->payload, SYS_CALIBRATION_PAYLOAD_LENGTH));
+            if (sys_calibration_payload_crc32_iso_hdlc(
+                    response->payload, SYS_CALIBRATION_PAYLOAD_LENGTH) !=
+                    payload_crc32)
+            {
+                result = SYS_CALIBRATION_RESULT_CRC_ERROR;
+            }
+            else if (sys_calibration_payload_decode(
+                         response->payload, SYS_CALIBRATION_PAYLOAD_LENGTH,
+                         decoded_payload) != BOOL_TRUE)
+            {
+                result = SYS_CALIBRATION_RESULT_BAD_REQUEST;
+            }
+            else if (sys_calibration_payload_validate(decoded_payload) !=
+                         BOOL_TRUE ||
+                     sys_calibration_payload_within_product_limits(
+                         decoded_payload, profile) != BOOL_TRUE)
+            {
+                result = SYS_CALIBRATION_RESULT_RANGE_ERROR;
+            }
+            else if (sys_calibration_payload_matches_product(
+                         decoded_payload, profile) != BOOL_TRUE)
+            {
+                result = SYS_CALIBRATION_RESULT_PROFILE_MISMATCH;
+            }
+            else
+            {
+                result = SYS_CALIBRATION_RESULT_OK;
+            }
+            response->payload_length = payload_length;
+            response->payload_crc32 = payload_crc32;
+            break;
+        case SYS_CALIBRATION_MQTT_OP_SET_OUTPUT:
+            if (sys_calibration_mqtt_read_u8(dt, "percent", &percent) !=
+                BOOL_TRUE)
+            {
+                break;
+            }
+            request_cacheable = BOOL_TRUE;
+            parameter_digest = sys_calibration_mqtt_parameter_digest(
+                operation, percent, 0U, 0U);
+            result = percent <= 100U ? SYS_CALIBRATION_RESULT_OK :
+                                      SYS_CALIBRATION_RESULT_RANGE_ERROR;
+            response->percent = percent;
+            break;
+        default:
+            request_cacheable = BOOL_TRUE;
+            parameter_digest = sys_calibration_mqtt_parameter_digest(
+                operation, 0U, 0U, 0U);
+            result = SYS_CALIBRATION_RESULT_OK;
+            break;
+    }
+
+    if (request_cacheable != BOOL_TRUE)
+    {
+        response->result = SYS_CALIBRATION_RESULT_BAD_REQUEST;
+        (void)sys_calibration_mqtt_send_response(header, response);
+        return BOOL_TRUE;
+    }
+
+    replay_result = sys_calibration_mqtt_replay_check(
+        operation, session_id, seq, parameter_digest);
+    if (replay_result == 1U)
+    {
+        (void)sys_calibration_mqtt_send_response(header, &_replay.response);
+        return BOOL_TRUE;
+    }
+    if (replay_result == 2U || replay_result == 3U)
+    {
+        response->result = replay_result == 2U ?
+                          SYS_CALIBRATION_RESULT_BAD_REQUEST :
+                          SYS_CALIBRATION_RESULT_BAD_STATE;
+        (void)sys_calibration_mqtt_send_response(header, response);
+        return BOOL_TRUE;
+    }
+
+    if (result == SYS_CALIBRATION_RESULT_OK)
+    {
+        switch (operation)
+        {
+            case SYS_CALIBRATION_MQTT_OP_BEGIN:
+                result = sys_calibration_service_begin_seq(
+                    session_id, HAL_GetTick(), lease_ms, seq, profile_id,
+                    profile_fingerprint, &response->status);
+                break;
+            case SYS_CALIBRATION_MQTT_OP_HEARTBEAT:
+                result = sys_calibration_service_heartbeat_seq(
+                    session_id, HAL_GetTick(), lease_ms, seq, &response->status);
+                response->lease_ms = response->status.lease_ms;
+                break;
+            case SYS_CALIBRATION_MQTT_OP_SET_POINT:
+                result = sys_calibration_service_set_point_seq(
+                    session_id, HAL_GetTick(), seq, level, &response->status);
+                break;
+            case SYS_CALIBRATION_MQTT_OP_RAW:
+                result = sys_calibration_service_raw_seq(
+                    session_id, HAL_GetTick(), seq, &response->raw,
+                    &response->status);
+                response->raw_valid =
+                    (result == SYS_CALIBRATION_RESULT_OK ||
+                     result == SYS_CALIBRATION_RESULT_DATA_STALE ||
+                     result == SYS_CALIBRATION_RESULT_HARDWARE_FAULT) ?
+                    BOOL_TRUE : BOOL_FALSE;
+                break;
+            case SYS_CALIBRATION_MQTT_OP_STAGE:
+                result = sys_calibration_service_stage_seq(
+                    session_id, HAL_GetTick(), seq, response->payload,
+                    payload_length, payload_crc32, &response->status);
+                break;
+            case SYS_CALIBRATION_MQTT_OP_APPLY:
+                result = sys_calibration_service_apply_seq(
+                    session_id, HAL_GetTick(), seq, &response->status);
+                response->payload_length = response->status.staged_length;
+                response->payload_crc32 = response->status.staged_crc32;
+                break;
+            case SYS_CALIBRATION_MQTT_OP_SET_OUTPUT:
+                result = sys_calibration_service_set_output_seq(
+                    session_id, HAL_GetTick(), seq, percent, &response->status);
+                break;
+            case SYS_CALIBRATION_MQTT_OP_COMMIT:
+                result = sys_calibration_service_commit_seq(
+                    session_id, HAL_GetTick(), seq, &response->status);
+                response->generation = response->status.committed_generation;
+                response->payload_length = response->status.committed_length;
+                response->payload_crc32 = response->status.committed_crc32;
+                break;
+            case SYS_CALIBRATION_MQTT_OP_READ:
+                result = sys_calibration_service_read_seq(
+                    session_id, HAL_GetTick(), seq, response->payload,
+                    (u16)sizeof(response->payload), &read_length,
+                    &payload_crc32, &generation, &response->status);
+                response->payload_length = read_length;
+                response->payload_crc32 = payload_crc32;
+                response->generation = generation;
+                response->payload_valid = result == SYS_CALIBRATION_RESULT_OK ?
+                                         BOOL_TRUE : BOOL_FALSE;
+                break;
+            case SYS_CALIBRATION_MQTT_OP_ABORT:
+                result = sys_calibration_service_abort_seq(
+                    session_id, HAL_GetTick(), seq, &response->status);
+                break;
+            case SYS_CALIBRATION_MQTT_OP_RELEASE:
+                result = sys_calibration_service_release_seq(
+                    session_id, HAL_GetTick(), seq, &response->status);
+                break;
+            default:
+                result = SYS_CALIBRATION_RESULT_BAD_REQUEST;
+                break;
+        }
+    }
+    response->result = result;
+    sys_calibration_mqtt_cache_response(parameter_digest, response);
+    (void)sys_calibration_mqtt_send_response(header, response);
     return BOOL_TRUE;
 }

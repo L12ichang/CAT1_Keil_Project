@@ -69,6 +69,7 @@ typedef struct
     u32 meter_adc_skew_ms;
     u32 meter_pwm_skew_ms;
     u16 valid_flags;
+    u8 bl_fresh;
 } sys_calibration_snapshot_aggregate_st;
 
 /************************************

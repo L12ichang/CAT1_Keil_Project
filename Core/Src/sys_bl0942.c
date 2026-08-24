@@ -19,6 +19,7 @@
 #include "sys_data.h"
 #include <math.h>
 #include "factory_user_data.h"
+#include "sys_calibration_service.h"
 #include "sys_calibration_snapshot.h"
 #include "sys_bl0942_frame.h"
 #define READ_HEADER                 0x58
@@ -29,6 +30,9 @@
 #define READ_PACKET_LENGTH          4
 #define READ_PACKET_MAX_LENGTH      23
 #define FS                          500000
+#define SYS_BL0942_RESPONSE_TIMEOUT_TICKS  100U
+#define SYS_BL0942_READ_INTERVAL_TICKS      10U
+#define SYS_BL0942_RECOVERY_DELAY_TICKS     10U
 
 //电参数寄存器
 #define Addr_I_WAVE									0x01					 //电流通道波形*
@@ -137,6 +141,7 @@ static u16 _timer=0;
 static u16 minute=0;
 static u32 bl0942_energy_0_01wh_remainder = 0;
 static u32 bl0942_last_uart_error_count = 0;
+static sys_bl0942_health_st bl0942_health;
 
 #define SYS_BL0942_ENERGY_ACCUM_DIVISOR 60U
 
@@ -172,6 +177,32 @@ void sys_bl0942_timer(void)
     }
 }
 
+static void sys_bl0942_handle_classified_fault(boolean_en is_timeout)
+{
+    boolean_en recovery_started = BOOL_FALSE;
+    boolean_en recovery_requested;
+
+    if (is_timeout == BOOL_TRUE)
+    {
+        if (bl0942_timeout_count < 0xFFFFFFFFUL)
+        {
+            bl0942_timeout_count++;
+        }
+    }
+    recovery_requested = sys_bl0942_health_begin_recovery(&bl0942_health);
+    if (recovery_requested == BOOL_TRUE)
+    {
+        recovery_started = hw_bl0942_uart_recover();
+        sys_bl0942_health_record_recovery_start(&bl0942_health,
+                                                 recovery_started);
+    }
+    sys_bl0942_state = SYS_BL0942_STATE_READ;
+    _timer_for_read = (recovery_requested == BOOL_TRUE &&
+                       recovery_started == BOOL_TRUE) ?
+                      SYS_BL0942_RECOVERY_DELAY_TICKS :
+                      SYS_BL0942_RESPONSE_TIMEOUT_TICKS;
+}
+
 static void sys_bl0942_check_uart_error(void)
 {
     u32 uart_error_count;
@@ -179,10 +210,9 @@ static void sys_bl0942_check_uart_error(void)
     uart_error_count = hw_uart2_get_error_count();
     if (uart_error_count != bl0942_last_uart_error_count)
     {
-        bl0942_uart_error_count += uart_error_count - bl0942_last_uart_error_count;
+        bl0942_uart_error_count = uart_error_count;
         bl0942_last_uart_error_count = uart_error_count;
-        sys_bl0942_state = SYS_BL0942_STATE_READ;
-        _timer_for_read = 10;
+        sys_bl0942_handle_classified_fault(BOOL_FALSE);
     }
 }
 
@@ -405,7 +435,7 @@ u32 get_ac_energy(u32 cf_cnt)  //
 
 #endif
 
-void sys_bl0942_write(u8 addr, u32 dat)
+static boolean_en sys_bl0942_write(u8 addr, u32 dat)
 {
     _tx_buffer[0] = WRITE_HEADER;
     _tx_buffer[1] = addr;
@@ -413,18 +443,18 @@ void sys_bl0942_write(u8 addr, u32 dat)
     _tx_buffer[3] = u32lh(dat);
     _tx_buffer[4] = u32hl(dat);
     _tx_buffer[5] = ~(_tx_buffer[0]+_tx_buffer[1]+_tx_buffer[2]+_tx_buffer[3]+_tx_buffer[4]);
-    hw_bl0942_uart_write(_tx_buffer, 6);
+    return hw_bl0942_uart_write(_tx_buffer, 6);
 }
 
 
-void sys_bl0942_write_enable(void)
+static boolean_en sys_bl0942_write_enable(void)
 {
-    sys_bl0942_write(Addr_WRPROT, 0x55);
+    return sys_bl0942_write(Addr_WRPROT, 0x55);
 }
 
-void sys_bl0942_write_disable(void)
+static boolean_en sys_bl0942_write_disable(void)
 {
-    sys_bl0942_write(Addr_WRPROT, 0x00);
+    return sys_bl0942_write(Addr_WRPROT, 0x00);
 }
 
 void sys_bl0942_process(void)
@@ -445,9 +475,8 @@ void sys_bl0942_process(void)
     if(g_bl0942_repro_force_recover != 0U)
     {
         g_bl0942_repro_force_recover = 0U;
-        hw_bl0942_repro_force_recover();
-        sys_bl0942_state = SYS_BL0942_STATE_READ;
-        _timer_for_read = 10U;
+        g_bl0942_repro_force_recover_count++;
+        sys_bl0942_handle_classified_fault(BOOL_FALSE);
     }
 #endif
 
@@ -467,16 +496,20 @@ void sys_bl0942_process(void)
             {
                 case SYS_BL0942_INIT_IDLE:
                 {
-                    sys_bl0942_write_enable();
-                    sys_bl0942_init1 =  SYS_BL0942_INIT_WRITE_ENABLE;
+                    if (sys_bl0942_write_enable() == BOOL_TRUE)
+                    {
+                        sys_bl0942_init1 = SYS_BL0942_INIT_WRITE_ENABLE;
+                    }
                 }
                 break;
                 case SYS_BL0942_INIT_WRITE_ENABLE:
                 {
                     if(hw_bl0942_get_state() == BL0942_STATE_IDLE)
                     {
-                        sys_bl0942_write(Addr_MODE, 0xc7);
-                        sys_bl0942_init1 =  SYS_BL0942_INIT_WRITE_DISABLE;
+                        if (sys_bl0942_write(Addr_MODE, 0xc7) == BOOL_TRUE)
+                        {
+                            sys_bl0942_init1 = SYS_BL0942_INIT_WRITE_DISABLE;
+                        }
                     }
                 }
                 break;
@@ -484,9 +517,11 @@ void sys_bl0942_process(void)
                 {
                     if(hw_bl0942_get_state() == BL0942_STATE_IDLE)
                     {
-                        sys_bl0942_write_disable();
-                        sys_bl0942_init1 =  SYS_BL0942_INIT_COMPLETE;
-                        _timer_for_read = 100;
+                        if (sys_bl0942_write_disable() == BOOL_TRUE)
+                        {
+                            sys_bl0942_init1 = SYS_BL0942_INIT_COMPLETE;
+                            _timer_for_read = SYS_BL0942_RESPONSE_TIMEOUT_TICKS;
+                        }
                     }
                 }
                 break;
@@ -496,7 +531,7 @@ void sys_bl0942_process(void)
                     {
                         _tx_buffer[0] = READ_HEADER;
                         _tx_buffer[1] = Addr_MODE;
-                        hw_bl0942_uart_read(_tx_buffer, READ_PACKET_LENGTH);
+                        (void)hw_bl0942_uart_read(_tx_buffer, READ_PACKET_LENGTH);
                     }
                     else if(hw_bl0942_get_state() == BL0942_STATE_READ_READY)
                     {
@@ -506,8 +541,8 @@ void sys_bl0942_process(void)
                     }
                     else if(_timer_for_read == 0)
                     {
-                        bl0942_timeout_count++;
                         sys_bl0942_init1 =  SYS_BL0942_INIT_IDLE;
+                        sys_bl0942_handle_classified_fault(BOOL_TRUE);
                     }
                 }
                 break;
@@ -518,7 +553,7 @@ void sys_bl0942_process(void)
         {
             if(_timer_for_read == 0 && !(STOP))
             {
-                _timer_for_read = 100;
+                _timer_for_read = SYS_BL0942_RESPONSE_TIMEOUT_TICKS;
                 _tx_buffer[0] = READ_HEADER;
                 _tx_buffer[1] = READ_ALL_HEAD;
 
@@ -526,9 +561,16 @@ void sys_bl0942_process(void)
                 g_bl0942_repro_read_start_count++;
 #endif
 
-                hw_bl0942_uart_read(_tx_buffer, READ_PACKET_MAX_LENGTH);
-                
-                sys_bl0942_state = SYS_BL0942_STATE_WAIT_READ_READY;
+                if (hw_bl0942_uart_read(_tx_buffer,
+                                        READ_PACKET_MAX_LENGTH) == BOOL_TRUE)
+                {
+                    sys_bl0942_state = SYS_BL0942_STATE_WAIT_READ_READY;
+                }
+                else
+                {
+                    sys_bl0942_state = SYS_BL0942_STATE_READ;
+                    _timer_for_read = SYS_BL0942_RECOVERY_DELAY_TICKS;
+                }
             }
         }
         break;
@@ -567,6 +609,8 @@ void sys_bl0942_process(void)
                     g_bl0942_repro_frame_ok_count++;
                     g_bl0942_repro_last_ok_tick = Timer_GetTickCount();
 #endif
+                    sys_bl0942_health_record_valid(&bl0942_health,
+                                                   meter_tick_ms);
 
                     u32ll(tmp) = _tx_buffer[1];
                     u32lh(tmp) = _tx_buffer[2];
@@ -738,6 +782,30 @@ void sys_bl0942_process(void)
 #endif
                   }
 
+                 /* Raw快照保持未校准；业务U/I/P使用当前committed/applied Correction。 */
+                 {
+                     u16 corrected_value;
+                     if (sys_calibration_service_correct_bl_voltage(
+                             meter_v_rms_raw, &corrected_value) == BOOL_TRUE)
+                     {
+                         ac_voltage_8209 = corrected_value;
+                     }
+                     if (sys_calibration_service_correct_bl_current(
+                             meter_i_rms_raw, &corrected_value) == BOOL_TRUE)
+                     {
+                         Z_ac_current = corrected_value;
+                     }
+                     if (sys_calibration_service_correct_bl_power(
+                             meter_watt_raw, &corrected_value) == BOOL_TRUE)
+                     {
+                         /* 业务全局仍是0.01W；V3 Payload reference是0.1W。 */
+                         if (corrected_value <= 6553U)
+                         {
+                             ac_powerpa = (u16)(corrected_value * 10U);
+                         }
+                     }
+                 }
+
                 //计量数据更新完一次
                  bl0942data_ready=1;
                  sys_calibration_snapshot_publish_meter(meter_tick_ms,
@@ -751,21 +819,25 @@ void sys_bl0942_process(void)
                                                         _tx_buffer,
                                                         meter_valid_flags,
                                                         bl0942_checksum_error_count);
+                 sys_bl0942_state = SYS_BL0942_STATE_READ;
+                 _timer_for_read = SYS_BL0942_READ_INTERVAL_TICKS;
                 }
                 else
                 {
-                    bl0942_checksum_error_count++;
+                    if (bl0942_checksum_error_count < 0xFFFFFFFFUL)
+                    {
+                        bl0942_checksum_error_count++;
+                    }
 #if BL0942_REPRO_TEST_ENABLE
                     g_bl0942_repro_frame_bad_count++;
 #endif
                     printf("checksum error1\n");
-                }                
-                sys_bl0942_state = SYS_BL0942_STATE_READ;
+                    sys_bl0942_handle_classified_fault(BOOL_FALSE);
+                }
             }
             else if(_timer_for_read == 0)
             {
-                bl0942_timeout_count++;
-                sys_bl0942_state = SYS_BL0942_STATE_READ;
+                sys_bl0942_handle_classified_fault(BOOL_TRUE);
             }
         }
         break;
@@ -781,8 +853,8 @@ void sys_bl0942_process(void)
 
 void sys_bl0942_power_on(void)
 {
-    sys_bl0942_state = SYS_BL0942_STATE_READ; 
-    _timer_for_read = 10;
+    sys_bl0942_state = SYS_BL0942_STATE_READ;
+    _timer_for_read = SYS_BL0942_READ_INTERVAL_TICKS;
 }
 
 /************************************
@@ -823,10 +895,63 @@ void sys_bl0942_energy_stats_clear(void)
     sys_data.today_Energy = 0U;
 }
 
+u32 sys_bl0942_get_data_age_ms(u32 now_tick_ms)
+{
+    return sys_bl0942_health_age_ms(&bl0942_health, now_tick_ms);
+}
+
+boolean_en sys_bl0942_is_fresh(u32 now_tick_ms)
+{
+    return sys_bl0942_health_is_fresh(&bl0942_health, now_tick_ms);
+}
+
+boolean_en sys_bl0942_get_diag(u32 now_tick_ms,
+                               sys_bl0942_diag_st *diag)
+{
+    hw_uart2_diag_st uart_diag;
+
+    if (diag == NULL || hw_uart2_get_diag(&uart_diag) != BOOL_TRUE)
+    {
+        return BOOL_FALSE;
+    }
+    diag->valid_frame_count = bl0942_health.valid_frame_count;
+    diag->ore_count = uart_diag.ore_count;
+    diag->fe_count = uart_diag.fe_count;
+    diag->ne_count = uart_diag.ne_count;
+    diag->timeout_count = bl0942_timeout_count;
+    diag->uart_error_count = uart_diag.uart_error_count;
+    diag->recovery_count = bl0942_health.recovery_count;
+    diag->recovery_fail_count = bl0942_health.recovery_fail_count;
+    diag->last_valid_frame_tick = bl0942_health.last_valid_frame_tick;
+    diag->bl_age_ms = sys_bl0942_get_data_age_ms(now_tick_ms);
+    diag->uart_error_code = uart_diag.uart_error_code;
+    diag->last_uart_error_code = uart_diag.last_error_code;
+    diag->tx_start_fail_count = uart_diag.tx_start_fail_count;
+    diag->rx_start_fail_count = uart_diag.rx_start_fail_count;
+    diag->abort_fail_count = uart_diag.abort_fail_count;
+    diag->hal_busy_count = uart_diag.hal_busy_count;
+    diag->hal_timeout_count = uart_diag.hal_timeout_count;
+    diag->bl_fresh = (u8)sys_bl0942_is_fresh(now_tick_ms);
+    diag->uart_g_state = uart_diag.uart_g_state;
+    diag->uart_rx_state = uart_diag.uart_rx_state;
+    diag->recovery_state = bl0942_health.last_recovery_state;
+    diag->transfer_state = uart_diag.transfer_state;
+    diag->buffer_index = uart_diag.buffer_index;
+    diag->rx_length = uart_diag.rx_length;
+    return BOOL_TRUE;
+}
+
 void sys_bl0942_init(void)
 {
    // _ac_EnergyP = sys_data.total_power;//每次上电导出上次累计能耗   临时取代  LOAD_AC_ENERGYP();
-    sys_bl0942_state = SYS_BL0942_STATE_READ; 
+    sys_bl0942_health_init(&bl0942_health);
+    bl0942_checksum_error_count = 0U;
+    bl0942_timeout_count = 0U;
+    bl0942_compat_frame_count = 0U;
+    bl0942_last_uart_error_count = hw_uart2_get_error_count();
+    bl0942_uart_error_count = bl0942_last_uart_error_count;
+    _timer_for_read = SYS_BL0942_RECOVERY_DELAY_TICKS;
+    sys_bl0942_state = SYS_BL0942_STATE_READ;
     //printf("ONE_CYCLE_ENERGY=0x%lx\n", ONE_CYCLE_ENERGY);
 }
 

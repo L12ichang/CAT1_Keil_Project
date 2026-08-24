@@ -8,6 +8,14 @@
 *************************************************************/
 #include "sys_bl0942_frame.h"
 
+static void sys_bl0942_counter_increment(u32 *counter)
+{
+    if (counter != NULL && *counter < 0xFFFFFFFFUL)
+    {
+        ++(*counter);
+    }
+}
+
 static u32 sys_bl0942_frame_read_u24_le(const u8 *buffer)
 {
     return (u32)buffer[0] | ((u32)buffer[1] << 8) | ((u32)buffer[2] << 16);
@@ -124,4 +132,114 @@ boolean_en sys_bl0942_frame_decode(const u8 *frame,
     decoded->freq_raw = (u16)frame[16] | ((u16)frame[17] << 8);
     decoded->status_raw = frame[19];
     return BOOL_TRUE;
+}
+
+boolean_en sys_bl0942_voltage_apply_gain_q24(u32 raw_voltage,
+                                             u32 gain_q24,
+                                             u16 *corrected_voltage_01v)
+{
+    u64 corrected;
+
+    if (corrected_voltage_01v == NULL || gain_q24 == 0U)
+    {
+        return BOOL_FALSE;
+    }
+    corrected = ((u64)raw_voltage * (u64)gain_q24 + (1ULL << 23)) >> 24;
+    if (corrected > 0xFFFFULL)
+    {
+        return BOOL_FALSE;
+    }
+    *corrected_voltage_01v = (u16)corrected;
+    return BOOL_TRUE;
+}
+
+void sys_bl0942_health_init(sys_bl0942_health_st *health)
+{
+    if (health == NULL)
+    {
+        return;
+    }
+    health->valid_frame_count = 0U;
+    health->last_valid_frame_tick = 0U;
+    health->recovery_count = 0U;
+    health->recovery_fail_count = 0U;
+    health->has_valid_frame = 0U;
+    health->recovery_attempted_since_valid = 0U;
+    health->recovery_waiting_frame = 0U;
+    health->last_recovery_state = (u8)SYS_BL0942_RECOVERY_NONE;
+}
+
+void sys_bl0942_health_record_valid(sys_bl0942_health_st *health,
+                                    u32 valid_tick_ms)
+{
+    if (health == NULL)
+    {
+        return;
+    }
+    sys_bl0942_counter_increment(&health->valid_frame_count);
+    health->last_valid_frame_tick = valid_tick_ms;
+    health->has_valid_frame = 1U;
+    if (health->recovery_waiting_frame != 0U)
+    {
+        health->last_recovery_state = (u8)SYS_BL0942_RECOVERY_SUCCEEDED;
+    }
+    health->recovery_attempted_since_valid = 0U;
+    health->recovery_waiting_frame = 0U;
+}
+
+boolean_en sys_bl0942_health_begin_recovery(sys_bl0942_health_st *health)
+{
+    if (health == NULL)
+    {
+        return BOOL_FALSE;
+    }
+    if (health->recovery_waiting_frame != 0U)
+    {
+        health->recovery_waiting_frame = 0U;
+        health->last_recovery_state = (u8)SYS_BL0942_RECOVERY_FAILED;
+        sys_bl0942_counter_increment(&health->recovery_fail_count);
+        return BOOL_FALSE;
+    }
+    if (health->recovery_attempted_since_valid != 0U)
+    {
+        return BOOL_FALSE;
+    }
+    health->recovery_attempted_since_valid = 1U;
+    health->recovery_waiting_frame = 1U;
+    health->last_recovery_state = (u8)SYS_BL0942_RECOVERY_WAIT_VALID_FRAME;
+    sys_bl0942_counter_increment(&health->recovery_count);
+    return BOOL_TRUE;
+}
+
+void sys_bl0942_health_record_recovery_start(sys_bl0942_health_st *health,
+                                             boolean_en started)
+{
+    if (health == NULL || started == BOOL_TRUE)
+    {
+        return;
+    }
+    if (health->recovery_waiting_frame != 0U)
+    {
+        health->recovery_waiting_frame = 0U;
+        health->last_recovery_state = (u8)SYS_BL0942_RECOVERY_FAILED;
+        sys_bl0942_counter_increment(&health->recovery_fail_count);
+    }
+}
+
+u32 sys_bl0942_health_age_ms(const sys_bl0942_health_st *health,
+                             u32 now_tick_ms)
+{
+    if (health == NULL || health->has_valid_frame == 0U)
+    {
+        return SYS_BL0942_DATA_AGE_INVALID;
+    }
+    return now_tick_ms - health->last_valid_frame_tick;
+}
+
+boolean_en sys_bl0942_health_is_fresh(const sys_bl0942_health_st *health,
+                                      u32 now_tick_ms)
+{
+    u32 age_ms = sys_bl0942_health_age_ms(health, now_tick_ms);
+    return (age_ms != SYS_BL0942_DATA_AGE_INVALID &&
+            age_ms <= SYS_BL0942_FRESH_MAX_AGE_MS) ? BOOL_TRUE : BOOL_FALSE;
 }

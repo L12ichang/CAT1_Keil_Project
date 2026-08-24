@@ -33,47 +33,109 @@ void hw_tim1_pwm2_set_off(void)
 #define PWM_OFFSET   OP_PWM_OFFSET //由于光耦的延迟问题增加3%输出
 #define PWM_USEFUL_RANGE    (u16)(PWM_MAX-PWM_OFFSET)  //
 
-static void hw_tim1_pwm2_set_PWM_OUT_internal(u16 pwm, boolean_en calibration_authorized)
+#if defined(HW_TIM1_PWM2_SEQUENCE_TEST)
+extern u32 hw_tim1_pwm2_sequence_test_get_compare(void);
+#define HW_TIM1_PWM2_GET_COMPARE() hw_tim1_pwm2_sequence_test_get_compare()
+#else
+#define HW_TIM1_PWM2_GET_COMPARE() \
+    ((u32)__HAL_TIM_GET_COMPARE(&htim1, TIM_CHANNEL_1))
+#endif
+
+static void hw_tim1_pwm2_set_PWM_OUT_internal(
+    u16 pwm,
+    boolean_en requires_calibration_authorization,
+    boolean_en calibration_authorized,
+    boolean_en apply_default_offset)
 {
-    /* 最后一道硬件出口门禁：先归零，再决定是否允许OCO导通。 */
-    if (pwm > 0U && sys_calibration_service_is_boot_inhibited() == BOOL_TRUE &&
-        calibration_authorized != BOOL_TRUE)
+    u32 final_ccr;
+    u32 auto_reload;
+
+    /* 先完成权限和逻辑范围裁决；任一失败都进入零输出路径。 */
+    if (pwm > 0U &&
+        ((requires_calibration_authorization == BOOL_TRUE &&
+          calibration_authorized != BOOL_TRUE) ||
+         (sys_calibration_service_is_boot_inhibited() == BOOL_TRUE &&
+          calibration_authorized != BOOL_TRUE)))
     {
         pwm = 0U;
     }
-    if(pwm>1000)
+    if (pwm > PWM_MAX)
     {
-     pwm=1000;
-    }
-    if(pwm>0)        
-    {
-      oco_on();
-            pwm_on = 1;
-    }
-    else
-    {
-     oco_off();
-          pwm_on = 0;
+        pwm = PWM_MAX;
     }
 
-   _pwm_logical_output = pwm;
-    
+    /* 零/故障路径必须先断OCO，再清CCR。 */
+    if (pwm == 0U)
+    {
+        oco_off();
+        pwm_on = 0U;
+        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0U);
+        _pwm_logical_output = 0U;
+        return;
+    }
+
+    final_ccr = pwm;
+    if (apply_default_offset == BOOL_TRUE)
+    {
+        final_ccr += PWM_OFFSET;
+    }
+    auto_reload = __HAL_TIM_GET_AUTORELOAD(&htim1);
+    if (final_ccr > auto_reload)
+    {
+        final_ccr = auto_reload;
+    }
+    if (final_ccr == 0U)
+    {
+        oco_off();
+        pwm_on = 0U;
+        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0U);
+        _pwm_logical_output = 0U;
+        return;
+    }
+
+    /* 非零路径：CCR写入并读回成功后，才允许OCO导通。 */
+    __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, final_ccr);
+    if (HW_TIM1_PWM2_GET_COMPARE() != final_ccr)
+    {
+        oco_off();
+        pwm_on = 0U;
+        __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0U);
+        _pwm_logical_output = 0U;
+        return;
+    }
+    _pwm_logical_output = pwm;
+    oco_on();
+    pwm_on = 1U;
+
 #if APP_PWM_DEBUG_ENABLE
-   printf("pwm=%d\r\n",pwm);
+    printf("pwm=%d\r\n",pwm);
 #endif
-   __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, pwm+PWM_OFFSET);  //负逻辑
-
 }
 
 void hw_tim1_pwm2_set_PWM_OUT(u16 pwm)//pwm输出
 {
-    hw_tim1_pwm2_set_PWM_OUT_internal(pwm, BOOL_FALSE);
+    hw_tim1_pwm2_set_PWM_OUT_internal(
+        pwm, BOOL_FALSE, BOOL_FALSE, BOOL_TRUE);
+}
+
+void hw_tim1_pwm2_set_calibrated_PWM_OUT(u16 pwm)
+{
+    hw_tim1_pwm2_set_PWM_OUT_internal(
+        pwm, BOOL_FALSE, BOOL_FALSE, BOOL_FALSE);
 }
 
 void hw_tim1_pwm2_set_calibration_PWM_OUT(u16 pwm)
 {
     hw_tim1_pwm2_set_PWM_OUT_internal(
-        pwm, sys_calibration_service_is_output_authorized());
+        pwm, BOOL_TRUE, sys_calibration_service_is_output_authorized(),
+        BOOL_FALSE);
+}
+
+void hw_tim1_pwm2_set_calibration_default_PWM_OUT(u16 pwm)
+{
+    hw_tim1_pwm2_set_PWM_OUT_internal(
+        pwm, BOOL_TRUE, sys_calibration_service_is_output_authorized(),
+        BOOL_TRUE);
 }
 
 u16 hw_tim1_pwm2_get_logical_pwm(void)
@@ -83,7 +145,7 @@ u16 hw_tim1_pwm2_get_logical_pwm(void)
 
 u16 hw_tim1_pwm2_get_ccr(void)
 {
-    return (u16)__HAL_TIM_GET_COMPARE(&htim1, TIM_CHANNEL_1);
+    return (u16)HW_TIM1_PWM2_GET_COMPARE();
 }
 
 u8 hw_tim1_pwm2_get_oco_on(void)
