@@ -94,6 +94,18 @@ PRODUCTION_FILES=(
   "${ROOT_DIR}/Core/Src/flash_address_assignment.h"
 )
 
+PYTHONDONTWRITEBYTECODE=1 python3 - "${ROOT_DIR}" <<'PY'
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+source = (root / "Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_flash_ex.c").read_text()
+erase_start = source.index("HAL_StatusTypeDef HAL_FLASHEx_Erase")
+erase_lock = source.index("__HAL_LOCK(&pFlash)", erase_start)
+hk32_gate = source.index("0x400220D0U", erase_start)
+assert hk32_gate < erase_lock, "HK32 Flash operation gate must be cleared before page erase"
+PY
+
 if rg -n \
     'CAT1_FLASH_OTA_REPORT|ZK_OTA_REPORT_FLASH|DATAROM_STARTADDR|BAKDATAROM_STARTADDR|sys_data\.sn|sys_calibration_flash_commit[[:space:]]*\(' \
     "${PRODUCTION_FILES[@]}"; then

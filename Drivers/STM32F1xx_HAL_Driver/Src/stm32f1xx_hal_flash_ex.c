@@ -158,7 +158,10 @@ static uint8_t           FLASH_OB_GetUser(void);
   */
 HAL_StatusTypeDef HAL_FLASHEx_Erase(FLASH_EraseInitTypeDef *pEraseInit, uint32_t *PageError)
 {
-      
+  /* HK32F103CCT6A requires this operation gate to be cleared before erase.
+     HAL_FLASH_Program() already performs the same device-specific prepare. */
+  *(volatile uint32_t *)0x400220D0U = 0x0U;
+
   HAL_StatusTypeDef status = HAL_ERROR;
   uint32_t address = 0U;
 
