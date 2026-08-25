@@ -29,11 +29,9 @@ tools/
 *.lnp
 *.lst
 *.htm
-*.sct
 *._ia
 *.bak
 *.i
-*.axf
 *.elf
 *.idx
 *.out
