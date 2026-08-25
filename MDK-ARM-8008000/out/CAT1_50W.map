@@ -6248,50 +6248,50 @@ Image Symbol Table
     _old_data                                0x20001390   Data          16  adc.o(.bss)
     _adc_dma_buffer                          0x200013b0   Data          16  adc.o(.bss)
     _adc_dma_capture                         0x200013c0   Data          16  adc.o(.bss)
-    .bss                                     0x200013d0   Section     3581  nbdriver.o(.bss)
+    .bss                                     0x200013d0   Section     5030  nbdriver.o(.bss)
     nb_net_reg_status                        0x20001405   Data          16  nbdriver.o(.bss)
     sendStringBufSub                         0x20001415   Data          96  nbdriver.o(.bss)
     sendStringBufOpen                        0x20001475   Data          96  nbdriver.o(.bss)
     sendStringBufConn                        0x200014d5   Data         128  nbdriver.o(.bss)
     sendStringBufSubUp                       0x20001555   Data          96  nbdriver.o(.bss)
-    nb_modem_ota_tx_buffer                   0x2000180d   Data         320  nbdriver.o(.bss)
-    pubDataBuf                               0x2000194d   Data        2048  nbdriver.o(.bss)
-    sendStringBuf3                           0x2000214d   Data         128  nbdriver.o(.bss)
-    .bss                                     0x200021d0   Section     4112  portable.o(.bss)
-    .bss                                     0x200031e0   Section     5985  ota.o(.bss)
-    ota_stream_page_buf                      0x200031e0   Data        2048  ota.o(.bss)
-    ota_stream_program_buf                   0x200039e0   Data        2048  ota.o(.bss)
-    ota_raw_host                             0x200041e0   Data          80  ota.o(.bss)
-    ota_raw_path                             0x20004230   Data         128  ota.o(.bss)
-    ota_raw_http_line                        0x200042b0   Data         128  ota.o(.bss)
-    ota_raw_qisend_line                      0x20004330   Data          80  ota.o(.bss)
-    ota_raw_prompt_tail                      0x20004380   Data          32  ota.o(.bss)
-    common_send_buff                         0x200044a0   Data         256  ota.o(.bss)
-    ota_raw_qisend_cmd                       0x200045a0   Data          32  ota.o(.bss)
-    ota_raw_qisend_payload                   0x200045c0   Data         257  ota.o(.bss)
-    ota_default_url                          0x200046c1   Data         128  ota.o(.bss)
-    ota_log_line_buffer                      0x20004741   Data         512  ota.o(.bss)
-    .bss                                     0x20004948   Section    10960  mqtt_zk_protocol.o(.bss)
-    zk_mqtt_cfg                              0x20004948   Data         261  mqtt_zk_protocol.o(.bss)
-    zk_tx_buf                                0x20004a4d   Data        2048  mqtt_zk_protocol.o(.bss)
-    zk_ota_url                               0x2000524d   Data         192  mqtt_zk_protocol.o(.bss)
-    static_rx_pool                           0x20005310   Data        4096  mqtt_zk_protocol.o(.bss)
-    static_tx_pool                           0x20006310   Data        4096  mqtt_zk_protocol.o(.bss)
-    zk_signal_query_cmd_header               0x20007310   Data          56  mqtt_zk_protocol.o(.bss)
-    zk_response_queue                        0x20007348   Data         120  mqtt_zk_protocol.o(.bss)
-    zk_ota_ack_header                        0x200073c0   Data          56  mqtt_zk_protocol.o(.bss)
-    zk_ota_success_report_record             0x200073f8   Data          32  mqtt_zk_protocol.o(.bss)
-    .bss                                     0x20007418   Section     1220  sys_calibration_mqtt.o(.bss)
-    _replay                                  0x20007418   Data         480  sys_calibration_mqtt.o(.bss)
-    _working_response                        0x200075f8   Data         460  sys_calibration_mqtt.o(.bss)
-    _working_decoded_payload                 0x200077c4   Data         280  sys_calibration_mqtt.o(.bss)
-    .bss                                     0x200078dc   Section      420  zk_property.o(.bss)
-    zk_dev_cfg                               0x200078dc   Data         420  zk_property.o(.bss)
-    .bss                                     0x20007a80   Section     1296  zk_work_plan.o(.bss)
-    zk_plan_store                            0x20007a80   Data         648  zk_work_plan.o(.bss)
-    zk_plan_persistent_payload               0x20007d08   Data         648  zk_work_plan.o(.bss)
-    HEAP                                     0x20007f90   Section      512  startup_stm32f103xe.o(HEAP)
-    STACK                                    0x20008190   Section     2048  startup_stm32f103xe.o(STACK)
+    nb_modem_ota_tx_buffer                   0x20001db6   Data         320  nbdriver.o(.bss)
+    pubDataBuf                               0x20001ef6   Data        2048  nbdriver.o(.bss)
+    sendStringBuf3                           0x200026f6   Data         128  nbdriver.o(.bss)
+    .bss                                     0x20002778   Section     4112  portable.o(.bss)
+    .bss                                     0x20003788   Section     5985  ota.o(.bss)
+    ota_stream_page_buf                      0x20003788   Data        2048  ota.o(.bss)
+    ota_stream_program_buf                   0x20003f88   Data        2048  ota.o(.bss)
+    ota_raw_host                             0x20004788   Data          80  ota.o(.bss)
+    ota_raw_path                             0x200047d8   Data         128  ota.o(.bss)
+    ota_raw_http_line                        0x20004858   Data         128  ota.o(.bss)
+    ota_raw_qisend_line                      0x200048d8   Data          80  ota.o(.bss)
+    ota_raw_prompt_tail                      0x20004928   Data          32  ota.o(.bss)
+    common_send_buff                         0x20004a48   Data         256  ota.o(.bss)
+    ota_raw_qisend_cmd                       0x20004b48   Data          32  ota.o(.bss)
+    ota_raw_qisend_payload                   0x20004b68   Data         257  ota.o(.bss)
+    ota_default_url                          0x20004c69   Data         128  ota.o(.bss)
+    ota_log_line_buffer                      0x20004ce9   Data         512  ota.o(.bss)
+    .bss                                     0x20004ef0   Section    10960  mqtt_zk_protocol.o(.bss)
+    zk_mqtt_cfg                              0x20004ef0   Data         261  mqtt_zk_protocol.o(.bss)
+    zk_tx_buf                                0x20004ff5   Data        2048  mqtt_zk_protocol.o(.bss)
+    zk_ota_url                               0x200057f5   Data         192  mqtt_zk_protocol.o(.bss)
+    static_rx_pool                           0x200058b8   Data        4096  mqtt_zk_protocol.o(.bss)
+    static_tx_pool                           0x200068b8   Data        4096  mqtt_zk_protocol.o(.bss)
+    zk_signal_query_cmd_header               0x200078b8   Data          56  mqtt_zk_protocol.o(.bss)
+    zk_response_queue                        0x200078f0   Data         120  mqtt_zk_protocol.o(.bss)
+    zk_ota_ack_header                        0x20007968   Data          56  mqtt_zk_protocol.o(.bss)
+    zk_ota_success_report_record             0x200079a0   Data          32  mqtt_zk_protocol.o(.bss)
+    .bss                                     0x200079c0   Section     1220  sys_calibration_mqtt.o(.bss)
+    _replay                                  0x200079c0   Data         480  sys_calibration_mqtt.o(.bss)
+    _working_response                        0x20007ba0   Data         460  sys_calibration_mqtt.o(.bss)
+    _working_decoded_payload                 0x20007d6c   Data         280  sys_calibration_mqtt.o(.bss)
+    .bss                                     0x20007e84   Section      420  zk_property.o(.bss)
+    zk_dev_cfg                               0x20007e84   Data         420  zk_property.o(.bss)
+    .bss                                     0x20008028   Section     1296  zk_work_plan.o(.bss)
+    zk_plan_store                            0x20008028   Data         648  zk_work_plan.o(.bss)
+    zk_plan_persistent_payload               0x200082b0   Data         648  zk_work_plan.o(.bss)
+    HEAP                                     0x20008538   Section      512  startup_stm32f103xe.o(HEAP)
+    STACK                                    0x20008738   Section     2048  startup_stm32f103xe.o(STACK)
 
     Global Symbols
 
@@ -7160,13 +7160,13 @@ Image Symbol Table
     IMEI                                     0x200013d0   Data          18  nbdriver.o(.bss)
     IMEI10                                   0x200013e2   Data          13  nbdriver.o(.bss)
     simCardICCID                             0x200013ef   Data          22  nbdriver.o(.bss)
-    stringBuf                                0x200015b5   Data         600  nbdriver.o(.bss)
-    queueBuf                                 0x200021d0   Data        4097  portable.o(.bss)
-    usartRecvQueue                           0x200031d4   Data          12  portable.o(.bss)
-    firm_name_buffer                         0x200043a0   Data         256  ota.o(.bss)
-    __heap_base                              0x20007f90   Data           0  startup_stm32f103xe.o(HEAP)
-    __heap_limit                             0x20008190   Data           0  startup_stm32f103xe.o(HEAP)
-    __initial_sp                             0x20008990   Data           0  startup_stm32f103xe.o(STACK)
+    stringBuf                                0x200015b5   Data        2049  nbdriver.o(.bss)
+    queueBuf                                 0x20002778   Data        4097  portable.o(.bss)
+    usartRecvQueue                           0x2000377c   Data          12  portable.o(.bss)
+    firm_name_buffer                         0x20004948   Data         256  ota.o(.bss)
+    __heap_base                              0x20008538   Data           0  startup_stm32f103xe.o(HEAP)
+    __heap_limit                             0x20008738   Data           0  startup_stm32f103xe.o(HEAP)
+    __initial_sp                             0x20008f38   Data           0  startup_stm32f103xe.o(STACK)
 
 
 
@@ -8155,7 +8155,7 @@ Memory Map of the image
     0x0801eca8   0x0801eca8   0x00000020   Data   RO        10891    Region$$Table       anon$$obj.o
 
 
-    Execution Region RW_IRAM1 (Exec base: 0x20000000, Load base: 0x0801ecc8, Size: 0x00008990, Max: 0x0000c000, ABSOLUTE, COMPRESSED[0x000000cc])
+    Execution Region RW_IRAM1 (Exec base: 0x20000000, Load base: 0x0801ecc8, Size: 0x00008f38, Max: 0x0000c000, ABSOLUTE, COMPRESSED[0x000000cc])
 
     Exec Addr    Load Addr    Size         Type   Attr      Idx    E Section Name        Object
 
@@ -8230,17 +8230,17 @@ Memory Map of the image
     0x20001224        -       0x000000b4   Zero   RW         6500    .bss                hw_tim1_pwm2.o
     0x200012d8        -       0x00000044   Zero   RW         6585    .bss                hw_uart1.o
     0x2000131c        -       0x000000b4   Zero   RW         6647    .bss                adc.o
-    0x200013d0        -       0x00000dfd   Zero   RW         7430    .bss                nbdriver.o
-    0x200021cd   COMPRESSED   0x00000003   PAD
-    0x200021d0        -       0x00001010   Zero   RW         8067    .bss                portable.o
-    0x200031e0        -       0x00001761   Zero   RW         8216    .bss                ota.o
-    0x20004941   COMPRESSED   0x00000007   PAD
-    0x20004948        -       0x00002ad0   Zero   RW         9297    .bss                mqtt_zk_protocol.o
-    0x20007418        -       0x000004c4   Zero   RW         9807    .bss                sys_calibration_mqtt.o
-    0x200078dc        -       0x000001a4   Zero   RW        10123    .bss                zk_property.o
-    0x20007a80        -       0x00000510   Zero   RW        10316    .bss                zk_work_plan.o
-    0x20007f90        -       0x00000200   Zero   RW            2    HEAP                startup_stm32f103xe.o
-    0x20008190        -       0x00000800   Zero   RW            1    STACK               startup_stm32f103xe.o
+    0x200013d0        -       0x000013a6   Zero   RW         7430    .bss                nbdriver.o
+    0x20002776   COMPRESSED   0x00000002   PAD
+    0x20002778        -       0x00001010   Zero   RW         8067    .bss                portable.o
+    0x20003788        -       0x00001761   Zero   RW         8216    .bss                ota.o
+    0x20004ee9   COMPRESSED   0x00000007   PAD
+    0x20004ef0        -       0x00002ad0   Zero   RW         9297    .bss                mqtt_zk_protocol.o
+    0x200079c0        -       0x000004c4   Zero   RW         9807    .bss                sys_calibration_mqtt.o
+    0x20007e84        -       0x000001a4   Zero   RW        10123    .bss                zk_property.o
+    0x20008028        -       0x00000510   Zero   RW        10316    .bss                zk_work_plan.o
+    0x20008538        -       0x00000200   Zero   RW            2    HEAP                startup_stm32f103xe.o
+    0x20008738        -       0x00000800   Zero   RW            1    STACK               startup_stm32f103xe.o
 
 
 ==============================================================================
@@ -8274,7 +8274,7 @@ Image component sizes
        102          0          0          0          0       6513   json_protocol.o
        940         84          0          6         56     539368   main.o
      11438       1900        497        248      10960      81877   mqtt_zk_protocol.o
-      5916       1528          0         96       3581      44377   nbdriver.o
+      5916       1528          0         96       5030      44353   nbdriver.o
         72         20          0          8          0       1259   net_dim.o
        320         34        684         20          0       3444   ntc.o
        116         20          0          0          0       1898   oco.o
@@ -8331,9 +8331,9 @@ Image component sizes
       4978        478         12         10       1296      28811   zk_work_plan.o
 
     ----------------------------------------------------------------------
-     83258      10896       2626       1752      33456    1318015   Object Totals
+     83258      10896       2626       1752      34904    1317991   Object Totals
          0          0         32          0          0          0   (incl. Generated)
-       134          0         12         12         10          0   (incl. Padding)
+       134          0         12         12          9          0   (incl. Padding)
 
     ----------------------------------------------------------------------
 
@@ -8420,14 +8420,14 @@ Image component sizes
 
       Code (inc. data)   RO Data    RW Data    ZI Data      Debug   
 
-     90694      11082       2690       1760      33456    1279271   Grand Totals
-     90694      11082       2690        204      33456    1279271   ELF Image Totals (compressed)
+     90694      11082       2690       1760      34904    1279247   Grand Totals
+     90694      11082       2690        204      34904    1279247   ELF Image Totals (compressed)
      90694      11082       2690        204          0          0   ROM Totals
 
 ==============================================================================
 
     Total RO  Size (Code + RO Data)                93384 (  91.20kB)
-    Total RW  Size (RW Data + ZI Data)             35216 (  34.39kB)
+    Total RW  Size (RW Data + ZI Data)             36664 (  35.80kB)
     Total ROM Size (Code + RO Data + RW Data)      93588 (  91.39kB)
 
 ==============================================================================
