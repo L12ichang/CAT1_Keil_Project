@@ -50,6 +50,44 @@ cc \
 "${BUILD_DIR}/test_cal_mqtt_v3" \
   "${ROOT_DIR}/protocol/fixtures/CAL_MQTT_V3"
 
+cc \
+  -std=c11 \
+  -Wall \
+  -Wextra \
+  -Werror \
+  -DUSE_HAL_DRIVER \
+  -DSTM32F103xE \
+  -DPRODUCT_TARGET_50W \
+  -DSYS_DATA_HOST_TEST \
+  -I"${ROOT_DIR}/Core/Inc" \
+  -I"${ROOT_DIR}/Core/Src" \
+  -I"${ROOT_DIR}/Core/Src/CJSON" \
+  -I"${ROOT_DIR}/Core/Src/LampProtocolLib" \
+  -I"${ROOT_DIR}/Drivers/STM32F1xx_HAL_Driver/Inc" \
+  -I"${ROOT_DIR}/Drivers/STM32F1xx_HAL_Driver/Inc/Legacy" \
+  -I"${ROOT_DIR}/Drivers/CMSIS/Device/ST/STM32F1xx/Include" \
+  -I"${ROOT_DIR}/Drivers/CMSIS/Include" \
+  -x c - \
+  -o "${BUILD_DIR}/test_v3_rx_capacity" <<'C'
+#include "hw_gateway.h"
+#include "mqtt_zk_protocol.h"
+
+_Static_assert(ZK_JSON_RX_MAX == 2048U,
+               "V3 JSON receive limit must remain 2048 bytes");
+_Static_assert(RECV_BUF_LENGTH == (ZK_JSON_RX_MAX + 1U),
+               "receive storage must include the trailing NUL byte");
+_Static_assert(sizeof(stringBuf) == RECV_BUF_LENGTH,
+               "the modem receive buffer must use the shared V3 capacity");
+
+int main(void)
+{
+    return 0;
+}
+C
+
+"${BUILD_DIR}/test_v3_rx_capacity"
+echo "V3 MQTT receive capacity gate: PASS"
+
 while read -r expected_sha fixture_name; do
   actual_sha="$(openssl dgst -sha256 \
     "${ROOT_DIR}/protocol/fixtures/CAL_MQTT_V3/${fixture_name}" | awk '{print $NF}')"

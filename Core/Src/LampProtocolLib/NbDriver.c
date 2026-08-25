@@ -16,7 +16,6 @@
 #include "type.h"
 #include "mqtt_zk_protocol.h"
 extern QUEUE  usartRecvQueue;//�������ݽ��ն���
-#define RECV_BUF_LENGTH 600
 #define CONNECTING_MAX_WAIT_TIME 20
 #define CONNECTED_MAX_WAIT_TIME 5
 #define MAX_RECONNECT_COUNT 6*5 //6*20*5s=10min

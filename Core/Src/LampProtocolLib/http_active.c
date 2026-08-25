@@ -180,7 +180,7 @@ void  http_post(char* urlbuf,char* bodystr)
        
                           // "CONNECT"
                            printf(" SEND_QHTTPURL\n");
-                        memset(stringBuf,0x00,600);//清空内容
+                        memset(stringBuf,0x00,RECV_BUF_LENGTH);//清空内容
                      sendCommand(url_cmd_strbuff, strlen(url_cmd_strbuff)); 
                  
                     wait_timer=Timer_GetTickCount();
@@ -194,7 +194,7 @@ void  http_post(char* urlbuf,char* bodystr)
                  {
                       //  "OK"
                         printf(" SEND_URL\n");
-                        memset(stringBuf,0x00,600);//清空内容
+                        memset(stringBuf,0x00,RECV_BUF_LENGTH);//清空内容
                       sendCommand(url_strbuff,strlen(url_strbuff) );   
                       wait_timer=Timer_GetTickCount();
                       cmd_state=CMD_STATE_TX;
@@ -207,7 +207,7 @@ void  http_post(char* urlbuf,char* bodystr)
                  {
                      // "CONNECT", 25, 1);//
                       printf(" SEND_POST\n");
-                       memset(stringBuf,0x00,600);//清空内容
+                       memset(stringBuf,0x00,RECV_BUF_LENGTH);//清空内容
                        sendCommand(post_cmd_strbuff,strlen(post_cmd_strbuff)) ;   
                        wait_timer=Timer_GetTickCount();
                        cmd_state=CMD_STATE_TX;
@@ -220,7 +220,7 @@ void  http_post(char* urlbuf,char* bodystr)
                  {
                  // "OK", 25, 1);//
                       printf(" SEND_body\n");
-                    memset(stringBuf,0x00,600);//清空内容
+                    memset(stringBuf,0x00,RECV_BUF_LENGTH);//清空内容
                     sendCommand(body_strbuff,strlen(body_strbuff)) ;   
                        wait_timer=Timer_GetTickCount();
                     cmd_state=CMD_STATE_TX; 
@@ -231,7 +231,7 @@ void  http_post(char* urlbuf,char* bodystr)
                 if(cmd_state==CMD_STATE_IDLE)
                  {
                      
-                  memset(stringBuf,0x00,600);//清空内容
+                  memset(stringBuf,0x00,RECV_BUF_LENGTH);//清空内容
                 //  "CONNECT", 25, 1);
                  printf(" SEND_QHTTPREAD\n");
                  sendCommand("AT+QHTTPREAD=80\r\n",strlen("AT+QHTTPREAD=80\r\n")) ;   

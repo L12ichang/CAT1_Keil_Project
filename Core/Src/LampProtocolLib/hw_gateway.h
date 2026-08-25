@@ -18,7 +18,8 @@ typedef   signed char     int8;
 typedef   signed short    int16;
 typedef   signed long     int32;
 #define GATEWAY_RX_SIZE      64
-#define RECV_BUF_LENGTH      600   //nbdriver.c中有定义
+/* ZK_JSON_RX_MAX (2048 bytes) plus the terminating NUL. */
+#define RECV_BUF_LENGTH      2049U
 
 
 typedef enum 

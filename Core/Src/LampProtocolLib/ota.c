@@ -3957,7 +3957,7 @@ void  mcu_copy_firmware_machine(void)
 
                                             }
                                              leng_temp=0;
-                                             memset(stringBuf,0x00,600);//不清空会重复读相同的内容
+                                             memset(stringBuf,0x00,RECV_BUF_LENGTH);//不清空会重复读相同的内容
                                              recvLength=0;
                                              MCU_OTA_state= MCU_OTA_AT_QFLST;
                                              data_state=DATA_STATE_FINEISH;
