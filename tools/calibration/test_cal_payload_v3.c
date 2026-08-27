@@ -128,7 +128,7 @@ static void fill_g4(sys_calibration_payload_st *payload)
     payload->valid_flags = 0x001FU;
     for (index = 0U; index < 11U; ++index)
     {
-        payload->output[index].logical_pwm = (u16)((u16)index * 100U);
+        payload->output[index].logical_pwm = (u16)((u16)index * 60U);
         payload->output[index].reference_output_current_ma =
             output_reference[index];
         payload->oco[index].oco_adc_raw = (u16)(1000U + (u16)index * 100U);
@@ -195,7 +195,7 @@ int main(int argc, char **argv)
         sys_calibration_payload_crc32_iso_hdlc(
             (const u8 *)"123456789", 9U) == 0xCBF43926UL &&
         sys_calibration_payload_crc32_iso_hdlc(
-            encoded, (u16)sizeof(encoded)) == 0x79400F5FUL,
+            encoded, (u16)sizeof(encoded)) == 0x3D3B064BUL,
         "G1 and G4 CRC32 vectors match");
     failures += expect_true(
         sys_calibration_payload_decode(
@@ -261,10 +261,10 @@ int main(int argc, char **argv)
         sys_calibration_payload_validate(&decoded) == BOOL_FALSE,
         "payload rejects partial validFlags");
     decoded = source;
-    decoded.output[5].logical_pwm = 499U;
+    decoded.output[5].logical_pwm = decoded.output[4].logical_pwm;
     failures += expect_true(
         sys_calibration_payload_validate(&decoded) == BOOL_FALSE,
-        "payload rejects a non-canonical logical PWM point");
+        "payload rejects a non-increasing normal-dimming PWM point");
     decoded = source;
     decoded.bl_current[5].bl_current_raw =
         decoded.bl_current[4].bl_current_raw - 1U;
@@ -285,7 +285,7 @@ int main(int argc, char **argv)
         get_u32_le(&record[0x08]) == 7U &&
         get_u16_le(&record[0x0C]) == 244U &&
         get_u16_le(&record[0x0E]) == 0U &&
-        get_u32_le(&record[0x10]) == 0x79400F5FUL &&
+        get_u32_le(&record[0x10]) == 0x3D3B064BUL &&
         memcmp(&record[0x14], fixture, sizeof(fixture)) == 0 &&
         get_u32_le(&record[0x108]) ==
             sys_calibration_payload_crc32_iso_hdlc(record, 0x108U) &&

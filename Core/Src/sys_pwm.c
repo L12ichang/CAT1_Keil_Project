@@ -7,6 +7,7 @@
 
 #include "factory_user_data.h"
 #include "hw_tim1_pwm2.h"
+#include "net_dim.h"
 #include "sys_bl0942.h"
 #include "sys_calibration_curve.h"
 #include "sys_calibration_safety.h"
@@ -281,6 +282,15 @@ void sys_pwm_output(u8 percent)
     }
 }
 
+void sys_pwm_normal_output(u8 percent)
+{
+    if (sys_calibration_service_is_boot_inhibited() == BOOL_TRUE)
+    {
+        return;
+    }
+    sys_pwm_output(percent);
+}
+
 void sys_pwm_output_for_temp_protect(u8 percent)
 {
     power_old = percent;
@@ -311,6 +321,7 @@ void sys_pwm_process(void)
 
 void sys_pwm_force_safe_off(void)
 {
+    net_dim_clear_pending();
     _fade = BOOL_FALSE;
     power_old = 0U;
     power_new = 0U;
@@ -322,41 +333,12 @@ void sys_pwm_force_safe_off(void)
 
 boolean_en sys_pwm_calibration_set_level(u16 level, u16 *actual_pwm)
 {
-    u16 logical_pwm;
-    u16 protected_pwm;
-
     if (actual_pwm == NULL ||
         sys_calibration_curve_validate_level(level) != BOOL_TRUE)
     {
         return BOOL_FALSE;
     }
-    if (level == 0U)
-    {
-        sys_pwm_force_safe_off();
-        *actual_pwm = 0U;
-        return BOOL_TRUE;
-    }
-    if (sys_pwm_calibration_feedback_ready() != BOOL_TRUE)
-    {
-        sys_pwm_force_safe_off();
-        return BOOL_FALSE;
-    }
-    logical_pwm = (u16)(level * 5U);
-    protected_pwm = sys_calibration_safety_arbitrate_pwm(
-        logical_pwm,
-        SYS_CALIBRATION_OUTPUT_SOURCE_CALIBRATION,
-        sys_calibration_service_is_boot_inhibited(),
-        sys_pwm_calibration_fault_active(),
-        BOOL_TRUE);
-    if (protected_pwm != logical_pwm)
-    {
-        sys_pwm_force_safe_off();
-        return BOOL_FALSE;
-    }
-    hw_tim1_pwm2_set_calibration_PWM_OUT(logical_pwm);
-    sys_pwm_publish((u16)(level / 2U), (u16)(level / 2U));
-    *actual_pwm = hw_tim1_pwm2_get_logical_pwm();
-    return (*actual_pwm == logical_pwm) ? BOOL_TRUE : BOOL_FALSE;
+    return sys_pwm_calibration_set_output((u8)(level / 2U), actual_pwm);
 }
 
 boolean_en sys_pwm_calibration_set_output(u8 percent, u16 *actual_pwm)

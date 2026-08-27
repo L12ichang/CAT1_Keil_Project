@@ -1,9 +1,9 @@
 # CAT1 50W 一体化电源——校准固件 V2→V3 修改实施基线
 
 > 项目：`L12ichang/CAT1_Keil_Project`  
-> 分支：`main`  
+> 分支：`v3`
 > 文档定位：**固件侧唯一实施基线**  
-> 当前代码状态：**V2，尚未进行任何 V3 功能修改**  
+> 当前代码状态：**V3源码已实现，正常调光采点修订中；Keil/HIL待验收**
 > 目标：**将当前 V2 固件升级改造为 Calibration MQTT Protocol V3**  
 > 字段级唯一真源：`docs/CAT1_50W固件与上位机联合审核清单.md`
 
@@ -11,7 +11,7 @@
 
 ## 0. 最高优先级事实与本轮边界
 
-当前真实源码仍是 V2：
+历史V2代码仍保留用于回归，但当前生产目标是V3：
 
 - `SYS_CALIBRATION_MQTT_PROTOCOL_VERSION = 2`；
 - 仍存在旧 `profileContext`；
@@ -268,22 +268,21 @@ PWM / CCR
 正式采点：
 
 ```text
-Level 0   -> logicalPwm 0
-Level 20  -> logicalPwm 100
-...
-Level 200 -> logicalPwm 1000
-```
-
-即：
-
-```text
-logicalPwm = level * 5
+Level 0/20/.../200
+→ Brightness 0/10/.../100
+→ 固件同步执行校准专用Percent/Current映射和既有硬件保护
+→ RAW读取实际logicalPwm与设备Raw
+→ 外部仪器读取Reference
 ```
 
 采点时：
 
-- 不应用旧 Output Calibration；
-- 不叠加 OP_PWM_OFFSET；
+- 上位机只发送SET_POINT Level，不再补发普通ctrl命令；
+- 不允许上位机搜索、指定logicalPwm或写CCR；
+- 使用设备当前成熟正常调光映射和全部既有保护；
+- 校准会话期间普通MQTT、离线计划和恢复调光不得绕过boot-inhibit；
+- 安全关闭清空全部待处理调光，不保留跨会话命令；
+- 21点历史实现只参考流程，V3仍为11点；
 - 不允许上位机直接写 CCR；
 - 保留硬件最后保护。
 
@@ -299,6 +298,12 @@ logicalPwm = level * 5
 Percent = 0,10,...,100
 Level   = 0,20,...,200
 ```
+
+11点完成后再次发送`SET_POINT level=0`，等待同步安全关闭生效，并以RAW的
+`level=0/actualPwm=0/faultFlags=0`及外部负载零电流门禁确认后才能STAGE。
+
+活动会话lease超时回到IDLE后，MQTT层不得继续重放旧的ACTIVE/STAGED/APPLIED/COMMITTED
+成功回复；必须返回`SESSION_EXPIRED + IDLE`，同时保留正常会话内和已IDLE回复的幂等重放。
 
 每次必须完整生成：
 
@@ -370,7 +375,7 @@ correctedVoltage01V =
 - Gain 由上位机生成；
 - 固件只做定点应用；
 - 中间乘法必须使用 `uint64_t`；
-- V3 PayloadVersion=1 只保存 `u32 voltageGainQ24`。
+- V3 PayloadVersion=2 只保存 `u32 voltageGainQ24`。
 
 **重要：Gain-only 是 V3 第一版实现，不是永久禁止 Offset。**
 
@@ -384,7 +389,7 @@ correctedVoltage01V =
 → 新版本可采用 Gain + Offset 或其他经实测证明的模型
 ```
 
-禁止 Codex 在 PayloadVersion=1 / 244B 中偷偷增加 Offset、复用 Reserved 或改变现有字段含义。
+禁止在 PayloadVersion=2 / 244B 中偷偷增加 Offset、复用 Reserved 或改变现有字段含义。
 
 ---
 
@@ -628,7 +633,7 @@ PASS -> COMMIT
 
 ```text
 Magic          = CALP
-PayloadVersion = 1
+PayloadVersion = 2
 PayloadLength  = 244B
 Endian         = Little Endian
 ValidFlags     = 0x001F

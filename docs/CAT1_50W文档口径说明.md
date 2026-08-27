@@ -1,8 +1,8 @@
 # CAT1 50W 文档口径说明
 
 > 生效日期：2026-08-21  
-> 分支：`main`  
-> 状态：`CURRENT_CODE_V2 / TARGET_V3_CONTRACT_FROZEN / IMPLEMENTATION_PENDING`
+> 分支：`v3`
+> 状态：`V3_SOURCE_IMPLEMENTED / NORMAL_DIMMING_REVISION_IN_REVIEW / KEIL_HIL_PENDING`
 
 ## 1. 当前唯一权威文档
 
@@ -21,13 +21,12 @@
 ## 2. 当前代码状态
 
 ```text
-CAT1_Keil_Project 当前代码 = V2
-tc-desktop-client 当前代码 = V2
-V3功能代码                  = 尚未实现
-当前工作目标                = 将两端从V2完整升级到V3
+CAT1_Keil_Project 当前代码 = V3源码实现，正常调光采点修订中
+tc-desktop-client 当前代码 = V3 Runner实现，正常调光采点修订中
+当前工作目标                = 完成软件门禁、文档一致性和后续Keil/HIL
 ```
 
-当前固件 `SYS_CALIBRATION_MQTT_PROTOCOL_VERSION=2`、上位机 `calibration-mqtt-v2.ts`、旧198B Payload、旧Context、旧Storage formatVersion=3都属于V2现状。
+旧`calibration-mqtt-v2.ts`、198B Payload、旧Context和Storage formatVersion=3只属于历史兼容/回归，不是当前V3生产链。
 
 **文档冻结不等于代码已实现。** 后续必须用真实代码、Keil编译、单测和HIL证明V3完成。
 
@@ -35,7 +34,7 @@ V3功能代码                  = 尚未实现
 
 ```text
 Wire Protocol              = Calibration MQTT Protocol V3
-Calibration PayloadVersion = 1
+Calibration PayloadVersion = 2
 Calibration StorageFormat  = 4
 ```
 
@@ -51,7 +50,8 @@ Calibration StorageFormat  = 4
 50W Default SET_OUTCUR = 893mA
 RS3                    = 120mΩ
 11 points              = Level 0/20/.../200
-logicalPwm             = 0..1000
+Brightness             = 0,10,...,100
+logicalPwm             = 普通调光链路实际输出，0点为0，其余严格递增且<=1000
 ```
 
 ```text
@@ -602,7 +602,7 @@ Gain-only Q24
 → 新版本可采用Gain + Offset或其他实测模型
 ```
 
-禁止Codex在PayloadVersion=1的244B结构中偷偷加入Offset。
+禁止在PayloadVersion=2的244B结构中偷偷加入Offset。
 
 ### 4.14 Keil单功率Target
 
@@ -643,7 +643,7 @@ CAT1_240W
 - 上位机发送完整Flash Record；
 - 校准前按最终Tolerance直接FAIL；
 - BL0942周期Reset保活；
-- 在244B PayloadVersion=1偷偷增加Voltage Offset；
+- 在244B PayloadVersion=2偷偷增加Voltage Offset；
 - 把sid/seq/heartbeat/staged Payload持久化到Runtime；
 - 每秒写Runtime Flash；
 - Runtime持久化本次上电currentRun/currentLight/currentEnergy；

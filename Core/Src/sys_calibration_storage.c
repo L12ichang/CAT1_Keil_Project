@@ -29,7 +29,8 @@ boolean_en sys_calibration_storage_v3_payload_header_validate(
     const u8 payload[SYS_CALIBRATION_STORAGE_V3_PAYLOAD_LENGTH])
 {
     if (payload == NULL || memcmp(payload, "CALP", 4U) != 0 ||
-        sys_persistent_get_u16_le(payload + 0x04U) != 1U ||
+        sys_persistent_get_u16_le(payload + 0x04U) !=
+            SYS_CALIBRATION_PAYLOAD_VERSION ||
         sys_persistent_get_u16_le(payload + 0x06U) !=
             SYS_CALIBRATION_STORAGE_V3_PAYLOAD_LENGTH ||
         payload[0x10U] != 11U || payload[0x11U] != 20U ||

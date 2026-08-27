@@ -8,6 +8,7 @@
 extern u8 net_entery_flag;
 extern void pwm_output(u8 percent);
 extern void sys_pwm_output(u8 percent);
+void sys_pwm_normal_output(u8 percent);
 void sys_pwm_fade_output(u8 oldpower, u8 newpower);
 
 void sys_pwm_timer(void);

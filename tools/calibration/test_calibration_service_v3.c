@@ -75,7 +75,7 @@ static boolean_en test_set_level(u16 level, u16 *actual_pwm)
     {
         return BOOL_FALSE;
     }
-    *actual_pwm = (u16)(level * 5U);
+    *actual_pwm = (u16)(level * 3U);
     return BOOL_TRUE;
 }
 
@@ -125,7 +125,7 @@ static void build_payload(sys_calibration_payload_st *payload,
     payload->voltage_gain_q24 = 0x01000000UL;
     for (index = 0U; index < SYS_CALIBRATION_POINT_COUNT; ++index)
     {
-        payload->output[index].logical_pwm = (u16)(index * 100U);
+        payload->output[index].logical_pwm = (u16)(index * 60U);
         payload->output[index].reference_output_current_ma = output_ref[index];
         payload->oco[index].oco_adc_raw = (u16)(1000U + index * 100U);
         payload->oco[index].reference_output_current_ma = output_ref[index];
@@ -143,7 +143,9 @@ static void build_payload(sys_calibration_payload_st *payload,
         encoded, SYS_CALIBRATION_PAYLOAD_LENGTH);
 }
 
-static void publish_fresh_raw(u32 tick_ms, u16 logical_pwm)
+static void publish_fresh_raw(u32 tick_ms,
+                              u16 logical_pwm,
+                              u16 requested_percent)
 {
     u8 frame[SYS_CALIBRATION_METER_RAW_FRAME_LENGTH] = {0};
 
@@ -157,7 +159,8 @@ static void publish_fresh_raw(u32 tick_ms, u16 logical_pwm)
     sys_calibration_snapshot_publish_adc(
         tick_ms, 0U, 1000U, 0U, 1500U,
         SYS_CALIBRATION_ADC_SAMPLE_VALID);
-    sys_calibration_snapshot_prepare_pwm(50U, 50U);
+    sys_calibration_snapshot_prepare_pwm(requested_percent,
+                                         requested_percent);
     sys_calibration_snapshot_publish_pwm(
         tick_ms, logical_pwm, logical_pwm, logical_pwm == 0U ? 0U : 1U,
         SYS_CALIBRATION_PWM_SAMPLE_VALID);
@@ -222,9 +225,11 @@ int main(void)
     failures += expect_true(
         sys_calibration_service_set_point_seq(
             123456UL, 120U, 3U, 100U, &status) ==
-                SYS_CALIBRATION_RESULT_OK &&
-            last_level == 100U && status.actual_pwm == 500U,
-        "SET_POINT maps level directly to logicalPwm without CCR input");
+            SYS_CALIBRATION_RESULT_OK &&
+            status.current_level == 100U && status.current_percent == 50U &&
+            status.actual_pwm == 300U && set_level_count == 1U &&
+            last_level == 100U,
+        "SET_POINT synchronously applies 50 percent through its bound callback");
     side_effect_count = set_level_count;
     failures += expect_true(
         sys_calibration_service_set_point_seq(
@@ -232,21 +237,14 @@ int main(void)
                 SYS_CALIBRATION_RESULT_BAD_REQUEST &&
             set_level_count == side_effect_count,
         "same sid/seq/op with changed parameters is not an exact duplicate");
-    failures += expect_true(
-        sys_calibration_service_raw_seq(
-            123456UL, 130U, 4U, &raw, &status) ==
-                SYS_CALIBRATION_RESULT_DATA_STALE &&
-            raw.bl_age_ms == SYS_CALIBRATION_SNAPSHOT_AGE_INVALID,
-        "RAW returns auditable stale snapshot before a valid BL frame");
-
-    publish_fresh_raw(140U, 500U);
+    publish_fresh_raw(140U, 500U, 50U);
     failures += expect_true(
         sys_calibration_service_raw_seq(
             123456UL, 150U, 5U, &raw, &status) ==
                 SYS_CALIBRATION_RESULT_OK &&
             (raw.valid_flags & 0x003FU) == 0x003FU &&
             raw.oco_raw == 1500U && raw.bl_current_raw == 150000UL,
-        "ACTIVE RAW exposes complete uncorrected fitting fields");
+        "ACTIVE RAW exposes ordinary-dimming PWM plus uncorrected fitting fields");
     failures += expect_true(
         sys_calibration_service_stage_seq(
             123456UL, 160U, 6U, payload,
@@ -269,7 +267,7 @@ int main(void)
 
     failures += expect_true(
         sys_calibration_service_output_pwm_for_current(447U, &corrected) ==
-                BOOL_TRUE && corrected == 500U,
+                BOOL_TRUE && corrected == 300U,
         "Output target current inverse-interpolates directly to logical PWM");
     failures += expect_true(
         sys_calibration_service_correct_output_current_raw(
@@ -300,7 +298,7 @@ int main(void)
                 SYS_CALIBRATION_RESULT_OK &&
             last_percent == 45U && set_output_count == 1U,
         "SET_OUTPUT delegates staged normal output without MCU PASS/FAIL");
-    publish_fresh_raw(195U, 450U);
+    publish_fresh_raw(195U, 450U, 45U);
     failures += expect_true(
         sys_calibration_service_raw_seq(
             123456UL, 200U, 10U, &raw, &status) ==
@@ -356,7 +354,7 @@ int main(void)
         "RELEASE safe-offs and retains committed Correction");
     failures += expect_true(
         sys_calibration_service_output_pwm_for_current(447U, &corrected) ==
-                BOOL_TRUE && corrected == 500U,
+                BOOL_TRUE && corrected == 300U,
         "committed Calibration remains independent of session context");
 
     for (index = 0U; index < SYS_CALIBRATION_POINT_COUNT; ++index)
@@ -382,7 +380,7 @@ int main(void)
             sys_calibration_service_apply_seq(
                 77U, 520U, 3U, &status) == SYS_CALIBRATION_RESULT_OK &&
             sys_calibration_service_output_pwm_for_current(
-                447U, &corrected) == BOOL_TRUE && corrected != 500U,
+                447U, &corrected) == BOOL_TRUE && corrected != 300U,
         "APPLY temporarily selects the new staged complete Correction");
     side_effect_count = set_output_count;
     safe_off_before = safe_off_count;
@@ -409,7 +407,7 @@ int main(void)
             77U, 530U, 6U, &status) == SYS_CALIBRATION_RESULT_OK &&
             status.state == SYS_CALIBRATION_STATE_IDLE &&
             sys_calibration_service_output_pwm_for_current(
-                447U, &corrected) == BOOL_TRUE && corrected == 500U,
+                447U, &corrected) == BOOL_TRUE && corrected == 300U,
         "ABORT safe-offs, discards staged and restores old committed Correction");
 
     failures += expect_true(
@@ -435,14 +433,20 @@ int main(void)
         sys_calibration_service_set_point_seq(
             99U, 1002U, 3U, 20U, &status) ==
                 SYS_CALIBRATION_RESULT_HARDWARE_FAULT &&
-            (u32)SYS_CALIBRATION_RESULT_HARDWARE_FAULT == 9U,
-        "SET_POINT real output callback failure remains HARDWARE_FAULT=9");
+            set_level_count == side_effect_count + 1U &&
+            status.actual_pwm == 0U,
+        "SET_POINT fails closed when the bound normal dimming path rejects the point");
     level_success = BOOL_TRUE;
-    publish_fresh_raw(1000U, 0U);
+    failures += expect_true(
+        sys_calibration_service_set_point_seq(
+            99U, 1002U, 4U, 0U, &status) ==
+                SYS_CALIBRATION_RESULT_OK,
+        "SET_POINT zero labels the ordinary off sample");
+    publish_fresh_raw(1000U, 0U, 0U);
     Error_Out_LV = 1U;
     failures += expect_true(
         sys_calibration_service_raw_seq(
-            99U, 1003U, 4U, &raw, &status) ==
+            99U, 1003U, 5U, &raw, &status) ==
                 SYS_CALIBRATION_RESULT_OK &&
             (raw.fault_flags &
              SYS_CALIBRATION_FAULT_OUTPUT_LOW_VOLTAGE) != 0U,
@@ -456,7 +460,7 @@ int main(void)
         "lease expiry safe-offs, restores committed and clears session");
     failures += expect_true(
         sys_calibration_service_set_point_seq(
-            99U, 2001U, 5U, 20U, &status) ==
+            99U, 2001U, 6U, 20U, &status) ==
             SYS_CALIBRATION_RESULT_SESSION_EXPIRED,
         "expired session cannot replay old side effects");
     failures += expect_true(

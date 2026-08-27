@@ -182,7 +182,7 @@ static boolean_en fill_valid_calibration_payload(
     decoded.voltage_gain_q24 = voltage_gain_q24;
     for (index = 0U; index < SYS_CALIBRATION_PAYLOAD_POINT_COUNT; ++index)
     {
-        decoded.output[index].logical_pwm = (u16)(index * 100U);
+        decoded.output[index].logical_pwm = (u16)(index * 60U);
         decoded.output[index].reference_output_current_ma = output_ref[index];
         decoded.oco[index].oco_adc_raw = (u16)(1000U + index * 100U);
         decoded.oco[index].reference_output_current_ma = output_ref[index];
@@ -293,7 +293,7 @@ static int test_crc_and_record_codecs(void)
     failures += expect_true(
         sys_calibration_storage_v3_record_build(&cal4, 8U, payload) ==
             BOOL_FALSE,
-        "CALP v1 rejects non-frozen validFlags");
+        "CALP v2 rejects non-frozen validFlags");
     return failures;
 }
 

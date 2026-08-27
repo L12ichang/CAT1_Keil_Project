@@ -381,7 +381,11 @@ static sys_calibration_result_en sys_calibration_service_validate_payload(
 
         output_ref[index] = sys_calibration_get_u16_le(
             payload + output_offset + 2U);
-        if (logical_pwm != (u16)(index * 100U) ||
+        if (logical_pwm > SYS_CALIBRATION_PWM_MAX ||
+            (index == 0U && logical_pwm != 0U) ||
+            (index != 0U &&
+             logical_pwm <= sys_calibration_get_u16_le(
+                 payload + output_offset - CALP_OUTPUT_POINT_SIZE)) ||
             output_ref[index] > profile->hw_max_current_ma ||
             oco_ref > profile->hw_max_current_ma ||
             bl_current_raw > 0x00FFFFFFUL ||
@@ -494,7 +498,8 @@ static sys_calibration_result_en sys_calibration_service_build_raw(
     raw->bl_age_ms = snapshot.meter_age_ms;
     raw->fault_flags = sys_calibration_service_fault_flags();
 
-    if (snapshot.pwm.valid_flags != 0U)
+    if (snapshot.pwm.valid_flags != 0U &&
+        snapshot.pwm.requested_percent == _status.current_percent)
     {
         raw->actual_pwm = snapshot.pwm.logical_pwm;
         raw->valid_flags |= SYS_CALIBRATION_RAW_PWM_VALID;
@@ -807,7 +812,6 @@ sys_calibration_result_en sys_calibration_service_set_point_seq(
     sys_calibration_result_en result;
     sys_calibration_result_en replay;
     u16 actual_pwm = 0U;
-
     _request_signature = sys_calibration_service_signature_mix(
         2166136261UL, level);
     if (sys_calibration_service_get_replay(session_id, seq,
@@ -840,8 +844,8 @@ sys_calibration_result_en sys_calibration_service_set_point_seq(
             session_id, seq, SYS_CALIBRATION_OP_SET_POINT,
             SYS_CALIBRATION_RESULT_DATA_STALE, status);
     }
-    if (_set_level == NULL || _set_level(level, &actual_pwm) != BOOL_TRUE ||
-        actual_pwm != (u16)(level * 5U))
+    if (_set_level == NULL ||
+        _set_level(level, &actual_pwm) != BOOL_TRUE)
     {
         sys_calibration_service_safe_off();
         return sys_calibration_service_finish(

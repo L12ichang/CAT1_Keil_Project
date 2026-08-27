@@ -69,6 +69,10 @@ boolean_en sys_calibration_service_is_boot_inhibited(void)
     return BOOL_FALSE;
 }
 
+void net_dim_clear_pending(void)
+{
+}
+
 boolean_en sys_calibration_snapshot_read_adc(
     sys_calibration_adc_snapshot_st *snapshot)
 {

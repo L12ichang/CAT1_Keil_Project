@@ -2,9 +2,9 @@
 
 > 固件仓库：`L12ichang/CAT1_Keil_Project`  
 > 上位机仓库：`L12ichang/tc-desktop-client`  
-> 分支：`main`  
+> 分支：`v3`（固件）/ `done/v3-calibration-workbench-20260824`（上位机）
 > 本文定位：**V2→V3 跨端唯一字段级协议真源 + 最终联合验收基线**  
-> 状态：`CURRENT_CODE_V2 / TARGET_V3_CONTRACT_FROZEN / IMPLEMENTATION_PENDING`
+> 状态：`V3_SOURCE_IMPLEMENTED / NORMAL_DIMMING_REVISION_IN_REVIEW / KEIL_HIL_PENDING`
 
 ---
 
@@ -13,13 +13,13 @@
 必须先确认事实：
 
 ```text
-固件当前代码 = V2
-上位机当前代码 = V2
-V3功能代码    = 尚未实现
-目标          = 两端从V2升级到V3
+固件当前代码 = V3源码实现，普通调光采点修订中
+上位机当前代码 = V3 Runner实现，普通调光采点修订中
+软件门禁      = 需以本次最终测试结果为准
+硬件门禁      = 新Keil产物/烧录/完整HIL仍待执行
 ```
 
-当前源码中的 `CAL_MQTT_V2`、旧 Context、旧 198B Payload、旧 Storage formatVersion=3 只属于 V2 现状，不是 V3 已实现功能。
+源码中保留的`CAL_MQTT_V2`、旧Context和198B Payload仅用于历史回归；当前V3生产路径不得依赖它们。
 
 本文是字段级唯一真源。固件文档负责“怎么改固件”，上位机文档负责“怎么改工作台”，但以下内容发生冲突时必须以本文为准：
 
@@ -174,17 +174,23 @@ HWMAX：
 ```text
 Percent    = 0,10,...,100
 Level      = 0,20,...,200
-logicalPwm = level * 5 = 0,100,...,1000
+Brightness = Level / 2 = 0,10,...,100
 ```
 
 SET_POINT：
 
-- 上位机只发送 Level；
+- 上位机只发送一次V3 SET_POINT Level；
+- 固件内部执行`Brightness=Level/2`，同步进入校准专用Percent/Current映射；
+- 校准映射复用正常业务的目标电流、Default/Correction和硬件保护逻辑，但不进入异步`dim_ready`队列；
+- 校准会话期间普通MQTT、离线计划和恢复调光仍受boot-inhibit阻断；
+- 安全关闭必须清空全部待处理调光状态；
 - 不允许写 TIM CCR；
-- 采点不应用旧 Output Calibration；
-- 采点不叠加 OP_PWM_OFFSET；
-- 返回 Actual logical PWM；
+- 采点使用设备当前正常调光映射（无Calibration走Default，有Calibration走当前有效Correction）；
+- RAW返回正常调光链路实际产生的logical PWM；
 - MCU保留硬件最后保护。
+
+21点历史工艺只作为“正常调光→设备读数→仪器读数→拟合”的流程参考；
+V3正式点数仍固定为11点，不复用21点数量，也不允许上位机搜索或直驱PWM。
 
 无 Output Calibration：
 
@@ -274,7 +280,7 @@ correctedVoltage01V =
 (uint64_t(rawVoltage) * finalGainQ24 + 2^23) >> 24
 ```
 
-PayloadVersion=1 只保存：
+PayloadVersion=2 只保存：
 
 ```text
 u32 voltageGainQ24
@@ -292,7 +298,7 @@ u32 voltageGainQ24
 → 新版本可采用Gain + Offset/其他实测模型
 ```
 
-禁止在 PayloadVersion=1 的244B结构中偷偷添加 Offset 或改变字段含义。
+禁止在 PayloadVersion=2 的244B结构中偷偷添加 Offset 或改变字段含义。
 
 ---
 
@@ -368,7 +374,7 @@ V3 STAGE **只传 Calibration Payload，不传 Flash Record**。
 
 ```text
 Payload Magic       = ASCII "CALP"
-Payload Version     = 1
+Payload Version     = 2
 Payload Length      = 244 = 0x00F4
 Endian              = Little Endian
 Point Count         = 11
@@ -381,7 +387,7 @@ ValidFlags          = 0x001F
 | Offset | Size | Type | Field |
 |---:|---:|---|---|
 | `0x00` | 4 | byte[4] | `CALP` = `43 41 4C 50` |
-| `0x04` | 2 | u16 | payloadVersion=1 |
+| `0x04` | 2 | u16 | payloadVersion=2 |
 | `0x06` | 2 | u16 | payloadLength=244 |
 | `0x08` | 2 | u16 | profileId |
 | `0x0A` | 2 | u16 | profileVersion |
@@ -401,7 +407,7 @@ bit4 BL Power
 bit5..15 reserved=0
 ```
 
-第一版只接受 `0x001F`。
+当前版本只接受 `0x001F`。
 
 ## 7.2 Output，44B
 
@@ -412,7 +418,7 @@ u16 logicalPwm
 u16 referenceOutputCurrentMa
 ```
 
-第i点 `logicalPwm=i*100`。
+第0点`logicalPwm=0`；第1..10点保存普通调光链路的实际PWM，必须严格递增且不大于1000。
 
 ## 7.3 OCO，44B
 
@@ -852,10 +858,10 @@ Response：
 ```text
 v,op,sid,seq,rc,st
 level
-actualPwm
 ```
 
-正常 `actualPwm=level*5`。若硬件保护阻止正确输出，不得伪造OK。
+SET_POINT在固件内部将Level换算为Brightness并同步执行校准专用Percent/Current映射；上位机不再发送第二条ctrl命令。
+最终`actualPwm`由RAW返回。若SET_POINT ACK、RAW档位/PWM、保护状态或仪器证据不一致，不得进入拟合。
 
 ## 12.5 RAW，CT=R
 
@@ -1088,6 +1094,8 @@ DIAG不承载正式校准Raw，不参与拟合。
 - ACTIVE/STAGED/APPLIED lease超时：safe off、丢弃未提交staged、恢复旧committed Calibration、清session→IDLE；
 - COMMITTED lease超时：safe off、保留已经提交的新Calibration、清session→IDLE；
 - lease超时后旧session的新命令返回SESSION_EXPIRED或BAD_STATE，不得重新执行旧副作用。
+- 若MQTT一项重放缓存仍保存ACTIVE/STAGED/APPLIED/COMMITTED回复，而服务已因lease回到IDLE，
+  必须将该活动回复替换为`SESSION_EXPIRED + IDLE`；已是IDLE的ABORT/RELEASE回复仍可正常重放。
 
 ---
 
@@ -1481,6 +1489,8 @@ Full : 5 / 15 / 25 / ... / 95%
 - Product/CAP/仪器未通过前INPUT OFF；
 - SET>HWMAX禁止开始；
 - 取消/断线/MQTT超时/BL stale/Operation失败都必须进入安全关闭；
+- 11点结束后的`SET_POINT level=0`必须再由RAW确认`level=0/actualPwm=0/faultFlags=0`，
+  并由电子负载确认零输出在允许阈值内，之后才允许STAGE；
 - ABORT/RELEASE后再次确认INPUT OFF；
 - 应用退出/窗口关闭有安全关闭策略。
 
@@ -1617,7 +1627,7 @@ levelStep          = 20
 validFlags         = 0x001F
 
 Output logicalPwm:
-[0,100,200,300,400,500,600,700,800,900,1000]
+[0,60,120,180,240,300,360,420,480,540,600]
 Output ref mA:
 [0,89,179,268,357,447,536,625,714,804,893]
 
@@ -1736,7 +1746,7 @@ commit        @0x048 = ED 7E A1 C0
 ```text
 Device/Product/Firmware
 Product Fingerprint
-Protocol V3 / PayloadVersion1 / StorageFormat4
+Protocol V3 / PayloadVersion2 / StorageFormat4
 Run Config: SET/CV/Tolerance/Stabilization/Validation
 11点 Level + Actual PWM + Raw + Reference + Stability
 生成的244B Payload + CRC
@@ -1866,7 +1876,7 @@ Result Codes         = 11个（0..10）
 States               = IDLE / ACTIVE / STAGED / APPLIED / COMMITTED
 Large data field     = payloadHex
 READ                 = 第一版单READ，不分块
-Wire Payload         = 244B CALP PayloadVersion1
+Wire Payload         = 244B CALP PayloadVersion2
 Calibration Record   = 272B CAL4 StorageFormat4
 Config Record        = 1116B CFG1，Payload 1088B
 Runtime Record       = 76B RUN1，Payload 48B

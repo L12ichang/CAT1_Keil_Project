@@ -42,7 +42,7 @@ void Work_offline_dimming_process(void)  //离线模式与服务器日同步
                    if (apprtc_RtcTime.hour == SEVER_TIMER_DIM[i].hour && apprtc_RtcTime.min ==SEVER_TIMER_DIM[i].min ) //时间相等执行动作
                    {  
                        // 调整到对应的亮度级别
-                       sys_pwm_output(SEVER_TIMER_DIM[i].dim_lever);//调光输出
+                       sys_pwm_normal_output(SEVER_TIMER_DIM[i].dim_lever);//调光输出
                        current_brightness_level = SEVER_TIMER_DIM[i].dim_lever; // 更新当前亮度级别
                        break;
                     }

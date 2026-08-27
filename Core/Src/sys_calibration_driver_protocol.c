@@ -102,7 +102,11 @@ boolean_en sys_calibration_payload_validate(
     }
     for (index = 0U; index < SYS_CALIBRATION_PAYLOAD_POINT_COUNT; ++index)
     {
-        if (payload->output[index].logical_pwm != (u16)((u16)index * 100U) ||
+        if (payload->output[index].logical_pwm > 1000U ||
+            (index == 0U && payload->output[index].logical_pwm != 0U) ||
+            (index != 0U &&
+             payload->output[index].logical_pwm <=
+                 payload->output[index - 1U].logical_pwm) ||
             payload->oco[index].reference_output_current_ma !=
                 payload->output[index].reference_output_current_ma)
         {

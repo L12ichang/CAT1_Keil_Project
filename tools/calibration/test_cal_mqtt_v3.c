@@ -310,7 +310,7 @@ sys_calibration_result_en sys_calibration_service_set_point_seq(
                            seq, status);
     }
     fake_status.current_level = level;
-    fake_status.actual_pwm = (u16)(level * 5U);
+    fake_status.actual_pwm = (u16)(level * 3U);
     return fake_finish(SYS_CALIBRATION_RESULT_OK, seq, status);
 }
 
@@ -437,6 +437,32 @@ sys_calibration_result_en sys_calibration_service_release_seq(
     fake_status.session_id = 0U;
     fake_status.boot_inhibit_active = BOOL_FALSE;
     return fake_finish(SYS_CALIBRATION_RESULT_OK, seq, status);
+}
+
+boolean_en sys_calibration_service_timer(
+    u32 now_ms,
+    sys_calibration_service_status_st *status)
+{
+    boolean_en expired = BOOL_FALSE;
+
+    if (fake_status.state != SYS_CALIBRATION_STATE_IDLE &&
+        (s32)(now_ms - fake_status.lease_deadline_ms) >= 0)
+    {
+        fake_status.state = SYS_CALIBRATION_STATE_IDLE;
+        fake_status.session_id = 0U;
+        fake_status.lease_ms = 0U;
+        fake_status.lease_deadline_ms = 0U;
+        fake_status.current_level = 0U;
+        fake_status.current_percent = 0U;
+        fake_status.actual_pwm = 0U;
+        fake_status.boot_inhibit_active = BOOL_FALSE;
+        expired = BOOL_TRUE;
+    }
+    if (status != NULL)
+    {
+        *status = fake_status;
+    }
+    return expired;
 }
 
 static char *load_text(const char *path)
@@ -676,6 +702,25 @@ int main(int argc, char **argv)
         set_point_calls == 1U && strcmp(duplicate_json, last_json) == 0,
         "exact SET_POINT retry is idempotent");
 
+    fake_tick = 40000U;
+    failures += expect_true(
+        send_fixture(argv[1], "G6_SET_POINT.request.fixture", "W") == 0 &&
+        strstr(last_json, "\"rc\":4") != NULL &&
+        strstr(last_json, "\"st\":0") != NULL &&
+        set_point_calls == 1U,
+        "expired active-session replay returns SESSION_EXPIRED plus IDLE without output");
+    strcpy(duplicate_json, last_json);
+    failures += expect_true(
+        send_fixture(argv[1], "G6_SET_POINT.request.fixture", "W") == 0 &&
+        strcmp(duplicate_json, last_json) == 0 && set_point_calls == 1U,
+        "SESSION_EXPIRED replay is itself idempotent");
+    fake_tick = 2000U;
+    fake_status.state = SYS_CALIBRATION_STATE_ACTIVE;
+    fake_status.session_id = 123456U;
+    fake_status.lease_ms = 30000U;
+    fake_status.lease_deadline_ms = 32000U;
+    fake_status.boot_inhibit_active = BOOL_TRUE;
+
     failures += expect_true(
         send_request("{\"v\":3,\"op\":\"RAW\",\"sid\":123456,\"seq\":9}", "R") == 0,
         "ACTIVE RAW succeeds");
@@ -698,11 +743,11 @@ int main(int argc, char **argv)
     snprintf(fixture_path, sizeof(fixture_path), "%s/%s", argv[1],
              "G6_STAGE.request.fixture");
     bad_stage = load_text(fixture_path);
-    crc_text = bad_stage != NULL ? strstr(bad_stage, "1110049161") : NULL;
+    crc_text = bad_stage != NULL ? strstr(bad_stage, "105973917") : NULL;
     seq_text = bad_stage != NULL ? strstr(bad_stage, "\"seq\":20") : NULL;
     if (crc_text != NULL)
     {
-        memcpy(crc_text, "1110049162", 10U);
+        memcpy(crc_text, "105973918", 9U);
     }
     if (seq_text != NULL)
     {
@@ -786,7 +831,7 @@ int main(int argc, char **argv)
         response_has_number(response, "hasCalibration", 1.0) &&
         response_has_number(response, "generation", 7.0) &&
         response_has_number(response, "payloadLength", 244.0) &&
-        response_has_number(response, "payloadCrc32", 1110049161.0),
+        response_has_number(response, "payloadCrc32", 105973917.0),
         "CAP reports committed generation/length/CRC after release");
     cJSON_Delete(response);
 

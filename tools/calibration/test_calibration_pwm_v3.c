@@ -31,6 +31,7 @@ static u16 hardware_pwm;
 static u8 hardware_kind;
 static u16 prepared_requested;
 static u16 prepared_protected;
+static u32 clear_pending_count;
 
 enum
 {
@@ -95,6 +96,11 @@ boolean_en sys_calibration_service_output_pwm_for_current(
 boolean_en sys_calibration_service_is_boot_inhibited(void)
 {
     return boot_inhibited;
+}
+
+void net_dim_clear_pending(void)
+{
+    ++clear_pending_count;
 }
 
 boolean_en sys_calibration_snapshot_read_adc(
@@ -235,14 +241,39 @@ int main(void)
     boot_inhibited = BOOL_TRUE;
     pwm_output(80U);
     failures += expect_true(hardware_pwm == 0U,
-                            "boot inhibit blocks normal output");
+        "boot inhibit blocks normal output");
 
     reset_hardware();
+    pwm_output(50U);
+    failures += expect_true(hardware_pwm == 0U,
+        "boot inhibit continues to block every ordinary dimming call");
+
+    reset_hardware();
+    correction_available = BOOL_FALSE;
     failures += expect_true(
         sys_pwm_calibration_set_level(100U, &actual_pwm) == BOOL_TRUE &&
-            hardware_kind == TEST_HW_CAL_POINT && hardware_pwm == 500U &&
-            actual_pwm == 500U,
-        "SET_POINT uses level*5 without old Calibration or OP offset");
+            hardware_kind == TEST_HW_CAL_DEFAULT && hardware_pwm > 0U &&
+            actual_pwm == hardware_pwm,
+        "SET_POINT uses the synchronous calibration percent/current mapping");
+
+    correction_pwm = hardware_pwm;
+    sys_pwm_normal_output(80U);
+    failures += expect_true(
+        hardware_pwm == correction_pwm,
+        "ordinary dimming cannot replace an active calibration output");
+
+    clear_pending_count = 0U;
+    sys_pwm_force_safe_off();
+    failures += expect_true(
+        clear_pending_count == 1U && hardware_pwm == 0U,
+        "safe off clears every pending network dimming request");
+
+    reset_hardware();
+    boot_inhibited = BOOL_FALSE;
+    sys_pwm_normal_output(80U);
+    failures += expect_true(
+        hardware_pwm > 0U,
+        "ordinary dimming resumes after the calibration inhibit is cleared");
 
     reset_hardware();
     correction_available = BOOL_TRUE;

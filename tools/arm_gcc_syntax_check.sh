@@ -38,6 +38,8 @@ if [[ "$#" -eq 0 ]]; then
     "${ROOT_DIR}/Core/Src/hw_flash_page_writer.c" \
     "${ROOT_DIR}/Core/Src/hw_flash.c" \
     "${ROOT_DIR}/Core/Src/adc.c" \
+    "${ROOT_DIR}/Core/Src/gateway/net_dim.c" \
+    "${ROOT_DIR}/Core/Src/offline_Time_controlled_dimming.c" \
     "${ROOT_DIR}/Core/Src/sys_pwm.c" \
     "${ROOT_DIR}/Core/Src/hw_tim1_pwm2.c" \
     "${ROOT_DIR}/Core/Src/hw_uart2.c" \

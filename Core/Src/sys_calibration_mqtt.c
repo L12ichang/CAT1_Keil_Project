@@ -492,7 +492,6 @@ static boolean_en sys_calibration_mqtt_add_operation_response(
                 break;
             case SYS_CALIBRATION_MQTT_OP_SET_POINT:
                 cJSON_AddNumberToObject(dt, "level", response->status.current_level);
-                cJSON_AddNumberToObject(dt, "actualPwm", response->status.actual_pwm);
                 break;
             case SYS_CALIBRATION_MQTT_OP_STAGE:
             case SYS_CALIBRATION_MQTT_OP_APPLY:
@@ -842,6 +841,19 @@ boolean_en sys_calibration_mqtt_handle(
         operation, session_id, seq, parameter_digest);
     if (replay_result == 1U)
     {
+        if (_replay.response.status.state != SYS_CALIBRATION_STATE_IDLE)
+        {
+            (void)sys_calibration_service_timer(HAL_GetTick(), &status);
+            if (status.state == SYS_CALIBRATION_STATE_IDLE)
+            {
+                response->result = SYS_CALIBRATION_RESULT_SESSION_EXPIRED;
+                response->status = status;
+                sys_calibration_mqtt_cache_response(parameter_digest,
+                                                     response);
+                (void)sys_calibration_mqtt_send_response(header, response);
+                return BOOL_TRUE;
+            }
+        }
         (void)sys_calibration_mqtt_send_response(header, &_replay.response);
         return BOOL_TRUE;
     }

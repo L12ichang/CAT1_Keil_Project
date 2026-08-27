@@ -8,16 +8,23 @@
 *************************************************************/
 #include "net_dim.h"
 #include "sys_Vo_Io.h"
-#include "hw_tim1_pwm2.h"
 #include "sys_pwm.h"
-#include "factory_user_data.h"
-#include "json_protocol.h"
 u8 dim_ready_flag;
 u32 dim_level;
 void dim_ready(void)
 {
       dim_ready_flag=1;
     printf("dim_ready_flag\r\n");
+}
+
+void net_dim_clear_pending(void)
+{
+    extern u8 net_dim_to_protect;
+
+    dim_ready_flag = 0U;
+    dim_level = 0U;
+    dim_bak_to_low_acin = 0U;
+    net_dim_to_protect = 0U;
 }
 
 void uart_diam_process(void)
@@ -54,7 +61,7 @@ void uart_diam_process(void)
             }
 
             dim_bak_to_low_acin=pwm;
-            sys_pwm_output(pwm);
+            sys_pwm_normal_output(pwm);
             
         }
  }

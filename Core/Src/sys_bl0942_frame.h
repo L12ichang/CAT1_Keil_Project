@@ -85,7 +85,7 @@ extern boolean_en sys_bl0942_frame_decode(const u8 *frame,
                                            sys_bl0942_frame_st *decoded);
 
 /************************************
-功能描述：应用V3 PayloadVersion=1的BL电压Gain-only Q24
+功能描述：应用V3 PayloadVersion=2的BL电压Gain-only Q24
 输入参数：raw_voltage BL原码；gain_q24 增益；corrected_voltage_01v 输出0.1V
 输出返回：成功BOOL_TRUE；空指针、零增益或u16溢出BOOL_FALSE
 ************************************/
