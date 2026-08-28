@@ -206,10 +206,13 @@ static void zk_device_config_refresh_iccid_field(zk_device_config_t *config)
 
 static void zk_device_config_set_defaults(zk_device_config_t *config)
 {
+    const sys_product_profile_st *profile = sys_product_profile_current();
+
     memset(config, 0, sizeof(*config));
     config->protId = 100;
     strcpy(config->clas, "DL-MXG");
-    strcpy(config->prottp, "DL-50Z-56T-MXG");
+    strncpy(config->prottp, profile->model_code, sizeof(config->prottp) - 1U);
+    config->prottp[sizeof(config->prottp) - 1U] = '\0';
     config->hver = 1;
     config->sver = APP_VERSION;
     strcpy(config->mver, "EC801E");

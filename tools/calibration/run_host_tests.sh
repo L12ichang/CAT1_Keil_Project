@@ -139,15 +139,11 @@ cc \
 
 "${BUILD_DIR}/test_hw_flash_paging"
 
-for disabled_profile in 75 100 150 200 240; do
-  if cc -std=c11 -fsyntax-only \
-      -D"PRODUCT_TARGET_${disabled_profile}W" \
-      -I"${ROOT_DIR}/Core/Src" \
-      "${ROOT_DIR}/Core/Src/sys_product_profile.c" \
-      >"${BUILD_DIR}/profile-${disabled_profile}.log" 2>&1; then
-    echo "error: disabled ${disabled_profile}W profile compiled unexpectedly" >&2
-    exit 1
-  fi
+for target in 50 75 100 150 200 240; do
+  cc -std=c11 -fsyntax-only \
+    -D"PRODUCT_TARGET_${target}W" \
+    -I"${ROOT_DIR}/Core/Src" \
+    "${ROOT_DIR}/Core/Src/sys_product_profile.c"
 done
 
-echo "unfrozen Product Target compile gates: PASS"
+echo "six frozen Product Target compile gates: PASS"

@@ -15,6 +15,15 @@ APP_BASE = 0x08008000
 APP_SAFE_END = 0x08024000
 APP_MAX_SIZE = APP_SAFE_END - APP_BASE
 RELEASE_TARGET = "CAT1_50W"
+RELEASE_TARGETS = {
+    "CAT1_50W": "PRODUCT_TARGET_50W",
+    "CAT1_75W": "PRODUCT_TARGET_75W",
+    "CAT1_100W": "PRODUCT_TARGET_100W",
+    "CAT1_150W": "PRODUCT_TARGET_150W",
+    "CAT1_200W": "PRODUCT_TARGET_200W",
+    "CAT1_240W": "PRODUCT_TARGET_240W",
+}
+DEBUG_TARGETS = {"CAT1_50W_Debug": "PRODUCT_TARGET_50W"}
 ZK_JSON_RX_MIN = 2048
 ZK_JSON_TX_MIN = 2048
 SYS_DATA_EXPECTED_SIZE = 408
@@ -30,6 +39,7 @@ FAKE_IMEI_FALLBACK = b"000000000000128"
 @dataclass
 class CheckReport:
     project: str
+    target_name: str = RELEASE_TARGET
     output_name: str = RELEASE_TARGET
     app_base: int = APP_BASE
     safe_end: int = APP_SAFE_END
@@ -223,21 +233,22 @@ def check_project(project_path: Path, report: CheckReport) -> str:
     except ET.ParseError as exc:
         report.errors.append(f"Keil project XML parse failed: {exc}")
         return project_text
-    release_targets = [target for target in targets if target[0] == RELEASE_TARGET]
+    release_targets = [target for target in targets if target[0] == report.target_name]
     if len(release_targets) != 1:
         report.errors.append(
-            f"Keil project must contain exactly one {RELEASE_TARGET} target"
+            f"Keil project must contain exactly one {report.target_name} target"
         )
     else:
         report.output_name = release_targets[0][1]
-        if report.output_name != RELEASE_TARGET:
+        if report.output_name != report.target_name:
             report.errors.append(
-                f"{RELEASE_TARGET} OutputName is not {RELEASE_TARGET}: "
+                f"{report.target_name} OutputName is not {report.target_name}: "
                 f"{report.output_name or 'missing'}"
             )
-        if release_targets[0][2] != ["PRODUCT_TARGET_50W"]:
+        expected_define = RELEASE_TARGETS[report.target_name]
+        if release_targets[0][2] != [expected_define]:
             report.errors.append(
-                f"{RELEASE_TARGET} must select only PRODUCT_TARGET_50W: "
+                f"{report.target_name} must select only {expected_define}: "
                 f"{release_targets[0][2]}"
             )
     target_names = [target[0] for target in targets]
@@ -246,8 +257,23 @@ def check_project(project_path: Path, report: CheckReport) -> str:
         report.errors.append("Keil TargetName values are not unique")
     if len(output_names) != len(set(output_names)) or "" in output_names:
         report.errors.append("Keil OutputName values are missing or not unique")
+    expected_targets = {**DEBUG_TARGETS, **RELEASE_TARGETS}
+    if set(target_names) != set(expected_targets):
+        report.errors.append(
+            "Keil target set does not match the six release targets plus 50W debug: "
+            f"{target_names}"
+        )
+    for name, expected_define in expected_targets.items():
+        matching = [target for target in targets if target[0] == name]
+        if len(matching) == 1 and (
+            matching[0][1] != name or matching[0][2] != [expected_define]
+        ):
+            report.errors.append(
+                f"{name} must use OutputName={name} and only {expected_define}: "
+                f"output={matching[0][1]}, defines={matching[0][2]}"
+            )
     report.details["project_path"] = str(project_path)
-    report.details["release_target"] = RELEASE_TARGET
+    report.details["release_target"] = report.target_name
     report.details["output_name"] = report.output_name
     report.details["targets"] = target_names
 
@@ -255,10 +281,11 @@ def check_project(project_path: Path, report: CheckReport) -> str:
         report.errors.append("Wrong Keil project: use MDK-ARM-8008000/project.uvprojx for the app image")
     if not re.search(r"<Define>[^<]*\bAPROM_OFFSET\b[^<]*</Define>", project_text):
         report.errors.append("APROM_OFFSET is not defined; the app would not use VTOR 0x08008000")
-    if project_text.count("IROM(0x08000000,0x00040000)") != 2:
-        report.errors.append("Both Keil targets must declare the 256 KiB physical IROM range")
-    if project_text.count("-FS08000000 -FL040000") != 2:
-        report.errors.append("Both Keil Flash download algorithms must stop at 0x08040000")
+    expected_target_count = len(expected_targets)
+    if project_text.count("IROM(0x08000000,0x00040000)") != expected_target_count:
+        report.errors.append("Every Keil target must declare the 256 KiB physical IROM range")
+    if project_text.count("-FS08000000 -FL040000") != expected_target_count:
+        report.errors.append("Every Keil Flash download algorithm must stop at 0x08040000")
     if "-FS08000000 -FL080000" in project_text:
         report.errors.append("Keil Flash download range still exposes 512 KiB on the 256 KiB HK32 target")
     for required in (
@@ -269,7 +296,7 @@ def check_project(project_path: Path, report: CheckReport) -> str:
             report.errors.append(f"Project is missing source file: {required}")
     if "<RunUserProg2>1</RunUserProg2>" not in project_text:
         report.warnings.append(
-            f"Post-build UserProg2 is not enabled; {RELEASE_TARGET}.bin may not be regenerated by Keil"
+            f"Post-build UserProg2 is not enabled; {report.target_name}.bin may not be regenerated by Keil"
         )
     if "hex2bin_arm.bat" not in normalized:
         report.warnings.append("hex2bin_arm.bat is not configured; verify bin generation manually")
@@ -437,9 +464,18 @@ def run_checks(
     app_base: int = APP_BASE,
     safe_end: int = APP_SAFE_END,
     require_fresh: bool = True,
+    target: str = RELEASE_TARGET,
 ) -> CheckReport:
     project_path = project_path.resolve()
-    report = CheckReport(project=str(project_path), app_base=app_base, safe_end=safe_end)
+    if target not in RELEASE_TARGETS:
+        raise ValueError(f"Unsupported Keil release target: {target}")
+    report = CheckReport(
+        project=str(project_path),
+        target_name=target,
+        output_name=target,
+        app_base=app_base,
+        safe_end=safe_end,
+    )
     check_project(project_path, report)
     check_source_contracts(report)
     if project_path.exists():
@@ -466,6 +502,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--project", default=str(DEFAULT_PROJECT), help="Path to project.uvprojx")
     parser.add_argument("--app-base", default=f"0x{APP_BASE:08X}", help="Expected app base address")
     parser.add_argument("--safe-end", default=f"0x{APP_SAFE_END:08X}", help="Exclusive app safe end address")
+    parser.add_argument(
+        "--target",
+        choices=tuple(RELEASE_TARGETS),
+        default=RELEASE_TARGET,
+        help="Keil release target/output to validate",
+    )
     parser.add_argument("--skip-freshness", action="store_true", help="Do not fail when Keil outputs are older than sources")
     parser.add_argument("--json", action="store_true", help="Print JSON report")
     args = parser.parse_args(argv)
@@ -475,11 +517,13 @@ def main(argv: list[str] | None = None) -> int:
         app_base=int(args.app_base, 0),
         safe_end=int(args.safe_end, 0),
         require_fresh=not args.skip_freshness,
+        target=args.target,
     )
     if args.json:
         payload = {
             "passed": report.passed,
             "project": report.project,
+            "target_name": report.target_name,
             "output_name": report.output_name,
             "app_base": f"0x{report.app_base:08X}",
             "safe_end": f"0x{report.safe_end:08X}",

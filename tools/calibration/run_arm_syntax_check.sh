@@ -3,7 +3,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-bash "${ROOT_DIR}/tools/arm_gcc_syntax_check.sh"
+for target in 50 75 100 150 200 240; do
+  echo "ARM GCC syntax check: PRODUCT_TARGET_${target}W"
+  PRODUCT_TARGET_W="${target}" \
+    bash "${ROOT_DIR}/tools/arm_gcc_syntax_check.sh"
+done
 
 if ! command -v clang >/dev/null 2>&1; then
   echo "error: clang is required for the BL0942 integration syntax check" >&2

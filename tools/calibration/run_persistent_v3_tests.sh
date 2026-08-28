@@ -34,28 +34,30 @@ cc \
 
 "${BUILD_DIR}/test_persistent_v3"
 
-cc \
-  -std=c11 \
-  -Wall \
-  -Wextra \
-  -Werror \
-  -DUSE_HAL_DRIVER \
-  -DSTM32F103xE \
-  -DPRODUCT_TARGET_50W \
-  -DSYS_DATA_HOST_TEST \
-  -I"${ROOT_DIR}/Core/Inc" \
-  -I"${ROOT_DIR}/Core/Src" \
-  -I"${ROOT_DIR}/Core/Src/LampProtocolLib" \
-  -I"${ROOT_DIR}/Drivers/STM32F1xx_HAL_Driver/Inc" \
-  -I"${ROOT_DIR}/Drivers/STM32F1xx_HAL_Driver/Inc/Legacy" \
-  -I"${ROOT_DIR}/Drivers/CMSIS/Device/ST/STM32F1xx/Include" \
-  -I"${ROOT_DIR}/Drivers/CMSIS/Include" \
-  "${ROOT_DIR}/Core/Src/sys_product_profile.c" \
-  "${ROOT_DIR}/Core/Src/factory_user_data.c" \
-  "${ROOT_DIR}/tools/calibration/test_factory_config_v3.c" \
-  -o "${BUILD_DIR}/test_factory_config_v3"
+for target in 50 75 100 150 200 240; do
+  cc \
+    -std=c11 \
+    -Wall \
+    -Wextra \
+    -Werror \
+    -DUSE_HAL_DRIVER \
+    -DSTM32F103xE \
+    -D"PRODUCT_TARGET_${target}W" \
+    -DSYS_DATA_HOST_TEST \
+    -I"${ROOT_DIR}/Core/Inc" \
+    -I"${ROOT_DIR}/Core/Src" \
+    -I"${ROOT_DIR}/Core/Src/LampProtocolLib" \
+    -I"${ROOT_DIR}/Drivers/STM32F1xx_HAL_Driver/Inc" \
+    -I"${ROOT_DIR}/Drivers/STM32F1xx_HAL_Driver/Inc/Legacy" \
+    -I"${ROOT_DIR}/Drivers/CMSIS/Device/ST/STM32F1xx/Include" \
+    -I"${ROOT_DIR}/Drivers/CMSIS/Include" \
+    "${ROOT_DIR}/Core/Src/sys_product_profile.c" \
+    "${ROOT_DIR}/Core/Src/factory_user_data.c" \
+    "${ROOT_DIR}/tools/calibration/test_factory_config_v3.c" \
+    -o "${BUILD_DIR}/test_factory_config_${target}w_v3"
 
-"${BUILD_DIR}/test_factory_config_v3"
+  "${BUILD_DIR}/test_factory_config_${target}w_v3"
+done
 
 cc \
   -std=c11 \
@@ -152,45 +154,44 @@ fi
 
 for source_name in sys_persistent_record.c sys_persistent_storage.c; do
   if [[ "$(rg -c "<FileName>${source_name}</FileName>" \
-      "${ROOT_DIR}/MDK-ARM-8008000/project.uvprojx")" -ne 2 ]]; then
-    echo "error: ${source_name} is not present in both Keil targets" >&2
+      "${ROOT_DIR}/MDK-ARM-8008000/project.uvprojx")" -ne 7 ]]; then
+    echo "error: ${source_name} is not present in all seven Keil targets" >&2
     exit 1
   fi
 done
 
-if [[ "$(rg -c '<TargetName>CAT1_50W</TargetName>' \
-    "${ROOT_DIR}/MDK-ARM-8008000/project.uvprojx")" -ne 1 ||
-      "$(rg -c '<TargetName>CAT1_50W_Debug</TargetName>' \
-    "${ROOT_DIR}/MDK-ARM-8008000/project.uvprojx")" -ne 1 ||
-      "$(rg -c '<OutputName>CAT1_50W</OutputName>' \
+for target in 50 75 100 150 200 240; do
+  if [[ "$(rg -c "<TargetName>CAT1_${target}W</TargetName>" \
+      "${ROOT_DIR}/MDK-ARM-8008000/project.uvprojx")" -ne 1 ||
+        "$(rg -c "<OutputName>CAT1_${target}W</OutputName>" \
+      "${ROOT_DIR}/MDK-ARM-8008000/project.uvprojx")" -ne 1 ||
+        "$(rg -c "PRODUCT_TARGET_${target}W" \
+      "${ROOT_DIR}/MDK-ARM-8008000/project.uvprojx")" -ne "$([[ "${target}" == 50 ]] && echo 2 || echo 1)" ||
+        "$(rg -c "<targetInfo name=\"CAT1_${target}W\"/>" \
+      "${ROOT_DIR}/MDK-ARM-8008000/project.uvprojx")" -ne 1 ||
+        "$(rg -c "<TargetName>CAT1_${target}W</TargetName>" \
+      "${ROOT_DIR}/MDK-ARM-8008000/project.uvoptx")" -ne 1 ||
+        "$(rg -c "hex2bin_arm\.bat CAT1_${target}W</UserProg2Name>" \
+      "${ROOT_DIR}/MDK-ARM-8008000/project.uvprojx")" -ne 1 ]]; then
+    echo "error: CAT1_${target}W Keil target identity is incomplete or duplicated" >&2
+    exit 1
+  fi
+done
+if [[ "$(rg -c '<TargetName>CAT1_50W_Debug</TargetName>' \
     "${ROOT_DIR}/MDK-ARM-8008000/project.uvprojx")" -ne 1 ||
       "$(rg -c '<OutputName>CAT1_50W_Debug</OutputName>' \
-    "${ROOT_DIR}/MDK-ARM-8008000/project.uvprojx")" -ne 1 ]]; then
-  echo "error: Keil release/debug TargetName and OutputName must be unique 50W names" >&2
-  exit 1
-fi
-if [[ "$(rg -c '<TargetName>' \
-    "${ROOT_DIR}/MDK-ARM-8008000/project.uvprojx")" -ne 2 ||
+    "${ROOT_DIR}/MDK-ARM-8008000/project.uvprojx")" -ne 1 ||
+      "$(rg -c '<TargetName>' \
+    "${ROOT_DIR}/MDK-ARM-8008000/project.uvprojx")" -ne 7 ||
       "$(rg -c '<OutputName>' \
-    "${ROOT_DIR}/MDK-ARM-8008000/project.uvprojx")" -ne 2 ||
-      "$(rg -c '<targetInfo name="CAT1_50W"/>' \
-    "${ROOT_DIR}/MDK-ARM-8008000/project.uvprojx")" -ne 1 ||
-      "$(rg -c '<targetInfo name="CAT1_50W_Debug"/>' \
-    "${ROOT_DIR}/MDK-ARM-8008000/project.uvprojx")" -ne 1 ||
+    "${ROOT_DIR}/MDK-ARM-8008000/project.uvprojx")" -ne 7 ||
       "$(rg -c '<targetInfo name=' \
-    "${ROOT_DIR}/MDK-ARM-8008000/project.uvprojx")" -ne 2 ]]; then
-  echo "error: Keil Target/Output/RTE CMSIS bindings are not the unique 50W pair" >&2
-  exit 1
-fi
-if [[ "$(rg -c '<TargetName>CAT1_50W</TargetName>' \
-    "${ROOT_DIR}/MDK-ARM-8008000/project.uvoptx")" -ne 1 ||
-      "$(rg -c '<TargetName>CAT1_50W_Debug</TargetName>' \
-    "${ROOT_DIR}/MDK-ARM-8008000/project.uvoptx")" -ne 1 ||
-      "$(rg -c 'hex2bin_arm\.bat CAT1_50W</UserProg2Name>' \
-    "${ROOT_DIR}/MDK-ARM-8008000/project.uvprojx")" -ne 1 ||
-      "$(rg -c 'hex2bin_arm\.bat CAT1_50W_Debug</UserProg2Name>' \
-    "${ROOT_DIR}/MDK-ARM-8008000/project.uvprojx")" -ne 1 ]]; then
-  echo "error: Keil target options/post-build conversion do not use unique 50W names" >&2
+    "${ROOT_DIR}/MDK-ARM-8008000/project.uvprojx")" -ne 7 ||
+      "$(rg -c '<TargetName>' \
+    "${ROOT_DIR}/MDK-ARM-8008000/project.uvoptx")" -ne 7 ||
+      "$(rg -c '<IsCurrentTarget>1</IsCurrentTarget>' \
+    "${ROOT_DIR}/MDK-ARM-8008000/project.uvoptx")" -ne 1 ]]; then
+  echo "error: Keil target/output/RTE/options matrix is not the expected seven targets" >&2
   exit 1
 fi
 if ! rg -q 'APP_BIN=%~dp0out\\CAT1_50W\.bin' \
@@ -243,23 +244,28 @@ from check_keil_app_image import run_checks
 
 root = Path(sys.argv[1])
 project = root / "MDK-ARM-8008000" / "project.uvprojx"
-source_report = run_checks(project_path=project, require_fresh=False)
-assert source_report.passed, source_report.errors
-assert source_report.output_name == "CAT1_50W", source_report.output_name
+for target in ("CAT1_50W", "CAT1_75W", "CAT1_100W", "CAT1_150W", "CAT1_200W", "CAT1_240W"):
+    source_report = run_checks(
+        project_path=project, require_fresh=False, target=target
+    )
+    assert source_report.passed, source_report.errors
+    assert source_report.output_name == target, source_report.output_name
 
-fresh_report = run_checks(project_path=project, require_fresh=True)
-if not fresh_report.passed:
-    assert all(
-        error.startswith("Keil output missing:") or
-        error.startswith("Keil outputs are older than source/project files")
-        for error in fresh_report.errors
-    ), fresh_report.errors
+    fresh_report = run_checks(
+        project_path=project, require_fresh=True, target=target
+    )
+    if not fresh_report.passed:
+        assert all(
+            error.startswith("Keil output missing:") or
+            error.startswith("Keil outputs are older than source/project files")
+            for error in fresh_report.errors
+        ), fresh_report.errors
 PY
 if [[ "$(rg -c 'PRODUCT_TARGET_[A-Za-z0-9_]+' \
-    "${ROOT_DIR}/MDK-ARM-8008000/project.uvprojx")" -ne 2 ||
+    "${ROOT_DIR}/MDK-ARM-8008000/project.uvprojx")" -ne 7 ||
       "$(rg -c 'PRODUCT_TARGET_50W' \
     "${ROOT_DIR}/MDK-ARM-8008000/project.uvprojx")" -ne 2 ]]; then
-  echo "error: each Keil target must define only PRODUCT_TARGET_50W" >&2
+  echo "error: each Keil target must define exactly one Product Target" >&2
   exit 1
 fi
 if rg -q '<FileName>data_backup.c</FileName>' \

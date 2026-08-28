@@ -3,6 +3,15 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SDK_PATH="$(xcrun --show-sdk-path 2>/dev/null || true)"
+PRODUCT_TARGET_W="${PRODUCT_TARGET_W:-50}"
+
+case "${PRODUCT_TARGET_W}" in
+  50|75|100|150|200|240) ;;
+  *)
+    echo "error: PRODUCT_TARGET_W must be one of 50,75,100,150,200,240" >&2
+    exit 1
+    ;;
+esac
 
 if [[ -z "${SDK_PATH}" || ! -f "${SDK_PATH}/usr/include/stdint.h" ]]; then
   echo "error: macOS SDK stdint.h not found. Install or repair Xcode Command Line Tools." >&2
@@ -54,7 +63,7 @@ arm-none-eabi-gcc \
   -DUSE_HAL_DRIVER \
   -DSTM32F103xE \
   -DAPROM_OFFSET \
-  -DPRODUCT_TARGET_50W \
+  -D"PRODUCT_TARGET_${PRODUCT_TARGET_W}W" \
   -DLEGACY_DATAPOINT_PROTOCOL_ENABLE=1 \
   -DLEGACY_APP_PROCESS_ENABLE=1 \
   -DLEGACY_ACTIVE_ENABLE=1 \
