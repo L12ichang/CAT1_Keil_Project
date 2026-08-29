@@ -323,8 +323,8 @@ int main(void)
     if(softstar) //����������
     {
         softstar=0;
-        dim_level = 0;                      /* 复位后保持关断，等待正常调光仲裁 */
-        sys_pwm_force_safe_off();          /* 禁止复位路径0->100渐升 */
+        dim_level = 100;                    /* 正常上电默认目标为100%亮度 */
+        sys_pwm_fade_output(0U, 100U);      /* 复用正常输出链执行0->100%软启动 */
     }
 #if APP_LOG_ENABLE || APP_OTA_LOG_ENABLE
     hw_uart3_process();
