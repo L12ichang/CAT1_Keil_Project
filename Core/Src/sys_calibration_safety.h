@@ -15,6 +15,14 @@ typedef enum
 } sys_calibration_output_source_en;
 
 extern u16 sys_calibration_safety_limit_current_ma(u16 voltage_01v);
+/* Production calibration voltage must be one of the Product I-V table nodes. */
+extern boolean_en sys_calibration_safety_is_supported_calibration_voltage(
+    u16 voltage_01v);
+/* Returns the safe full-scale calibration current for the selected voltage and
+ * the current mutable Factory HWMAX. Zero means the request is not admissible. */
+extern u16 sys_calibration_safety_calibration_span_ma(
+    u16 voltage_01v,
+    u16 configured_hwmax_ma);
 extern boolean_en sys_calibration_safety_limit_percent(
     u8 requested_percent,
     u16 voltage_01v,
