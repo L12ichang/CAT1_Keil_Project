@@ -20,16 +20,34 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
-      - name: Apply PWL stage-axis guard only
-        run: python tools/apply_v3_pwl_stage_guard.py
+      - name: Apply final BUILD baseline patch
+        run: python tools/apply_v3_final_calibration_patch.py
       - name: Static calibration contract checks
         run: |
-          grep -F 'percent * (u32)SET_OUTCUR' Core/Src/sys_pwm.c
-          grep -F '((u32)HWMAX_OUTCUR * 100U)' Core/Src/sys_pwm.c
-          grep -F 'sys_calibration_service_session_output_axis_valid' Core/Src/sys_calibration_service.c
-          grep -F 'calibrationVoltage01V' Core/Src/sys_calibration_mqtt.c
-          grep -F 'logicalPwm' Core/Src/sys_calibration_mqtt.c
-      - name: Commit patched source
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('Core/Src/sys_pwm.c').read_text(encoding='utf-8')
+          assert '((u32)percent * (u32)SET_OUTCUR * (u32)useful_range)' in p
+          assert '((u32)HWMAX_OUTCUR * 100U)' in p
+          start = p.index('boolean_en sys_pwm_calibration_set_output(')
+          end = p.index('boolean_en sys_pwm_calibration_set_direct_pwm(', start)
+          build = p[start:end]
+          assert 'sys_calibration_service_output_pwm_for_current' not in build
+          assert 'sys_pwm_default_for_target(target_current_ma, &logical_pwm)' in build
+          runtime_start = p.index('void pwm_output(')
+          runtime_end = p.index('void sys_pwm_timer(', runtime_start)
+          runtime = p[runtime_start:runtime_end]
+          assert 'sys_calibration_service_output_pwm_for_current' in runtime
+          assert 'sys_pwm_default_for_percent' in runtime
+          service = Path('Core/Src/sys_calibration_service.c').read_text(encoding='utf-8')
+          assert 'sys_calibration_service_session_output_axis_valid' in service
+          mqtt = Path('Core/Src/sys_calibration_mqtt.c').read_text(encoding='utf-8')
+          assert 'calibrationVoltage01V' in mqtt
+          assert 'calibrationSpanMa' in mqtt
+          assert 'logicalPwm' in mqtt
+          print('V3 real calibration invariants OK')
+          PY
+      - name: Commit patched PWM source
         run: |
           if git diff --quiet; then
             echo 'No source changes'
@@ -37,6 +55,6 @@ jobs:
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add Core/Src/sys_calibration_service.c
-          git commit -m 'feat(calibration): enforce exact V3 target-current axis'
+          git add Core/Src/sys_pwm.c
+          git commit -m 'fix(calibration): build correction from uncalibrated PWM baseline'
           git push origin HEAD:fix/v3-real-calibration-20260831
