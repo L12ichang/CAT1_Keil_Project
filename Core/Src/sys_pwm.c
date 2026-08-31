@@ -378,7 +378,6 @@ boolean_en sys_pwm_calibration_set_output(u8 percent, u16 *actual_pwm)
     u16 target_current_ma;
     u16 logical_pwm;
     u16 protected_pwm;
-    boolean_en calibrated_path;
 
     if (actual_pwm == NULL || percent > 100U)
     {
@@ -410,10 +409,10 @@ boolean_en sys_pwm_calibration_set_output(u8 percent, u16 *actual_pwm)
     }
     target_current_ma = (u16)(((u32)calibration_span_ma * percent + 50U) /
                               100U);
-    calibrated_path = sys_calibration_service_output_pwm_for_current(
-        target_current_ma, &logical_pwm);
-    if (calibrated_path != BOOL_TRUE &&
-        sys_pwm_default_for_target(target_current_ma, &logical_pwm) != BOOL_TRUE)
+    /* BUILD/characterization intentionally bypasses any committed curve.
+     * The first 11-point sweep must measure the raw mature SET/HWMAX transfer.
+     * STAGE/APPLY verification uses SET_OUTPUT and therefore the staged curve. */
+    if (sys_pwm_default_for_target(target_current_ma, &logical_pwm) != BOOL_TRUE)
     {
         sys_pwm_force_safe_off();
         return BOOL_FALSE;
@@ -429,14 +428,7 @@ boolean_en sys_pwm_calibration_set_output(u8 percent, u16 *actual_pwm)
         sys_pwm_force_safe_off();
         return BOOL_FALSE;
     }
-    if (calibrated_path == BOOL_TRUE)
-    {
-        hw_tim1_pwm2_set_calibration_PWM_OUT(logical_pwm);
-    }
-    else
-    {
-        hw_tim1_pwm2_set_calibration_default_PWM_OUT(logical_pwm);
-    }
+    hw_tim1_pwm2_set_calibration_default_PWM_OUT(logical_pwm);
     sys_pwm_publish(percent, percent);
     *actual_pwm = hw_tim1_pwm2_get_logical_pwm();
     return (*actual_pwm == logical_pwm) ? BOOL_TRUE : BOOL_FALSE;
