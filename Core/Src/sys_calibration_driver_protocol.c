@@ -102,21 +102,23 @@ boolean_en sys_calibration_payload_validate(
     }
     for (index = 0U; index < SYS_CALIBRATION_PAYLOAD_POINT_COUNT; ++index)
     {
+        /* Output reference is the exact requested target current. OCO/BL
+         * references are the external standard values observed after the PWM
+         * search converges. They are intentionally not forced to be equal. */
         if (payload->output[index].logical_pwm > 1000U ||
-            (index == 0U && payload->output[index].logical_pwm != 0U) ||
-            (index != 0U &&
-             payload->output[index].logical_pwm <=
-                 payload->output[index - 1U].logical_pwm) ||
-            payload->oco[index].reference_output_current_ma !=
-                payload->output[index].reference_output_current_ma)
+            (index == 0U && payload->output[index].logical_pwm != 0U))
         {
             return BOOL_FALSE;
         }
         if (index != 0U &&
-            (payload->output[index].reference_output_current_ma <=
+            (payload->output[index].logical_pwm <=
+                 payload->output[index - 1U].logical_pwm ||
+             payload->output[index].reference_output_current_ma <=
                  payload->output[index - 1U].reference_output_current_ma ||
              payload->oco[index].oco_adc_raw <=
                  payload->oco[index - 1U].oco_adc_raw ||
+             payload->oco[index].reference_output_current_ma <
+                 payload->oco[index - 1U].reference_output_current_ma ||
              payload->bl_current[index].bl_current_raw <=
                  payload->bl_current[index - 1U].bl_current_raw ||
              payload->bl_current[index].reference_input_current_ma <
