@@ -20,10 +20,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
-      - name: Apply precise patches
-        run: |
-          python tools/apply_v3_real_calibration_patch.py
-          python tools/apply_v3_pwl_stage_guard.py
+      - name: Apply PWL stage-axis guard only
+        run: python tools/apply_v3_pwl_stage_guard.py
       - name: Static calibration contract checks
         run: |
           grep -F 'percent * (u32)SET_OUTCUR' Core/Src/sys_pwm.c
@@ -39,6 +37,6 @@ jobs:
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add Core/Src/sys_calibration_mqtt.c Core/Src/sys_calibration_service.c
-          git commit -m 'feat(calibration): enforce V3 real PWL calibration contract'
+          git add Core/Src/sys_calibration_service.c
+          git commit -m 'feat(calibration): enforce exact V3 target-current axis'
           git push origin HEAD:fix/v3-real-calibration-20260831
