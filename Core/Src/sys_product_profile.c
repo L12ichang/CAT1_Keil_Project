@@ -185,8 +185,6 @@ boolean_en sys_product_profile_is_complete(
             profile->default_hwmax_current_ma ||
         profile->default_hwmax_current_ma > profile->hw_max_current_ma ||
         profile->absolute_fail_current_ma != profile->hw_max_current_ma ||
-        profile->iv_limits[3U].current_ma !=
-            profile->default_hwmax_current_ma ||
         sys_product_profile_calculate_fingerprint(profile) !=
             profile->fingerprint_crc32)
     {
