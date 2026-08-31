@@ -1,5 +1,6 @@
 from pathlib import Path
 
+# One-shot branch helper; remove after sys_calibration_mqtt.c is patched.
 path = Path('Core/Src/sys_calibration_mqtt.c')
 text = path.read_text(encoding='utf-8')
 
