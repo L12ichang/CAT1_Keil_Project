@@ -74,6 +74,8 @@ typedef struct
     u16 actual_pwm;
     u16 staged_length;
     u16 committed_length;
+    u16 calibration_voltage_01v;
+    u16 calibration_span_ma;
     u16 fault_flags;
     u8 current_percent;
     boolean_en safety_ready;
@@ -134,7 +136,9 @@ extern boolean_en sys_calibration_service_get_status(
     sys_calibration_service_status_st *status);
 extern boolean_en sys_calibration_service_is_boot_inhibited(void);
 extern boolean_en sys_calibration_service_is_output_authorized(void);
+extern u16 sys_calibration_service_calibration_span_ma(void);
 
+/* Compatibility wrapper: legacy callers default to the 36V Product I-V span. */
 extern sys_calibration_result_en sys_calibration_service_begin_seq(
     u32 session_id,
     u32 now_ms,
@@ -142,6 +146,18 @@ extern sys_calibration_result_en sys_calibration_service_begin_seq(
     u32 seq,
     u16 profile_id,
     u32 profile_fingerprint,
+    sys_calibration_service_status_st *status);
+/* V3 real-calibration BEGIN: voltage/span are session context, never Factory
+ * SET/HWMAX rewrites. The span must equal the safe Product I-V/HWMAX limit. */
+extern sys_calibration_result_en sys_calibration_service_begin_range_seq(
+    u32 session_id,
+    u32 now_ms,
+    u32 lease_ms,
+    u32 seq,
+    u16 profile_id,
+    u32 profile_fingerprint,
+    u16 calibration_voltage_01v,
+    u16 calibration_span_ma,
     sys_calibration_service_status_st *status);
 extern sys_calibration_result_en sys_calibration_service_heartbeat_seq(
     u32 session_id,
@@ -154,6 +170,15 @@ extern sys_calibration_result_en sys_calibration_service_set_point_seq(
     u32 now_ms,
     u32 seq,
     u16 level,
+    sys_calibration_service_status_st *status);
+/* Same SET_POINT operation, optional logicalPwm field. Used by the station to
+ * search the PWM that makes the external reference hit the requested target. */
+extern sys_calibration_result_en sys_calibration_service_set_point_direct_seq(
+    u32 session_id,
+    u32 now_ms,
+    u32 seq,
+    u16 level,
+    u16 logical_pwm,
     sys_calibration_service_status_st *status);
 extern sys_calibration_result_en sys_calibration_service_raw_seq(
     u32 session_id,
