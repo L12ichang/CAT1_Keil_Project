@@ -8,39 +8,89 @@
 *************************************************************/
 #include "sys_calibration_safety.h"
 #include "sys_calibration_curve.h"
+#include "sys_calibration_service.h"
+#include "sys_pwm.h"
+#include "factory_user_data.h"
+
+static u32 _calibration_range_session_id;
+static u16 _calibration_range_voltage_01v;
+static u16 _calibration_range_span_ma;
 
 static u16 sys_calibration_safety_table_current_ma(u16 voltage_01v)
 {
     const sys_product_profile_st *profile = sys_product_profile_current();
+    sys_calibration_iv_limit_st lower;
+    sys_calibration_iv_limit_st upper;
     u32 index;
-    sys_calibration_iv_limit_st limit;
-    u16 current_ma = 0U;
+    u32 span;
+    u32 position;
+    u32 delta;
 
-    if (sys_product_profile_is_complete(profile) != BOOL_TRUE)
+    if (sys_product_profile_is_complete(profile) != BOOL_TRUE ||
+        profile->iv_limit_count == 0U ||
+        sys_calibration_curve_get_iv_limit(0U, &lower) != BOOL_TRUE ||
+        voltage_01v < lower.voltage_01v)
     {
         return 0U;
+    }
+    if (voltage_01v == lower.voltage_01v)
+    {
+        return lower.current_ma;
+    }
+
+    for (index = 1U; index < profile->iv_limit_count; ++index)
+    {
+        if (sys_calibration_curve_get_iv_limit(index, &upper) != BOOL_TRUE)
+        {
+            return 0U;
+        }
+        if (voltage_01v == upper.voltage_01v)
+        {
+            return upper.current_ma;
+        }
+        if (voltage_01v < upper.voltage_01v)
+        {
+            span = (u32)upper.voltage_01v - lower.voltage_01v;
+            position = (u32)voltage_01v - lower.voltage_01v;
+            delta = (u32)lower.current_ma - upper.current_ma;
+            return (u16)((u32)lower.current_ma -
+                         (delta * position + span / 2U) / span);
+        }
+        lower = upper;
+    }
+    return (voltage_01v == lower.voltage_01v) ? lower.current_ma : 0U;
+}
+
+boolean_en sys_calibration_safety_is_supported_calibration_voltage(
+    u16 voltage_01v)
+{
+    const sys_product_profile_st *profile = sys_product_profile_current();
+    sys_calibration_iv_limit_st limit;
+    u32 index;
+
+    if (sys_product_profile_is_complete(profile) != BOOL_TRUE ||
+        voltage_01v == profile->special_test_voltage_01v)
+    {
+        return BOOL_FALSE;
     }
     for (index = 0U; index < profile->iv_limit_count; ++index)
     {
         if (sys_calibration_curve_get_iv_limit(index, &limit) != BOOL_TRUE)
         {
-            break;
+            return BOOL_FALSE;
         }
-        if (voltage_01v >= limit.voltage_01v)
+        if (limit.voltage_01v == voltage_01v)
         {
-            current_ma = limit.current_ma;
-        }
-        else
-        {
-            break;
+            return BOOL_TRUE;
         }
     }
-    return current_ma;
+    return BOOL_FALSE;
 }
 
 u16 sys_calibration_safety_limit_current_ma(u16 voltage_01v)
 {
     const sys_product_profile_st *profile = sys_product_profile_current();
+    u64 power_numerator;
     u32 power_current_ma;
     u16 table_current_ma;
 
@@ -53,7 +103,18 @@ u16 sys_calibration_safety_limit_current_ma(u16 voltage_01v)
     }
 
     table_current_ma = sys_calibration_safety_table_current_ma(voltage_01v);
-    power_current_ma = ((u32)profile->rated_power_w * 10000UL) / voltage_01v;
+    if (table_current_ma == 0U)
+    {
+        return 0U;
+    }
+
+    /* The published I-V table is authoritative. The rated-power guard keeps
+     * the profile tolerance instead of cutting valid table points such as
+     * 50W/36V/1400mA down to an exact zero-tolerance P/V value. */
+    power_numerator = (u64)profile->rated_power_w * 10000ULL *
+                      (1000ULL + profile->power_limit_tolerance_permille);
+    power_current_ma = (u32)(power_numerator /
+                             ((u64)voltage_01v * 1000ULL));
     if (power_current_ma < table_current_ma)
     {
         table_current_ma = (u16)power_current_ma;
@@ -63,6 +124,129 @@ u16 sys_calibration_safety_limit_current_ma(u16 voltage_01v)
         table_current_ma = profile->hw_max_current_ma;
     }
     return table_current_ma;
+}
+
+u16 sys_calibration_safety_calibration_span_ma(
+    u16 voltage_01v,
+    u16 configured_hwmax_ma)
+{
+    const sys_product_profile_st *profile = sys_product_profile_current();
+    u16 span_ma;
+
+    if (configured_hwmax_ma == 0U ||
+        sys_calibration_safety_is_supported_calibration_voltage(voltage_01v) !=
+            BOOL_TRUE ||
+        sys_product_profile_is_complete(profile) != BOOL_TRUE ||
+        configured_hwmax_ma > profile->hw_max_current_ma)
+    {
+        return 0U;
+    }
+    span_ma = sys_calibration_safety_limit_current_ma(voltage_01v);
+    if (span_ma == 0U)
+    {
+        return 0U;
+    }
+    if (span_ma > configured_hwmax_ma)
+    {
+        span_ma = configured_hwmax_ma;
+    }
+    return span_ma;
+}
+
+/* The existing V3 service state machine remains authoritative. This wrapper
+ * adds a calibration voltage/range context without changing the operation or
+ * 244-byte payload contract. */
+sys_calibration_result_en sys_calibration_service_begin_range_seq(
+    u32 session_id,
+    u32 now_ms,
+    u32 lease_ms,
+    u32 seq,
+    u16 profile_id,
+    u32 profile_fingerprint,
+    u16 calibration_voltage_01v,
+    u16 calibration_span_ma,
+    sys_calibration_service_status_st *status)
+{
+    u16 expected_span;
+    sys_calibration_result_en result;
+
+    expected_span = sys_calibration_safety_calibration_span_ma(
+        calibration_voltage_01v, HWMAX_OUTCUR);
+    if (expected_span == 0U || calibration_span_ma != expected_span)
+    {
+        return SYS_CALIBRATION_RESULT_RANGE_ERROR;
+    }
+
+    result = sys_calibration_service_begin_seq(
+        session_id, now_ms, lease_ms, seq, profile_id,
+        profile_fingerprint, status);
+    if (result == SYS_CALIBRATION_RESULT_OK)
+    {
+        _calibration_range_session_id = session_id;
+        _calibration_range_voltage_01v = calibration_voltage_01v;
+        _calibration_range_span_ma = calibration_span_ma;
+        if (status != NULL)
+        {
+            status->calibration_voltage_01v = calibration_voltage_01v;
+            status->calibration_span_ma = calibration_span_ma;
+        }
+    }
+    return result;
+}
+
+u16 sys_calibration_service_calibration_span_ma(void)
+{
+    sys_calibration_service_status_st status;
+
+    if (sys_calibration_service_get_status(&status) == BOOL_TRUE &&
+        status.state != SYS_CALIBRATION_STATE_IDLE &&
+        status.session_id == _calibration_range_session_id &&
+        _calibration_range_span_ma != 0U)
+    {
+        return _calibration_range_span_ma;
+    }
+
+    /* Compatibility for older internal callers which still open a BEGIN
+     * without explicit range fields. New MQTT/desktop flows always use the
+     * explicit selected Product I-V node. */
+    return sys_calibration_safety_calibration_span_ma(360U, HWMAX_OUTCUR);
+}
+
+sys_calibration_result_en sys_calibration_service_set_point_direct_seq(
+    u32 session_id,
+    u32 now_ms,
+    u32 seq,
+    u16 level,
+    u16 logical_pwm,
+    sys_calibration_service_status_st *status)
+{
+    sys_calibration_result_en result;
+    u16 actual_pwm = 0U;
+
+    /* First reuse the mature service session/lease/seq/fault validation. The
+     * baseline PWM applied by that call is immediately replaced before the
+     * station starts its stabilization window. */
+    result = sys_calibration_service_set_point_seq(
+        session_id, now_ms, seq, level, status);
+    if (result != SYS_CALIBRATION_RESULT_OK)
+    {
+        return result;
+    }
+    if (sys_pwm_calibration_set_direct_pwm(
+            level, logical_pwm, &actual_pwm) != BOOL_TRUE)
+    {
+        sys_pwm_force_safe_off();
+        return SYS_CALIBRATION_RESULT_HARDWARE_FAULT;
+    }
+    if (status != NULL)
+    {
+        status->current_level = level;
+        status->current_percent = (u8)(level / 2U);
+        status->actual_pwm = actual_pwm;
+        status->calibration_voltage_01v = _calibration_range_voltage_01v;
+        status->calibration_span_ma = sys_calibration_service_calibration_span_ma();
+    }
+    return SYS_CALIBRATION_RESULT_OK;
 }
 
 boolean_en sys_calibration_safety_limit_percent(
