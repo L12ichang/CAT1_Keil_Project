@@ -243,11 +243,16 @@ static boolean_en sys_calibration_mqtt_field_allowed(
         case SYS_CALIBRATION_MQTT_OP_BEGIN:
             return (strcmp(key, "profileId") == 0 ||
                     strcmp(key, "profileFingerprint") == 0 ||
-                    strcmp(key, "leaseMs") == 0) ? BOOL_TRUE : BOOL_FALSE;
+                    strcmp(key, "leaseMs") == 0 ||
+                    strcmp(key, "calibrationVoltage01V") == 0 ||
+                    strcmp(key, "calibrationSpanMa") == 0) ?
+                   BOOL_TRUE : BOOL_FALSE;
         case SYS_CALIBRATION_MQTT_OP_HEARTBEAT:
             return strcmp(key, "leaseMs") == 0 ? BOOL_TRUE : BOOL_FALSE;
         case SYS_CALIBRATION_MQTT_OP_SET_POINT:
-            return strcmp(key, "level") == 0 ? BOOL_TRUE : BOOL_FALSE;
+            return (strcmp(key, "level") == 0 ||
+                    strcmp(key, "logicalPwm") == 0) ?
+                   BOOL_TRUE : BOOL_FALSE;
         case SYS_CALIBRATION_MQTT_OP_STAGE:
             return (strcmp(key, "payloadLength") == 0 ||
                     strcmp(key, "payloadCrc32") == 0 ||
@@ -486,12 +491,19 @@ static boolean_en sys_calibration_mqtt_add_operation_response(
                 cJSON_AddNumberToObject(dt, "profileFingerprint",
                     sys_product_profile_current()->fingerprint_crc32);
                 cJSON_AddNumberToObject(dt, "leaseMs", response->lease_ms);
+                cJSON_AddNumberToObject(
+                    dt, "calibrationVoltage01V",
+                    response->status.calibration_voltage_01v);
+                cJSON_AddNumberToObject(
+                    dt, "calibrationSpanMa",
+                    response->status.calibration_span_ma);
                 break;
             case SYS_CALIBRATION_MQTT_OP_HEARTBEAT:
                 cJSON_AddNumberToObject(dt, "leaseMs", response->lease_ms);
                 break;
             case SYS_CALIBRATION_MQTT_OP_SET_POINT:
                 cJSON_AddNumberToObject(dt, "level", response->status.current_level);
+                cJSON_AddNumberToObject(dt, "actualPwm", response->status.actual_pwm);
                 break;
             case SYS_CALIBRATION_MQTT_OP_STAGE:
             case SYS_CALIBRATION_MQTT_OP_APPLY:
@@ -613,6 +625,7 @@ boolean_en sys_calibration_mqtt_handle(
     cJSON *dt;
     cJSON *op_node;
     cJSON *payload_hex_node;
+    cJSON *logical_pwm_node;
     const char *operation_text = "";
     sys_calibration_mqtt_operation_en operation = SYS_CALIBRATION_MQTT_OP_INVALID;
     sys_calibration_mqtt_response_st *response = &_working_response;
@@ -629,10 +642,14 @@ boolean_en sys_calibration_mqtt_handle(
     u32 parameter_digest = 0U;
     u16 profile_id = 0U;
     u16 level = 0U;
+    u16 logical_pwm = 0U;
+    u16 calibration_voltage_01v = 0U;
+    u16 calibration_span_ma = 0U;
     u16 payload_length = 0U;
     u16 read_length = 0U;
     u8 percent = 0U;
     u8 replay_result;
+    boolean_en direct_pwm_requested = BOOL_FALSE;
     boolean_en request_cacheable = BOOL_FALSE;
 
     if (root == NULL || header == NULL || strcmp(header->sv, ZK_SV_CAL) != 0)
@@ -705,6 +722,12 @@ boolean_en sys_calibration_mqtt_handle(
                 sys_calibration_mqtt_read_u32(
                     dt, "profileFingerprint", &profile_fingerprint) != BOOL_TRUE ||
                 sys_calibration_mqtt_read_u32(dt, "leaseMs", &lease_ms) !=
+                    BOOL_TRUE ||
+                sys_calibration_mqtt_read_u16(
+                    dt, "calibrationVoltage01V",
+                    &calibration_voltage_01v) != BOOL_TRUE ||
+                sys_calibration_mqtt_read_u16(
+                    dt, "calibrationSpanMa", &calibration_span_ma) !=
                     BOOL_TRUE || seq != 1U)
             {
                 break;
@@ -712,6 +735,10 @@ boolean_en sys_calibration_mqtt_handle(
             request_cacheable = BOOL_TRUE;
             parameter_digest = sys_calibration_mqtt_parameter_digest(
                 operation, profile_id, profile_fingerprint, lease_ms);
+            parameter_digest = sys_calibration_mqtt_digest_u32(
+                parameter_digest, calibration_voltage_01v);
+            parameter_digest = sys_calibration_mqtt_digest_u32(
+                parameter_digest, calibration_span_ma);
             if (lease_ms < SYS_CALIBRATION_LEASE_MIN_MS ||
                 lease_ms > SYS_CALIBRATION_LEASE_MAX_MS)
             {
@@ -748,11 +775,28 @@ boolean_en sys_calibration_mqtt_handle(
             {
                 break;
             }
+            logical_pwm_node = cJSON_GetObjectItemCaseSensitive(
+                dt, "logicalPwm");
+            if (logical_pwm_node != NULL)
+            {
+                if (sys_calibration_mqtt_read_u16(
+                        dt, "logicalPwm", &logical_pwm) != BOOL_TRUE)
+                {
+                    break;
+                }
+                direct_pwm_requested = BOOL_TRUE;
+            }
             request_cacheable = BOOL_TRUE;
             parameter_digest = sys_calibration_mqtt_parameter_digest(
-                operation, level, 0U, 0U);
+                operation, level,
+                direct_pwm_requested == BOOL_TRUE ? logical_pwm : 0U,
+                direct_pwm_requested == BOOL_TRUE ? 1U : 0U);
             result = (level <= SYS_CALIBRATION_LEVEL_MAX &&
-                      (level % SYS_CALIBRATION_LEVEL_STEP) == 0U) ?
+                      (level % SYS_CALIBRATION_LEVEL_STEP) == 0U &&
+                      (direct_pwm_requested != BOOL_TRUE ||
+                       (logical_pwm <= SYS_CALIBRATION_PWM_MAX &&
+                        ((level == 0U && logical_pwm == 0U) ||
+                         (level != 0U && logical_pwm != 0U))))) ?
                      SYS_CALIBRATION_RESULT_OK :
                      SYS_CALIBRATION_RESULT_RANGE_ERROR;
             response->level = level;
@@ -793,8 +837,15 @@ boolean_en sys_calibration_mqtt_handle(
             else if (sys_calibration_payload_validate(decoded_payload) !=
                          BOOL_TRUE ||
                      sys_calibration_payload_within_product_limits(
-                         decoded_payload, profile) != BOOL_TRUE)
+                         decoded_payload, profile) != BOOL_TRUE ||
+                     decoded_payload->output[0].reference_output_current_ma != 0U ||
+                     decoded_payload->output[
+                         SYS_CALIBRATION_PAYLOAD_POINT_COUNT - 1U]
+                         .reference_output_current_ma !=
+                         sys_calibration_service_calibration_span_ma())
             {
+                /* A real-calibration Output curve is always the exact 0..span
+                 * target axis. Sampling references may differ within tolerance. */
                 result = SYS_CALIBRATION_RESULT_RANGE_ERROR;
             }
             else if (sys_calibration_payload_matches_product(
@@ -871,9 +922,10 @@ boolean_en sys_calibration_mqtt_handle(
         switch (operation)
         {
             case SYS_CALIBRATION_MQTT_OP_BEGIN:
-                result = sys_calibration_service_begin_seq(
+                result = sys_calibration_service_begin_range_seq(
                     session_id, HAL_GetTick(), lease_ms, seq, profile_id,
-                    profile_fingerprint, &response->status);
+                    profile_fingerprint, calibration_voltage_01v,
+                    calibration_span_ma, &response->status);
                 break;
             case SYS_CALIBRATION_MQTT_OP_HEARTBEAT:
                 result = sys_calibration_service_heartbeat_seq(
@@ -881,8 +933,13 @@ boolean_en sys_calibration_mqtt_handle(
                 response->lease_ms = response->status.lease_ms;
                 break;
             case SYS_CALIBRATION_MQTT_OP_SET_POINT:
-                result = sys_calibration_service_set_point_seq(
-                    session_id, HAL_GetTick(), seq, level, &response->status);
+                result = direct_pwm_requested == BOOL_TRUE ?
+                    sys_calibration_service_set_point_direct_seq(
+                        session_id, HAL_GetTick(), seq, level, logical_pwm,
+                        &response->status) :
+                    sys_calibration_service_set_point_seq(
+                        session_id, HAL_GetTick(), seq, level,
+                        &response->status);
                 break;
             case SYS_CALIBRATION_MQTT_OP_RAW:
                 result = sys_calibration_service_raw_seq(
