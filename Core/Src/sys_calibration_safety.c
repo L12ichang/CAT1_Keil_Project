@@ -12,35 +12,78 @@
 static u16 sys_calibration_safety_table_current_ma(u16 voltage_01v)
 {
     const sys_product_profile_st *profile = sys_product_profile_current();
+    sys_calibration_iv_limit_st lower;
+    sys_calibration_iv_limit_st upper;
     u32 index;
-    sys_calibration_iv_limit_st limit;
-    u16 current_ma = 0U;
+    u32 span;
+    u32 position;
+    u32 delta;
 
-    if (sys_product_profile_is_complete(profile) != BOOL_TRUE)
+    if (sys_product_profile_is_complete(profile) != BOOL_TRUE ||
+        profile->iv_limit_count == 0U ||
+        sys_calibration_curve_get_iv_limit(0U, &lower) != BOOL_TRUE ||
+        voltage_01v < lower.voltage_01v)
     {
         return 0U;
+    }
+    if (voltage_01v == lower.voltage_01v)
+    {
+        return lower.current_ma;
+    }
+
+    for (index = 1U; index < profile->iv_limit_count; ++index)
+    {
+        if (sys_calibration_curve_get_iv_limit(index, &upper) != BOOL_TRUE)
+        {
+            return 0U;
+        }
+        if (voltage_01v == upper.voltage_01v)
+        {
+            return upper.current_ma;
+        }
+        if (voltage_01v < upper.voltage_01v)
+        {
+            span = (u32)upper.voltage_01v - lower.voltage_01v;
+            position = (u32)voltage_01v - lower.voltage_01v;
+            delta = (u32)lower.current_ma - upper.current_ma;
+            return (u16)((u32)lower.current_ma -
+                         (delta * position + span / 2U) / span);
+        }
+        lower = upper;
+    }
+    return (voltage_01v == lower.voltage_01v) ? lower.current_ma : 0U;
+}
+
+boolean_en sys_calibration_safety_is_supported_calibration_voltage(
+    u16 voltage_01v)
+{
+    const sys_product_profile_st *profile = sys_product_profile_current();
+    sys_calibration_iv_limit_st limit;
+    u32 index;
+
+    if (sys_product_profile_is_complete(profile) != BOOL_TRUE ||
+        voltage_01v == profile->special_test_voltage_01v)
+    {
+        return BOOL_FALSE;
     }
     for (index = 0U; index < profile->iv_limit_count; ++index)
     {
         if (sys_calibration_curve_get_iv_limit(index, &limit) != BOOL_TRUE)
         {
-            break;
+            return BOOL_FALSE;
         }
-        if (voltage_01v >= limit.voltage_01v)
+        if (limit.voltage_01v == voltage_01v)
         {
-            current_ma = limit.current_ma;
-        }
-        else
-        {
-            break;
+            return BOOL_TRUE;
         }
     }
-    return current_ma;
+    return BOOL_FALSE;
 }
 
 u16 sys_calibration_safety_limit_current_ma(u16 voltage_01v)
 {
     const sys_product_profile_st *profile = sys_product_profile_current();
+    u64 power_numerator;
     u32 power_current_ma;
     u16 table_current_ma;
 
@@ -53,7 +96,18 @@ u16 sys_calibration_safety_limit_current_ma(u16 voltage_01v)
     }
 
     table_current_ma = sys_calibration_safety_table_current_ma(voltage_01v);
-    power_current_ma = ((u32)profile->rated_power_w * 10000UL) / voltage_01v;
+    if (table_current_ma == 0U)
+    {
+        return 0U;
+    }
+
+    /* The published I-V table is authoritative. The rated-power guard keeps
+     * the profile tolerance instead of cutting valid table points such as
+     * 50W/36V/1400mA down to an exact zero-tolerance P/V value. */
+    power_numerator = (u64)profile->rated_power_w * 10000ULL *
+                      (1000ULL + profile->power_limit_tolerance_permille);
+    power_current_ma = (u32)(power_numerator /
+                             ((u64)voltage_01v * 1000ULL));
     if (power_current_ma < table_current_ma)
     {
         table_current_ma = (u16)power_current_ma;
@@ -63,6 +117,33 @@ u16 sys_calibration_safety_limit_current_ma(u16 voltage_01v)
         table_current_ma = profile->hw_max_current_ma;
     }
     return table_current_ma;
+}
+
+u16 sys_calibration_safety_calibration_span_ma(
+    u16 voltage_01v,
+    u16 configured_hwmax_ma)
+{
+    const sys_product_profile_st *profile = sys_product_profile_current();
+    u16 span_ma;
+
+    if (configured_hwmax_ma == 0U ||
+        sys_calibration_safety_is_supported_calibration_voltage(voltage_01v) !=
+            BOOL_TRUE ||
+        sys_product_profile_is_complete(profile) != BOOL_TRUE ||
+        configured_hwmax_ma > profile->hw_max_current_ma)
+    {
+        return 0U;
+    }
+    span_ma = sys_calibration_safety_limit_current_ma(voltage_01v);
+    if (span_ma == 0U)
+    {
+        return 0U;
+    }
+    if (span_ma > configured_hwmax_ma)
+    {
+        span_ma = configured_hwmax_ma;
+    }
+    return span_ma;
 }
 
 boolean_en sys_calibration_safety_limit_percent(
