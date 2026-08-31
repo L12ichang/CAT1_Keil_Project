@@ -1,0 +1,60 @@
+name: Apply V3 Final Calibration Patch
+
+on:
+  push:
+    branches:
+      - fix/v3-real-calibration-20260831
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.head_commit.message == 'chore(calibration): run final firmware calibration patch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/v3-real-calibration-20260831
+          fetch-depth: 0
+      - name: Apply final firmware patch
+        run: python3 tools/apply_v3_final_calibration_patch.py
+      - name: Static calibration invariants
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('Core/Src/sys_pwm.c').read_text(encoding='utf-8')
+          assert '((u32)percent * (u32)SET_OUTCUR * (u32)useful_range)' in p
+          assert '((u32)HWMAX_OUTCUR * 100U)' in p
+          start = p.index('boolean_en sys_pwm_calibration_set_output(')
+          end = p.index('boolean_en sys_pwm_calibration_set_direct_pwm(', start)
+          build = p[start:end]
+          assert 'sys_calibration_service_output_pwm_for_current' not in build
+          assert 'sys_pwm_default_for_target(target_current_ma, &logical_pwm)' in build
+          runtime_start = p.index('void pwm_output(')
+          runtime_end = p.index('void sys_pwm_timer(', runtime_start)
+          runtime = p[runtime_start:runtime_end]
+          assert 'sys_calibration_service_output_pwm_for_current' in runtime
+          assert 'sys_pwm_default_for_percent' in runtime
+          print('V3 PWM invariants OK')
+          PY
+      - name: Run host calibration tests when available
+        run: |
+          if [ -f tools/calibration/run_host_tests.sh ]; then
+            bash tools/calibration/run_host_tests.sh
+          elif [ -f tools/calibration/run_tests.sh ]; then
+            bash tools/calibration/run_tests.sh
+          else
+            echo 'No host calibration test runner found; static invariants completed.'
+          fi
+      - name: Commit generated source change
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Core/Src/sys_pwm.c
+          if git diff --cached --quiet; then
+            echo 'No generated changes'
+            exit 0
+          fi
+          git commit -m "fix(calibration): build inverse PWL from uncalibrated baseline"
+          git push origin HEAD:fix/v3-real-calibration-20260831
