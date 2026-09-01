@@ -98,10 +98,8 @@ static u8 sys_pwm_apply_dynamic_limits(u8 requested_percent)
     return (percent > 100U) ? 100U : (u8)percent;
 }
 
-/* Mature uncalibrated baseline. Keep the historical single expression and
- * mutable Factory SET/HWMAX semantics. Do not replace HWMAX with the 36V I-V
- * current cap: the I-V table is a safety/calibration envelope, not this PWM
- * denominator. */
+/* Historical uncalibrated transfer. HWMAX remains the Factory PWM full-scale
+ * denominator; Product I-V limits are safety/calibration envelopes only. */
 static boolean_en sys_pwm_default_for_percent(u8 percent, u16 *logical_pwm)
 {
     u16 useful_range;
@@ -124,10 +122,6 @@ static boolean_en sys_pwm_default_for_percent(u8 percent, u16 *logical_pwm)
     return BOOL_TRUE;
 }
 
-/* Same mature SET/HWMAX transfer expressed as target current. This is used by
- * calibration compatibility/verification paths; normal uncalibrated dimming
- * deliberately uses sys_pwm_default_for_percent() above to preserve the old
- * integer arithmetic exactly. */
 static boolean_en sys_pwm_default_for_target(u16 target_current_ma,
                                               u16 *logical_pwm)
 {
@@ -175,6 +169,36 @@ static boolean_en sys_pwm_calibration_feedback_ready(void)
             adc.valid_flags != 0U &&
             (now_ms - adc.tick_ms) <= CALIBRATION_FEEDBACK_MS) ?
            BOOL_TRUE : BOOL_FALSE;
+}
+
+static boolean_en sys_pwm_calibration_prepare_percent(
+    u8 percent,
+    u16 *target_current_ma)
+{
+    u8 protected_percent;
+    u16 calibration_span_ma;
+
+    if (target_current_ma == NULL || percent > 100U)
+    {
+        return BOOL_FALSE;
+    }
+    if (sys_pwm_calibration_feedback_ready() != BOOL_TRUE)
+    {
+        return BOOL_FALSE;
+    }
+    protected_percent = sys_pwm_apply_dynamic_limits(percent);
+    if (protected_percent != percent)
+    {
+        return BOOL_FALSE;
+    }
+    calibration_span_ma = sys_calibration_service_calibration_span_ma();
+    if (calibration_span_ma == 0U || calibration_span_ma > HWMAX_OUTCUR)
+    {
+        return BOOL_FALSE;
+    }
+    *target_current_ma = (u16)(((u32)calibration_span_ma * percent + 50U) /
+                               100U);
+    return BOOL_TRUE;
 }
 
 void pwm_output(u8 percent)
@@ -225,12 +249,10 @@ void pwm_output(u8 percent)
     }
     else if (calibrated_path == BOOL_TRUE)
     {
-        /* Calibrated logical PWM already includes the optical path correction. */
         hw_tim1_pwm2_set_calibrated_PWM_OUT(logical_pwm);
     }
     else
     {
-        /* Default path keeps the mature OP_PWM_OFFSET at the hardware boundary. */
         hw_tim1_pwm2_set_PWM_OUT(logical_pwm);
     }
     sys_pwm_publish(requested_percent, protected_percent);
@@ -361,58 +383,29 @@ void sys_pwm_force_safe_off(void)
     sys_pwm_publish(0U, 0U);
 }
 
+/* BUILD path: characterize the mature, uncalibrated SET/HWMAX transfer. */
 boolean_en sys_pwm_calibration_set_level(u16 level, u16 *actual_pwm)
 {
+    u8 percent;
+    u16 target_current_ma;
+    u16 logical_pwm;
+    u16 protected_pwm;
+
     if (actual_pwm == NULL ||
         sys_calibration_curve_validate_level(level) != BOOL_TRUE)
     {
         return BOOL_FALSE;
     }
-    return sys_pwm_calibration_set_output((u8)(level / 2U), actual_pwm);
-}
-
-boolean_en sys_pwm_calibration_set_output(u8 percent, u16 *actual_pwm)
-{
-    u8 protected_percent;
-    u16 calibration_span_ma;
-    u16 target_current_ma;
-    u16 logical_pwm;
-    u16 protected_pwm;
-
-    if (actual_pwm == NULL || percent > 100U)
-    {
-        return BOOL_FALSE;
-    }
+    percent = (u8)(level / 2U);
     if (percent == 0U)
     {
         sys_pwm_force_safe_off();
         *actual_pwm = 0U;
         return BOOL_TRUE;
     }
-    if (sys_pwm_calibration_feedback_ready() != BOOL_TRUE)
-    {
-        sys_pwm_force_safe_off();
-        return BOOL_FALSE;
-    }
-    protected_percent = sys_pwm_apply_dynamic_limits(percent);
-    if (protected_percent != percent)
-    {
-        sys_pwm_force_safe_off();
-        return BOOL_FALSE;
-    }
-
-    calibration_span_ma = sys_calibration_service_calibration_span_ma();
-    if (calibration_span_ma == 0U || calibration_span_ma > HWMAX_OUTCUR)
-    {
-        sys_pwm_force_safe_off();
-        return BOOL_FALSE;
-    }
-    target_current_ma = (u16)(((u32)calibration_span_ma * percent + 50U) /
-                              100U);
-    /* BUILD/characterization intentionally bypasses any committed curve.
-     * The first 11-point sweep must measure the raw mature SET/HWMAX transfer.
-     * STAGE/APPLY verification uses SET_OUTPUT and therefore the staged curve. */
-    if (sys_pwm_default_for_target(target_current_ma, &logical_pwm) != BOOL_TRUE)
+    if (sys_pwm_calibration_prepare_percent(percent, &target_current_ma) !=
+        BOOL_TRUE ||
+        sys_pwm_default_for_target(target_current_ma, &logical_pwm) != BOOL_TRUE)
     {
         sys_pwm_force_safe_off();
         return BOOL_FALSE;
@@ -429,6 +422,50 @@ boolean_en sys_pwm_calibration_set_output(u8 percent, u16 *actual_pwm)
         return BOOL_FALSE;
     }
     hw_tim1_pwm2_set_calibration_default_PWM_OUT(logical_pwm);
+    sys_pwm_publish(percent, percent);
+    *actual_pwm = hw_tim1_pwm2_get_logical_pwm();
+    return (*actual_pwm == logical_pwm) ? BOOL_TRUE : BOOL_FALSE;
+}
+
+/* APPLY/VERIFY path: use the staged TargetCurrent->CorrectPWM curve. Never
+ * fall back to the default transfer here, otherwise VERIFY would validate a
+ * different algorithm from the one later used after COMMIT. */
+boolean_en sys_pwm_calibration_set_output(u8 percent, u16 *actual_pwm)
+{
+    u16 target_current_ma;
+    u16 logical_pwm;
+    u16 protected_pwm;
+
+    if (actual_pwm == NULL || percent > 100U)
+    {
+        return BOOL_FALSE;
+    }
+    if (percent == 0U)
+    {
+        sys_pwm_force_safe_off();
+        *actual_pwm = 0U;
+        return BOOL_TRUE;
+    }
+    if (sys_pwm_calibration_prepare_percent(percent, &target_current_ma) !=
+        BOOL_TRUE ||
+        sys_calibration_service_output_pwm_for_current(
+            target_current_ma, &logical_pwm) != BOOL_TRUE)
+    {
+        sys_pwm_force_safe_off();
+        return BOOL_FALSE;
+    }
+    protected_pwm = sys_calibration_safety_arbitrate_pwm(
+        logical_pwm,
+        SYS_CALIBRATION_OUTPUT_SOURCE_CALIBRATION,
+        sys_calibration_service_is_boot_inhibited(),
+        sys_pwm_calibration_fault_active(),
+        BOOL_TRUE);
+    if (protected_pwm != logical_pwm)
+    {
+        sys_pwm_force_safe_off();
+        return BOOL_FALSE;
+    }
+    hw_tim1_pwm2_set_calibration_PWM_OUT(logical_pwm);
     sys_pwm_publish(percent, percent);
     *actual_pwm = hw_tim1_pwm2_get_logical_pwm();
     return (*actual_pwm == logical_pwm) ? BOOL_TRUE : BOOL_FALSE;
@@ -478,9 +515,6 @@ boolean_en sys_pwm_calibration_set_direct_pwm(
         return BOOL_FALSE;
     }
 
-    /* Direct search writes the final calibrated logical PWM, therefore no
-     * legacy OP_PWM_OFFSET is added here. The accepted value is exactly what
-     * will later be stored in the Output Current->PWM curve. */
     hw_tim1_pwm2_set_calibration_PWM_OUT(logical_pwm);
     sys_pwm_publish(percent, percent);
     *actual_pwm = hw_tim1_pwm2_get_logical_pwm();
