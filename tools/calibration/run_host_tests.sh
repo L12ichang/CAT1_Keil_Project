@@ -108,15 +108,18 @@ cc \
 
 "${BUILD_DIR}/test_hw_flash_paging"
 
-for disabled_profile in 75 100 150 200 240; do
-  if cc -std=c11 -fsyntax-only \
-      -DSYS_PRODUCT_PROFILE_SELECT="${disabled_profile}" \
-      -I"${ROOT_DIR}/Core/Src" \
-      "${ROOT_DIR}/Core/Src/sys_product_profile.c" \
-      >"${BUILD_DIR}/profile-${disabled_profile}.log" 2>&1; then
-    echo "error: disabled ${disabled_profile}W profile compiled unexpectedly" >&2
-    exit 1
-  fi
+for profile in 50 75 100 150 200 240; do
+  cc \
+    -std=c11 \
+    -Wall \
+    -Wextra \
+    -Werror \
+    -DSYS_PRODUCT_PROFILE_SELECT="${profile}" \
+    -I"${ROOT_DIR}/Core/Src" \
+    "${ROOT_DIR}/Core/Src/sys_product_profile.c" \
+    "${ROOT_DIR}/tools/calibration/test_product_profile_matrix.c" \
+    -o "${BUILD_DIR}/profile-${profile}"
+  "${BUILD_DIR}/profile-${profile}"
 done
 
-echo "disabled product profile compile gates: PASS"
+echo "six legacy product profile build/runtime matrix: PASS"
