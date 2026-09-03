@@ -1,5 +1,5 @@
 /*************************************************************
-程序功能：编译期产品配置、I-V限值和校准上下文绑定
+程序功能：旧11点校准六功率产品配置、I-V限值和校准上下文绑定
 开发环境：keil 5.37
 芯片型号：STM32F103CBT6/HK32F103CCT6A
 *************************************************************/
@@ -7,120 +7,103 @@
 
 static const sys_product_profile_iv_limit_st _50w_iv_limits[] =
 {
-    {250U, 1400U},
-    {290U, 1400U},
-    {320U, 1400U},
-    {360U, 1400U},
-    {400U, 1250U},
-    {440U, 1140U},
-    {480U, 1040U},
-    {520U,  960U},
-    {560U,  900U}
+    {250U, 1400U}, {290U, 1400U}, {320U, 1400U},
+    {360U, 1400U}, {400U, 1250U}, {440U, 1140U},
+    {480U, 1040U}, {520U,  960U}, {560U,  900U}
 };
 
 static const sys_product_profile_iv_limit_st _75w_iv_limits[] =
 {
-    {250U, 2100U},
-    {290U, 2100U},
-    {320U, 2100U},
-    {360U, 2100U},
-    {400U, 1870U},
-    {440U, 1700U},
-    {480U, 1560U},
-    {520U, 1440U},
-    {560U, 1340U}
+    {250U, 2100U}, {290U, 2100U}, {320U, 2100U},
+    {360U, 2100U}, {400U, 1870U}, {440U, 1700U},
+    {480U, 1560U}, {520U, 1440U}, {560U, 1340U}
 };
 
 static const sys_product_profile_iv_limit_st _100w_iv_limits[] =
 {
-    {250U, 2800U},
-    {290U, 2800U},
-    {320U, 2800U},
-    {360U, 2800U},
-    {400U, 2500U},
-    {440U, 2270U},
-    {480U, 2080U},
-    {520U, 1920U},
-    {560U, 1780U}
+    {250U, 2800U}, {290U, 2800U}, {320U, 2800U},
+    {360U, 2800U}, {400U, 2500U}, {440U, 2270U},
+    {480U, 2080U}, {520U, 1920U}, {560U, 1780U}
 };
+
+static const sys_product_profile_iv_limit_st _150w_iv_limits[] =
+{
+    {250U, 4200U}, {290U, 4200U}, {320U, 4200U},
+    {360U, 4200U}, {400U, 3750U}, {440U, 3400U},
+    {480U, 3130U}, {520U, 2880U}, {560U, 2680U}
+};
+
+static const sys_product_profile_iv_limit_st _200w_iv_limits[] =
+{
+    {250U, 5600U}, {290U, 5600U}, {320U, 5600U},
+    {360U, 5600U}, {400U, 5000U}, {440U, 4550U},
+    {480U, 4170U}, {520U, 3850U}, {560U, 3570U}
+};
+
+static const sys_product_profile_iv_limit_st _240w_iv_limits[] =
+{
+    {250U, 6700U}, {290U, 6700U}, {320U, 6700U},
+    {360U, 6700U}, {400U, 6000U}, {440U, 5450U},
+    {480U, 5000U}, {520U, 4620U}, {560U, 4300U}
+};
+
+#define LEGACY_PROFILE_ENTRY(ID, MODEL, FP, MID, POWER, PTOL, CTOL, DEFAULT_MA, RS3, HWMAX, ABSFAIL, IV) \
+    { (ID), (MODEL), SYS_PRODUCT_PROFILE_VERSION, (FP), (MID), (POWER), \
+      (PTOL), (CTOL), (DEFAULT_MA), (RS3), (HWMAX), (ABSFAIL), \
+      SYS_PRODUCT_PROFILE_MIN_VOLTAGE_01V, SYS_PRODUCT_PROFILE_CP_MIN_VOLTAGE_01V, \
+      SYS_PRODUCT_PROFILE_MAX_VOLTAGE_01V, SYS_PRODUCT_PROFILE_SPECIAL_TEST_VOLTAGE_01V, \
+      (IV), SYS_PRODUCT_PROFILE_IV_POINT_COUNT_MAX, BOOL_TRUE, BOOL_TRUE, "", "OK" }
 
 static const sys_product_profile_st _profiles[] =
 {
-    {
-        SYS_PRODUCT_PROFILE_ID_50W, "DL-50Z-56T-MXG",
-        SYS_PRODUCT_PROFILE_VERSION, SYS_PRODUCT_PROFILE_50W_FINGERPRINT_CRC32,
-        SYS_PRODUCT_PROFILE_50W_MID, SYS_PRODUCT_PROFILE_50W_RATED_POWER_W,
-        SYS_PRODUCT_PROFILE_50W_POWER_TOLERANCE_PM,
+    LEGACY_PROFILE_ENTRY(
+        SYS_PRODUCT_PROFILE_ID_50W, SYS_PRODUCT_PROFILE_50W_MODEL_CODE,
+        SYS_PRODUCT_PROFILE_50W_FINGERPRINT_CRC32, SYS_PRODUCT_PROFILE_50W_MID,
+        SYS_PRODUCT_PROFILE_50W_RATED_POWER_W, SYS_PRODUCT_PROFILE_50W_POWER_TOLERANCE_PM,
         SYS_PRODUCT_PROFILE_50W_CAL_SPAN_TOLERANCE_PM,
-        SYS_PRODUCT_PROFILE_50W_DEFAULT_CURRENT_MA,
-        SYS_PRODUCT_PROFILE_50W_RS3_MOHM,
-        SYS_PRODUCT_PROFILE_50W_HW_MAX_CURRENT_MA,
-        SYS_PRODUCT_PROFILE_50W_ABSOLUTE_FAIL_MA,
-        SYS_PRODUCT_PROFILE_50W_MIN_VOLTAGE_01V,
-        SYS_PRODUCT_PROFILE_50W_CP_MIN_VOLTAGE_01V,
-        SYS_PRODUCT_PROFILE_50W_MAX_VOLTAGE_01V,
-        SYS_PRODUCT_PROFILE_SPECIAL_TEST_VOLTAGE_01V,
-        _50w_iv_limits, 9U, BOOL_TRUE, BOOL_TRUE, "", "OK"
-    },
-    {
-        SYS_PRODUCT_PROFILE_ID_75W, "DL-75Z-56T-MXG",
-        SYS_PRODUCT_PROFILE_VERSION, 0U,
-        SYS_PRODUCT_PROFILE_75W_MID, SYS_PRODUCT_PROFILE_75W_RATED_POWER_W,
-        SYS_PRODUCT_PROFILE_75W_POWER_TOLERANCE_PM,
+        SYS_PRODUCT_PROFILE_50W_DEFAULT_CURRENT_MA, SYS_PRODUCT_PROFILE_50W_RS3_MOHM,
+        SYS_PRODUCT_PROFILE_50W_HW_MAX_CURRENT_MA, SYS_PRODUCT_PROFILE_50W_ABSOLUTE_FAIL_MA,
+        _50w_iv_limits),
+    LEGACY_PROFILE_ENTRY(
+        SYS_PRODUCT_PROFILE_ID_75W, SYS_PRODUCT_PROFILE_75W_MODEL_CODE,
+        SYS_PRODUCT_PROFILE_75W_FINGERPRINT_CRC32, SYS_PRODUCT_PROFILE_75W_MID,
+        SYS_PRODUCT_PROFILE_75W_RATED_POWER_W, SYS_PRODUCT_PROFILE_75W_POWER_TOLERANCE_PM,
         SYS_PRODUCT_PROFILE_75W_CAL_SPAN_TOLERANCE_PM,
-        SYS_PRODUCT_PROFILE_75W_DEFAULT_CURRENT_MA,
-        SYS_PRODUCT_PROFILE_75W_RS3_MOHM,
-        SYS_PRODUCT_PROFILE_75W_HW_MAX_CURRENT_MA, 0U,
-        250U, 360U, 560U, SYS_PRODUCT_PROFILE_SPECIAL_TEST_VOLTAGE_01V,
-        _75w_iv_limits, 9U, BOOL_FALSE, BOOL_FALSE,
-        "DEFAULT_1380MA_WITHIN_PLUS5_POWER_TOLERANCE_BUT_EXCEEDS_56V_IO_MAX_1340MA;ABSOLUTE_FAIL_CURRENT_NOT_FROZEN",
-        "DEFAULT_GT_IV56+ABS_MISSING"
-    },
-    {
-        SYS_PRODUCT_PROFILE_ID_100W, "DL-100Z-56T-MXG",
-        SYS_PRODUCT_PROFILE_VERSION, 0U,
-        SYS_PRODUCT_PROFILE_100W_MID, SYS_PRODUCT_PROFILE_100W_RATED_POWER_W,
-        0U, 0U, SYS_PRODUCT_PROFILE_100W_DEFAULT_CURRENT_MA,
-        SYS_PRODUCT_PROFILE_100W_RS3_MOHM,
-        SYS_PRODUCT_PROFILE_100W_HW_MAX_CURRENT_MA, 0U,
-        250U, 360U, 560U, SYS_PRODUCT_PROFILE_SPECIAL_TEST_VOLTAGE_01V,
-        _100w_iv_limits, 9U, BOOL_FALSE, BOOL_FALSE,
-        "ABSOLUTE_FAIL_CURRENT_AND_COMPLETE_PROTECTION_REVIEW_NOT_FROZEN",
-        "ABS_MISSING+PROTECTION_REVIEW"
-    },
-    {
-        SYS_PRODUCT_PROFILE_ID_150W, "DL-150W-UNFROZEN",
-        SYS_PRODUCT_PROFILE_VERSION, 0U,
-        SYS_PRODUCT_PROFILE_150W_MID, SYS_PRODUCT_PROFILE_150W_RATED_POWER_W,
-        0U, 0U, SYS_PRODUCT_PROFILE_150W_DEFAULT_CURRENT_MA,
-        SYS_PRODUCT_PROFILE_150W_RS3_MOHM,
-        SYS_PRODUCT_PROFILE_150W_HW_MAX_CURRENT_MA, 0U,
-        0U, 0U, 0U, 0U, NULL, 0U, BOOL_FALSE, BOOL_FALSE,
-        "IV_TABLE_AND_ABSOLUTE_FAIL_CURRENT_NOT_FROZEN;DEFAULT_2700MA_IS_151P2W_AT_56V_WITHOUT_APPROVED_POWER_TOLERANCE",
-        "IV_MISSING+ABS_MISSING+POWER_TOL"
-    },
-    {
-        SYS_PRODUCT_PROFILE_ID_200W, "DL-200W-UNFROZEN",
-        SYS_PRODUCT_PROFILE_VERSION, 0U,
-        SYS_PRODUCT_PROFILE_200W_MID, SYS_PRODUCT_PROFILE_200W_RATED_POWER_W,
-        0U, 0U, SYS_PRODUCT_PROFILE_200W_DEFAULT_CURRENT_MA,
-        SYS_PRODUCT_PROFILE_200W_RS3_MOHM,
-        SYS_PRODUCT_PROFILE_200W_HW_MAX_CURRENT_MA, 0U,
-        0U, 0U, 0U, 0U, NULL, 0U, BOOL_FALSE, BOOL_FALSE,
-        "IV_TABLE_AND_ABSOLUTE_FAIL_CURRENT_NOT_FROZEN;DEFAULT_3600MA_IS_201P6W_AT_56V_WITHOUT_APPROVED_POWER_TOLERANCE",
-        "IV_MISSING+ABS_MISSING+POWER_TOL"
-    },
-    {
-        SYS_PRODUCT_PROFILE_ID_240W, "DL-240W-UNFROZEN",
-        SYS_PRODUCT_PROFILE_VERSION, 0U,
-        SYS_PRODUCT_PROFILE_240W_MID, SYS_PRODUCT_PROFILE_240W_RATED_POWER_W,
-        0U, 0U, SYS_PRODUCT_PROFILE_240W_DEFAULT_CURRENT_MA,
-        SYS_PRODUCT_PROFILE_240W_RS3_MOHM,
-        SYS_PRODUCT_PROFILE_240W_HW_MAX_CURRENT_MA, 0U,
-        0U, 0U, 0U, 0U, NULL, 0U, BOOL_FALSE, BOOL_FALSE,
-        "IV_TABLE_AND_ABSOLUTE_FAIL_CURRENT_NOT_FROZEN;DEFAULT_4300MA_IS_240P8W_AT_56V_WITHOUT_APPROVED_POWER_TOLERANCE",
-        "IV_MISSING+ABS_MISSING+POWER_TOL"
-    }
+        SYS_PRODUCT_PROFILE_75W_DEFAULT_CURRENT_MA, SYS_PRODUCT_PROFILE_75W_RS3_MOHM,
+        SYS_PRODUCT_PROFILE_75W_HW_MAX_CURRENT_MA, SYS_PRODUCT_PROFILE_75W_ABSOLUTE_FAIL_MA,
+        _75w_iv_limits),
+    LEGACY_PROFILE_ENTRY(
+        SYS_PRODUCT_PROFILE_ID_100W, SYS_PRODUCT_PROFILE_100W_MODEL_CODE,
+        SYS_PRODUCT_PROFILE_100W_FINGERPRINT_CRC32, SYS_PRODUCT_PROFILE_100W_MID,
+        SYS_PRODUCT_PROFILE_100W_RATED_POWER_W, SYS_PRODUCT_PROFILE_100W_POWER_TOLERANCE_PM,
+        SYS_PRODUCT_PROFILE_100W_CAL_SPAN_TOLERANCE_PM,
+        SYS_PRODUCT_PROFILE_100W_DEFAULT_CURRENT_MA, SYS_PRODUCT_PROFILE_100W_RS3_MOHM,
+        SYS_PRODUCT_PROFILE_100W_HW_MAX_CURRENT_MA, SYS_PRODUCT_PROFILE_100W_ABSOLUTE_FAIL_MA,
+        _100w_iv_limits),
+    LEGACY_PROFILE_ENTRY(
+        SYS_PRODUCT_PROFILE_ID_150W, SYS_PRODUCT_PROFILE_150W_MODEL_CODE,
+        SYS_PRODUCT_PROFILE_150W_FINGERPRINT_CRC32, SYS_PRODUCT_PROFILE_150W_MID,
+        SYS_PRODUCT_PROFILE_150W_RATED_POWER_W, SYS_PRODUCT_PROFILE_150W_POWER_TOLERANCE_PM,
+        SYS_PRODUCT_PROFILE_150W_CAL_SPAN_TOLERANCE_PM,
+        SYS_PRODUCT_PROFILE_150W_DEFAULT_CURRENT_MA, SYS_PRODUCT_PROFILE_150W_RS3_MOHM,
+        SYS_PRODUCT_PROFILE_150W_HW_MAX_CURRENT_MA, SYS_PRODUCT_PROFILE_150W_ABSOLUTE_FAIL_MA,
+        _150w_iv_limits),
+    LEGACY_PROFILE_ENTRY(
+        SYS_PRODUCT_PROFILE_ID_200W, SYS_PRODUCT_PROFILE_200W_MODEL_CODE,
+        SYS_PRODUCT_PROFILE_200W_FINGERPRINT_CRC32, SYS_PRODUCT_PROFILE_200W_MID,
+        SYS_PRODUCT_PROFILE_200W_RATED_POWER_W, SYS_PRODUCT_PROFILE_200W_POWER_TOLERANCE_PM,
+        SYS_PRODUCT_PROFILE_200W_CAL_SPAN_TOLERANCE_PM,
+        SYS_PRODUCT_PROFILE_200W_DEFAULT_CURRENT_MA, SYS_PRODUCT_PROFILE_200W_RS3_MOHM,
+        SYS_PRODUCT_PROFILE_200W_HW_MAX_CURRENT_MA, SYS_PRODUCT_PROFILE_200W_ABSOLUTE_FAIL_MA,
+        _200w_iv_limits),
+    LEGACY_PROFILE_ENTRY(
+        SYS_PRODUCT_PROFILE_ID_240W, SYS_PRODUCT_PROFILE_240W_MODEL_CODE,
+        SYS_PRODUCT_PROFILE_240W_FINGERPRINT_CRC32, SYS_PRODUCT_PROFILE_240W_MID,
+        SYS_PRODUCT_PROFILE_240W_RATED_POWER_W, SYS_PRODUCT_PROFILE_240W_POWER_TOLERANCE_PM,
+        SYS_PRODUCT_PROFILE_240W_CAL_SPAN_TOLERANCE_PM,
+        SYS_PRODUCT_PROFILE_240W_DEFAULT_CURRENT_MA, SYS_PRODUCT_PROFILE_240W_RS3_MOHM,
+        SYS_PRODUCT_PROFILE_240W_HW_MAX_CURRENT_MA, SYS_PRODUCT_PROFILE_240W_ABSOLUTE_FAIL_MA,
+        _240w_iv_limits)
 };
 
 static u32 sys_product_profile_crc32_byte(u32 crc, u8 value)
@@ -180,10 +163,8 @@ u32 sys_product_profile_calculate_fingerprint(
     crc = sys_product_profile_crc32_u16(crc, profile->profile_version);
     crc = sys_product_profile_crc32_byte(crc, profile->mid);
     crc = sys_product_profile_crc32_u16(crc, profile->rated_power_w);
-    crc = sys_product_profile_crc32_u16(
-        crc, profile->power_limit_tolerance_permille);
-    crc = sys_product_profile_crc32_u16(
-        crc, profile->calibration_span_tolerance_permille);
+    crc = sys_product_profile_crc32_u16(crc, profile->power_limit_tolerance_permille);
+    crc = sys_product_profile_crc32_u16(crc, profile->calibration_span_tolerance_permille);
     crc = sys_product_profile_crc32_u16(crc, profile->rs3_mohm);
     crc = sys_product_profile_crc32_u16(crc, profile->hw_max_current_ma);
     crc = sys_product_profile_crc32_u16(crc, profile->absolute_fail_current_ma);
@@ -204,31 +185,41 @@ boolean_en sys_product_profile_is_complete(
     const sys_product_profile_st *profile)
 {
     u32 maximum_power_product;
+    u32 index;
 
     if (profile == NULL || profile->build_enabled != BOOL_TRUE ||
         profile->nonzero_calibration_enabled != BOOL_TRUE ||
         profile->model_code == NULL || profile->fingerprint_crc32 == 0U ||
         profile->mid == 0U || profile->rated_power_w == 0U ||
         profile->default_runtime_current_ma == 0U ||
-        profile->rs3_mohm == 0U ||
-        profile->hw_max_current_ma == 0U || profile->absolute_fail_current_ma == 0U ||
-        profile->iv_limits == NULL || profile->iv_limit_count == 0U ||
-        profile->iv_limit_count > SYS_PRODUCT_PROFILE_IV_POINT_COUNT_MAX ||
+        profile->rs3_mohm == 0U || profile->hw_max_current_ma == 0U ||
+        profile->absolute_fail_current_ma == 0U ||
+        profile->iv_limits == NULL ||
+        profile->iv_limit_count != SYS_PRODUCT_PROFILE_IV_POINT_COUNT_MAX ||
         profile->minimum_voltage_01v > profile->constant_power_min_voltage_01v ||
         profile->constant_power_min_voltage_01v > profile->maximum_voltage_01v ||
-        profile->iv_limits[0].voltage_01v > profile->minimum_voltage_01v ||
-        profile->iv_limits[profile->iv_limit_count - 1U].voltage_01v <
-            profile->maximum_voltage_01v ||
-        profile->default_runtime_current_ma >=
-            profile->absolute_fail_current_ma ||
+        profile->default_runtime_current_ma >= profile->absolute_fail_current_ma ||
         profile->default_runtime_current_ma > profile->hw_max_current_ma ||
-        profile->default_runtime_current_ma >
-            profile->iv_limits[profile->iv_limit_count - 1U].current_ma ||
-        sys_product_profile_calculate_fingerprint(profile) !=
-            profile->fingerprint_crc32)
+        sys_product_profile_calculate_fingerprint(profile) != profile->fingerprint_crc32)
     {
         return BOOL_FALSE;
     }
+
+    for (index = 0U; index < profile->iv_limit_count; ++index)
+    {
+        if (profile->iv_limits[index].current_ma == 0U ||
+            profile->iv_limits[index].current_ma > profile->hw_max_current_ma ||
+            (index > 0U && profile->iv_limits[index].voltage_01v <=
+                             profile->iv_limits[index - 1U].voltage_01v) ||
+            (index > 0U && profile->iv_limits[index].current_ma >
+                             profile->iv_limits[index - 1U].current_ma))
+        {
+            return BOOL_FALSE;
+        }
+    }
+
+    /* Profile completeness must not assume the default current is valid at 56V.
+     * Runtime validation applies the I-V cap at the actual bound output voltage. */
     maximum_power_product =
         ((u32)profile->rated_power_w * 10000UL *
          (1000UL + profile->power_limit_tolerance_permille)) / 1000UL;
@@ -274,7 +265,6 @@ sys_product_current_validation_en sys_product_profile_validate_runtime_current(
     {
         return SYS_PRODUCT_CURRENT_ZERO;
     }
-    /* Hardware fail-off and protected factory ceilings take precedence. */
     if (configured_current_ma >= profile->absolute_fail_current_ma)
     {
         return SYS_PRODUCT_CURRENT_ABSOLUTE_FAIL;
@@ -313,8 +303,7 @@ sys_product_current_validation_en sys_product_profile_validate_calibrated_curren
     boolean_en calibrated_max_available,
     u16 calibrated_max_current_ma)
 {
-    if (calibrated_max_available != BOOL_TRUE ||
-        calibrated_max_current_ma == 0U)
+    if (calibrated_max_available != BOOL_TRUE || calibrated_max_current_ma == 0U)
     {
         return SYS_PRODUCT_CURRENT_CALIBRATION_MAX_UNAVAILABLE;
     }
@@ -484,15 +473,12 @@ boolean_en sys_product_profile_context_validate(
         context->profile_id != expected.profile_id ||
         context->profile_version != expected.profile_version ||
         context->profile_fingerprint_crc32 != expected.profile_fingerprint_crc32 ||
-        context->configured_rated_current_ma !=
-            expected.configured_rated_current_ma ||
+        context->configured_rated_current_ma != expected.configured_rated_current_ma ||
         context->calibrated_max_current_ma != expected.calibrated_max_current_ma ||
         (require_table_crc == BOOL_TRUE &&
-         (context->table_crc32 == 0U ||
-          context->calibrated_max_current_ma == 0U)) ||
+         (context->table_crc32 == 0U || context->calibrated_max_current_ma == 0U)) ||
         (require_table_crc != BOOL_TRUE &&
-         (context->table_crc32 != 0U ||
-          context->calibrated_max_current_ma != 0U)))
+         (context->table_crc32 != 0U || context->calibrated_max_current_ma != 0U)))
     {
         return BOOL_FALSE;
     }
@@ -508,18 +494,13 @@ u32 sys_product_profile_context_binding_crc32(
     {
         return 0U;
     }
-    crc = sys_product_profile_crc32_byte(
-        crc, (u8)SYS_CALIBRATION_CONTEXT_VERSION);
+    crc = sys_product_profile_crc32_byte(crc, (u8)SYS_CALIBRATION_CONTEXT_VERSION);
     crc = sys_product_profile_crc32_u16(crc, context->profile_id);
     crc = sys_product_profile_crc32_u16(crc, context->profile_version);
-    crc = sys_product_profile_crc32_u32(
-        crc, context->profile_fingerprint_crc32);
-    crc = sys_product_profile_crc32_u16(
-        crc, context->calibration_voltage_01v);
-    crc = sys_product_profile_crc32_u16(
-        crc, context->configured_rated_current_ma);
-    crc = sys_product_profile_crc32_u16(
-        crc, context->calibrated_max_current_ma);
+    crc = sys_product_profile_crc32_u32(crc, context->profile_fingerprint_crc32);
+    crc = sys_product_profile_crc32_u16(crc, context->calibration_voltage_01v);
+    crc = sys_product_profile_crc32_u16(crc, context->configured_rated_current_ma);
+    crc = sys_product_profile_crc32_u16(crc, context->calibrated_max_current_ma);
     crc = sys_product_profile_crc32_u32(crc, context->table_crc32);
     return crc ^ 0xFFFFFFFFUL;
 }
@@ -534,11 +515,9 @@ boolean_en sys_product_profile_context_equal(
         first->profile_version != second->profile_version ||
         first->profile_fingerprint_crc32 != second->profile_fingerprint_crc32 ||
         first->calibration_voltage_01v != second->calibration_voltage_01v ||
-        first->configured_rated_current_ma !=
-            second->configured_rated_current_ma ||
+        first->configured_rated_current_ma != second->configured_rated_current_ma ||
         (compare_table_crc == BOOL_TRUE &&
-         (first->calibrated_max_current_ma !=
-              second->calibrated_max_current_ma ||
+         (first->calibrated_max_current_ma != second->calibrated_max_current_ma ||
           first->table_crc32 != second->table_crc32)))
     {
         return BOOL_FALSE;
