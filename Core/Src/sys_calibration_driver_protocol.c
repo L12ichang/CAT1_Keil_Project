@@ -8,6 +8,7 @@
 #include <string.h>
 
 #define SYS_CALIBRATION_OCO_GAIN_ANCHOR_INDEX        9U
+#define SYS_CALIBRATION_OCO_LINEAR_QUANTIZATION       1U
 
 static void sys_calibration_put_u16_le(u8 *destination, u16 value)
 {
@@ -79,9 +80,9 @@ static boolean_en sys_calibration_hex_nibble(char value, u8 *nibble)
  *   level 0   -> Offset Raw
  *   level 180 -> Gain anchor (90%)
  *
- * Every OCO wire pair must therefore lie on that same line and its current
- * axis must equal the Output TargetCurrent axis. This prevents an old client
- * from silently re-introducing an independent 11-point OCO correction model.
+ * Every OCO pair must stay on that same line and its current axis must equal
+ * the Output TargetCurrent axis. One ADC count is tolerated for integer
+ * quantization only; this does not permit an independent 11-point OCO curve.
  */
 static boolean_en sys_calibration_payload_oco_two_point_valid(
     const sys_calibration_payload_st *payload)
@@ -116,6 +117,8 @@ static boolean_en sys_calibration_payload_oco_two_point_valid(
     {
         u16 reference_ma = payload->oco[index].reference_output_current_ma;
         u32 expected_raw;
+        u32 actual_raw;
+        u32 difference;
 
         if (reference_ma !=
             payload->output[index].reference_output_current_ma)
@@ -127,8 +130,12 @@ static boolean_en sys_calibration_payload_oco_two_point_valid(
             (((u32)reference_ma * delta_raw +
               (u32)anchor_reference_ma / 2U) /
              (u32)anchor_reference_ma);
+        actual_raw = (u32)payload->oco[index].oco_adc_raw;
+        difference = (actual_raw > expected_raw) ?
+                     (actual_raw - expected_raw) :
+                     (expected_raw - actual_raw);
         if (expected_raw > 65535UL ||
-            payload->oco[index].oco_adc_raw != (u16)expected_raw)
+            difference > SYS_CALIBRATION_OCO_LINEAR_QUANTIZATION)
         {
             return BOOL_FALSE;
         }
