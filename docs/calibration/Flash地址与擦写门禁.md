@@ -1,49 +1,64 @@
-# 量产校准 Flash 地址与擦写门禁（历史实现快照）
+# Calibration V3 Flash 地址与擦写门禁
 
-状态：`LEGACY_IMPLEMENTATION_SNAPSHOT / MAP_HIL_PENDING`。本文记录 V2 时代源码的 A/B 事务与候选地址，不再定义目标 Calibration Record。目标结构、协议和验收以 `done/cat1-product-profile-cal-context-20260817` 上的两份 CAT1 50W 权威文档及 `docs/CAT1_50W文档口径说明.md` 为准。
+> 当前 V3 校准持久化结构、地址和擦写行为必须以当前分支源码、最新 Keil MAP/HEX 和实机掉电验证为准；本文件不再保留旧 V2 record、旧候选地址或旧功率专项参数。
 
-下文出现的 Flash record v3、`configuredRatedCurrentMa` 或 `calibratedMaxCurrentMa` 均为历史实现证据，不得与目标 MQTT Protocol V3 混为同一版本，也不得继续作为普通运行授权设计。
+## 1. 当前持久化语义
 
-## 当前源码所有者表
+校准 Flash 保存的是当前 V3 committed CALP 数据及其完整性元数据。上位机写入链路固定为：
 
-以下地址以半开区间记录；量产目标为 256 KiB HK32F103CCT6A，物理范围固定为
-`0x08000000–0x0803FFFF`，擦除粒度为 2 KiB。Keil/J-Link 当前使用
-STM32F103RC 兼容描述，不得据其容量寄存器或 512 KiB Flash 算法扩大边界：
+```text
+STAGE
+-> APPLY
+-> QUICK/FULL VERIFY
+-> COMMIT
+-> READ
+-> generation / payloadLength / payloadCrc32 / full-byte compare
+```
 
-| 区间 | 当前所有者 |
-|---|---|
-| `0x08000000–0x08005000` | Boot |
-| `0x08005000–0x08005800` | 系统参数主记录 |
-| `0x08005800–0x08005A00` | 属性主记录 |
-| `0x08005A00–0x08005B00` | 运行统计主记录 |
-| `0x08005B00–0x08005C00` | OTA 报告主记录 |
-| `0x08005C00–0x08006000` | 校准 A 候选（1KiB，非独立擦除页） |
-| `0x08006000–0x08006800` | 计划主记录 |
-| `0x08006800–0x08007000` | 系统参数备记录 |
-| `0x08007000–0x08007200` | 属性备记录 |
-| `0x08007200–0x08007300` | 运行统计备记录 |
-| `0x08007300–0x08007400` | OTA 报告备记录 |
-| `0x08007400–0x08007800` | 校准 B 候选（1KiB，非独立擦除页） |
-| `0x08007800–0x08008000` | 计划备记录 |
-| `0x08008000–0x08024000` | APP |
-| `0x08024000–0x08040000` | OTA backup |
+当前 CALP payload 为 244B，必须保持当前协议版本与固件 codec 一致。
 
-三段总计正好 256 KiB；`0x08040000` 是首个非法地址，不允许读写或校验。
+## 2. 地址来源唯一性
 
-该表由 `Core/Src/flash_address_assignment.h` 集中定义。A/B 仍标记为 candidate；没有当前 HEAD 的新鲜 Keil MAP、HEX 地址审计和共享页故障注入，不得称为最终地址或量产完成。
+任何绝对 Flash 地址都不得从历史文档复制。每次准备量产镜像时必须同时核对：
 
-## 擦写规则
+- 当前 `flash_address_assignment.h` / 校准存储源码；
+- 当前 Keil linker/scatter 配置；
+- 当前 MAP；
+- 当前 HEX/BIN 实际占用范围；
+- Boot、APP、OTA、Factory/Property/Plan等相邻持久化区域。
 
-- `hw_flash_write_bytes_checked()` 逐点检查 HAL 擦除、字编程和请求范围回读，并返回 `BOOL_FALSE`；它仍会重写完整 2KiB 页，不能绕过共享页所有者风险。
-- 旧 `hw_flash_write_bytes()` 仅为兼容入口，忽略返回值；新校准存储不得调用它。
-- `sys_calibration_flash.c` 已实现读取 A/B 最新有效序列、写非活动槽、payload/record CRC、最后写 `commit_word` 和整体回读。
-- 校准记录格式已升级为 v3：198 字节 payload 原样保留，记录头绑定 Profile/电压/`configuredRatedCurrentMa`/`calibratedMaxCurrentMa`/表 CRC；静态断言固定 payload 长度198、payload偏移40和记录总长244字节。v1/v2或外Profile记录失败关闭，不做隐式迁移。
-- boot-inhibit 使用每个 1KiB 候选槽内 `0x300` 偏移的独立 A/B 记录；为兼容升级前设备，两槽全 `0xFF` 时允许进入受控校准初始化路径，但没有有效 v3 表/`calibratedMaxCurrentMa` 时普通非零输出仍被阻断；任一槽非空且两份均无效时失败关闭。
-- 上述是源码能力，共页邻接记录保全和任意断电点仍需 Keil MAP/HEX 与实机故障注入。
+只有上述证据一致，才能把地址标记为当前量产地址。
 
-## 必须通过的审计
+## 3. 擦写硬门禁
 
-1. 当前 HEAD 的两个 Keil target 干净构建和 MAP；
-2. 所有绝对地址、源表和 HEX 地址一致；
-3. 修改每个共享页时，属性/运行统计/OTA/计划邻居记录保持不变；
-4. 擦除、payload、回读、commit 前各断电点均至少保留一份旧有效记录。
+- 写入前必须保证目标范围合法且不会越过物理 Flash；
+- 擦除页若与其他记录共享，必须证明邻接记录在更新后保持不变；
+- 新数据必须先完整写入并回读，再完成最终有效提交标记；
+- COMMIT失败不得破坏上一份有效 committed 校准；
+- CRC或结构非法的记录不得在启动时激活；
+- Flash失败必须使校准流程失败关闭并保持安全输出状态。
+
+## 4. 掉电验证
+
+源码实现不能替代以下实机验证：
+
+- 擦除前掉电；
+- 擦除后掉电；
+- payload部分写入后掉电；
+- payload完整但最终提交前掉电；
+- COMMIT后立即掉电；
+- 重启后generation/CRC/payload选择正确；
+- 相邻Factory/Property/Plan/OTA记录不被破坏。
+
+## 5. 与算法的边界
+
+Flash层只负责可靠持久化，不参与：
+
+- Output误差判定；
+- MCU采样误差判定；
+- QUICK/FULL精度阈值；
+- BUILD稳定百分比门禁。
+
+是否允许COMMIT由安全、曲线结构/覆盖、Payload、CRC和Flash条件决定；精度数据由验证报告/MES质量规则使用。
+
+完整算法与职责边界见 `../V3六型号真实校准最终设计.md`。
