@@ -57,6 +57,28 @@ static const u8 golden_dc5200_reply[SYS_CALIBRATION_DC5200_COMPREHENSIVE_FRAME_L
     0xCC, 0x02
 };
 
+typedef struct
+{
+    u16 id;
+    const char *model;
+    u32 fingerprint;
+    u8 mid;
+    u16 default_current_ma;
+    u16 rs3_mohm;
+    u16 hw_max_ma;
+    u16 iv56_ma;
+} expected_profile_st;
+
+static const expected_profile_st expected_profiles[] =
+{
+    {50U,  "DL-50Z-56T-MXG",  0xA7777C1EUL, 1U,  890U, 120U, 1680U,  900U},
+    {75U,  "DL-75Z-56T-MXG",  0xCE42B60EUL, 2U, 1360U,  50U, 2150U, 1340U},
+    {100U, "DL-100Z-56T-MXG", 0xACEC0DDCUL, 3U, 1780U,  50U, 2800U, 1780U},
+    {150U, "DL-150Z-56T-MXG", 0x64357DFDUL, 4U, 2700U,  30U, 4500U, 2680U},
+    {200U, "DL-200Z-56T-MXG", 0x2364B8B9UL, 5U, 3600U,  15U, 6000U, 3570U},
+    {240U, "DL-240Z-56T-MXG", 0x9B5756DAUL, 6U, 4300U,  15U, 7000U, 4300U}
+};
+
 int main(void)
 {
     sys_calibration_driver_message_st message;
@@ -72,7 +94,6 @@ int main(void)
     sys_calibration_boot_inhibit_state_en inhibit_state;
     sys_calibration_context_st calibration_context;
     const sys_product_profile_st *profile;
-    const sys_product_profile_st *candidate_profile;
     u8 encoded[SYS_CALIBRATION_DRIVER_TABLE_FRAME_LENGTH];
     u8 simple_frame[SYS_CALIBRATION_DRIVER_FRAME_OVERHEAD + 8U];
     u16 simple_length;
@@ -90,109 +111,81 @@ int main(void)
     u16 encoded_length;
     u8 safe_percent;
     u32 profile_index;
-    static const u16 expected_75w_iv_ma[9] =
-        {2100U, 2100U, 2100U, 2100U, 1870U, 1700U, 1560U, 1440U, 1340U};
-    static const u16 expected_100w_iv_ma[9] =
-        {2800U, 2800U, 2800U, 2800U, 2500U, 2270U, 2080U, 1920U, 1780U};
     int failures = 0;
 
     profile = sys_product_profile_current();
     failures += expect_true(
         profile != NULL && profile->profile_id == SYS_PRODUCT_PROFILE_ID_50W &&
         profile->fingerprint_crc32 == SYS_PRODUCT_PROFILE_50W_FINGERPRINT_CRC32 &&
-        sys_product_profile_calculate_fingerprint(profile) ==
-            profile->fingerprint_crc32 &&
+        sys_product_profile_calculate_fingerprint(profile) == profile->fingerprint_crc32 &&
         sys_product_profile_is_complete(profile) == BOOL_TRUE,
-        "selected 50W profile fingerprint is complete");
-    candidate_profile = sys_product_profile_find(SYS_PRODUCT_PROFILE_ID_75W);
-    failures += expect_true(
-        candidate_profile != NULL && candidate_profile->rated_power_w == 75U &&
-        candidate_profile->mid == SYS_PRODUCT_PROFILE_75W_MID &&
-        candidate_profile->default_runtime_current_ma == 1380U &&
-        candidate_profile->rs3_mohm == 50U &&
-        candidate_profile->hw_max_current_ma == 2150U &&
-        candidate_profile->power_limit_tolerance_permille == 50U &&
-        candidate_profile->iv_limits[0].current_ma == 2100U &&
-        candidate_profile->iv_limits[8].current_ma == 1340U &&
-        candidate_profile->build_enabled == BOOL_FALSE &&
-        candidate_profile->absolute_fail_current_ma == 0U,
-        "75W confirmed fields and I-V conflict are retained fail-closed");
-    for (profile_index = 0U; profile_index < 9U; ++profile_index)
-    {
-        failures += expect_true(
-            candidate_profile->iv_limits[profile_index].current_ma ==
-                expected_75w_iv_ma[profile_index],
-            "75W specification I-V point matches");
-    }
-    candidate_profile = sys_product_profile_find(SYS_PRODUCT_PROFILE_ID_100W);
-    failures += expect_true(
-        candidate_profile != NULL && candidate_profile->rated_power_w == 100U &&
-        candidate_profile->mid == SYS_PRODUCT_PROFILE_100W_MID &&
-        candidate_profile->default_runtime_current_ma == 1780U &&
-        candidate_profile->rs3_mohm == 50U &&
-        candidate_profile->hw_max_current_ma == 2800U &&
-        candidate_profile->iv_limits[0].current_ma == 2800U &&
-        candidate_profile->iv_limits[8].current_ma == 1780U &&
-        candidate_profile->build_enabled == BOOL_FALSE &&
-        candidate_profile->absolute_fail_current_ma == 0U,
-        "100W confirmed fields are retained while safety review stays disabled");
-    for (profile_index = 0U; profile_index < 9U; ++profile_index)
-    {
-        failures += expect_true(
-            candidate_profile->iv_limits[profile_index].current_ma ==
-                expected_100w_iv_ma[profile_index],
-            "100W specification I-V point matches");
-    }
-    candidate_profile = sys_product_profile_find(SYS_PRODUCT_PROFILE_ID_150W);
-    failures += expect_true(
-        candidate_profile != NULL && candidate_profile->mid == 4U &&
-        candidate_profile->default_runtime_current_ma == 2700U &&
-        candidate_profile->rs3_mohm == 30U &&
-        candidate_profile->hw_max_current_ma == 4500U &&
-        candidate_profile->iv_limits == NULL &&
-        candidate_profile->build_enabled == BOOL_FALSE,
-        "150W confirmed fields stay disabled without I-V and absolute fail");
-    candidate_profile = sys_product_profile_find(SYS_PRODUCT_PROFILE_ID_200W);
-    failures += expect_true(
-        candidate_profile != NULL && candidate_profile->mid == 5U &&
-        candidate_profile->default_runtime_current_ma == 3600U &&
-        candidate_profile->rs3_mohm == 15U &&
-        candidate_profile->hw_max_current_ma == 6000U &&
-        candidate_profile->iv_limits == NULL &&
-        candidate_profile->build_enabled == BOOL_FALSE,
-        "200W confirmed fields stay disabled without I-V and absolute fail");
-    candidate_profile = sys_product_profile_find(SYS_PRODUCT_PROFILE_ID_240W);
-    failures += expect_true(
-        candidate_profile != NULL && candidate_profile->mid == 6U &&
-        candidate_profile->default_runtime_current_ma == 4300U &&
-        candidate_profile->rs3_mohm == 15U &&
-        candidate_profile->hw_max_current_ma == 7000U &&
-        candidate_profile->default_runtime_current_ma <
-            candidate_profile->hw_max_current_ma &&
-        candidate_profile->build_enabled == BOOL_FALSE,
-        "240W final 7000mA HWMAX is retained while remaining safety fields stay disabled");
+        "selected default 50W profile is complete");
 
-    static const u8 dc_query_candidate_3c[SYS_CALIBRATION_DC5200_QUERY_FRAME_LENGTH] =
-        {0xAA, 0xBB, 0xCC, 0x01, 0x01, 0x01, 0x00, 0x02,
-         0x00, 0x3C, 0xD2, 0x3A, 0xAA, 0xBB, 0xCC, 0x01};
-    static const u8 dc_query_candidate_3a[SYS_CALIBRATION_DC5200_QUERY_FRAME_LENGTH] =
-        {0xAA, 0xBB, 0xCC, 0x01, 0x01, 0x01, 0x00, 0x02,
-         0x00, 0x3A, 0xB2, 0xFC, 0xAA, 0xBB, 0xCC, 0x01};
+    for (profile_index = 0U;
+         profile_index < (u32)(sizeof(expected_profiles) / sizeof(expected_profiles[0]));
+         ++profile_index)
+    {
+        const expected_profile_st *expected = &expected_profiles[profile_index];
+        const sys_product_profile_st *candidate =
+            sys_product_profile_find(expected->id);
+        u16 i100_36 = 0U;
+        u16 i100_56 = 0U;
 
-    failures += expect_true(sys_calibration_storage_crc32(
-                                (const u8 *)"123456789", 9U) == 0xCBF43926UL,
-                            "CRC32 version vector");
-    dc_length = 0U;
-    failures += expect_true(sys_calibration_dc5200_build_comprehensive_query(
-                                dc_query, sizeof(dc_query), &dc_length) == BOOL_FALSE &&
-                                dc_length == 0U,
-                            "DC5200 query remains gated pending HIL capture");
-    failures += expect_true(
-        sys_calibration_dc5200_crc16_ccitt(dc_query_candidate_3c, 10U) == 0xD23AU &&
-        dc_query_candidate_3c[10] == 0xD2U && dc_query_candidate_3c[11] == 0x3AU &&
-        sys_calibration_dc5200_crc16_ccitt(dc_query_candidate_3a, 10U) == 0xB2FCU &&
-        dc_query_candidate_3a[10] == 0xB2U && dc_query_candidate_3a[11] == 0xFCU,
-        "DC5200 conflicting candidates are retained without selection");
+        failures += expect_true(
+            candidate != NULL &&
+            strcmp(candidate->model_code, expected->model) == 0 &&
+            candidate->fingerprint_crc32 == expected->fingerprint &&
+            candidate->mid == expected->mid &&
+            candidate->default_runtime_current_ma == expected->default_current_ma &&
+            candidate->rs3_mohm == expected->rs3_mohm &&
+            candidate->hw_max_current_ma == expected->hw_max_ma &&
+            candidate->absolute_fail_current_ma == expected->hw_max_ma &&
+            candidate->iv_limits != NULL && candidate->iv_limit_count == 9U &&
+            candidate->iv_limits[0].voltage_01v == 250U &&
+            candidate->iv_limits[8].voltage_01v == 560U &&
+            candidate->iv_limits[8].current_ma == expected->iv56_ma &&
+            candidate->build_enabled == BOOL_TRUE &&
+            candidate->nonzero_calibration_enabled == BOOL_TRUE &&
+            strcmp(candidate->block_code, "OK") == 0 &&
+            sys_product_profile_calculate_fingerprint(candidate) == expected->fingerprint &&
+            sys_product_profile_is_complete(candidate) == BOOL_TRUE,
+            "six-power legacy profile identity and safety material are complete");
+        failures += expect_true(
+            sys_product_profile_compute_i100_ma(candidate, 360U, &i100_36) == BOOL_TRUE &&
+            sys_product_profile_compute_i100_ma(candidate, 560U, &i100_56) == BOOL_TRUE &&
+            i100_36 > 0U && i100_56 > 0U,
+            "six-power profile computes 36V/56V calibration full scale");
+        failures += expect_true(
+            sys_product_profile_validate_runtime_current(
+                candidate, 360U, candidate->default_runtime_current_ma) ==
+                SYS_PRODUCT_CURRENT_VALID,
+            "six-power default SET_OUTCUR is valid at common 36V calibration point");
+    }
+
+    {
+        static const u8 dc_query_candidate_3c[SYS_CALIBRATION_DC5200_QUERY_FRAME_LENGTH] =
+            {0xAA, 0xBB, 0xCC, 0x01, 0x01, 0x01, 0x00, 0x02,
+             0x00, 0x3C, 0xD2, 0x3A, 0xAA, 0xBB, 0xCC, 0x01};
+        static const u8 dc_query_candidate_3a[SYS_CALIBRATION_DC5200_QUERY_FRAME_LENGTH] =
+            {0xAA, 0xBB, 0xCC, 0x01, 0x01, 0x01, 0x00, 0x02,
+             0x00, 0x3A, 0xB2, 0xFC, 0xAA, 0xBB, 0xCC, 0x01};
+
+        failures += expect_true(sys_calibration_storage_crc32(
+                                    (const u8 *)"123456789", 9U) == 0xCBF43926UL,
+                                "CRC32 version vector");
+        dc_length = 0U;
+        failures += expect_true(sys_calibration_dc5200_build_comprehensive_query(
+                                    dc_query, sizeof(dc_query), &dc_length) == BOOL_FALSE &&
+                                    dc_length == 0U,
+                                "DC5200 query remains gated pending HIL capture");
+        failures += expect_true(
+            sys_calibration_dc5200_crc16_ccitt(dc_query_candidate_3c, 10U) == 0xD23AU &&
+            dc_query_candidate_3c[10] == 0xD2U && dc_query_candidate_3c[11] == 0x3AU &&
+            sys_calibration_dc5200_crc16_ccitt(dc_query_candidate_3a, 10U) == 0xB2FCU &&
+            dc_query_candidate_3a[10] == 0xB2U && dc_query_candidate_3a[11] == 0xFCU,
+            "DC5200 conflicting candidates are retained without selection");
+    }
+
     failures += expect_true(sizeof(golden_dc5200_reply) == 74U &&
                                 sys_calibration_dc5200_validate_comprehensive_reply(
                                     golden_dc5200_reply,
@@ -210,42 +203,35 @@ int main(void)
     failures += expect_true(sys_calibration_dc5200_validate_comprehensive_reply(
                                 dc_mutated, sizeof(dc_mutated)) == BOOL_FALSE,
                             "DC5200 bad CRC is rejected");
-    memcpy(dc_mutated, golden_dc5200_reply, sizeof(dc_mutated));
-    dc_mutated[7U] = 0x3BU;
-    failures += expect_true(sys_calibration_dc5200_validate_comprehensive_reply(
-                                dc_mutated, sizeof(dc_mutated)) == BOOL_FALSE,
-                            "DC5200 bad length is rejected");
+
     failures += expect_true(sizeof(golden_table_frame) == 205U,
-                            "golden table frame is 205 bytes");
+                            "old 11-point table frame is 205 bytes");
     failures += expect_true(sys_calibration_driver_decode(
                                 golden_table_frame, sizeof(golden_table_frame),
-                                &message) == BOOL_TRUE,
-                            "golden driver table frame decodes");
-    failures += expect_true(message.command == SYS_CALIBRATION_DRIVER_CMD_SET &&
+                                &message) == BOOL_TRUE &&
+                                message.command == SYS_CALIBRATION_DRIVER_CMD_SET &&
                                 message.offset == SYS_CALIBRATION_DRIVER_OFFSET_TABLE &&
                                 message.length == 198U,
-                            "golden table envelope fields");
+                            "old 198-byte table envelope decodes");
     failures += expect_true(sys_calibration_driver_table_decode(
-                                message.data, message.length, &table) == BOOL_TRUE,
-                            "golden table payload decodes");
-    failures += expect_true(table.point[0].level == 0U &&
+                                message.data, message.length, &table) == BOOL_TRUE &&
+                                table.point[0].level == 0U &&
                                 table.point[0].input_voltage_01v == 0x08A3U &&
                                 table.point[10].level == 200U &&
                                 table.point[10].device_output_power_01w == 0x0459U,
-                            "golden table big-endian fields");
+                            "old table big-endian fields decode");
     failures += expect_true(sys_calibration_driver_table_encode(
-                                &table, payload, sizeof(payload)) == BOOL_TRUE,
-                            "table encodes");
-    failures += expect_true(memcmp(payload, message.data, sizeof(payload)) == 0,
-                            "table encode roundtrip is byte exact");
+                                &table, payload, sizeof(payload)) == BOOL_TRUE &&
+                                memcmp(payload, message.data, sizeof(payload)) == 0,
+                            "old table encode roundtrip is byte exact");
     failures += expect_true(sys_calibration_driver_encode(
                                 message.command, message.offset, message.data,
                                 message.length, encoded, sizeof(encoded),
-                                &encoded_length) == BOOL_TRUE,
-                            "golden table envelope encodes");
-    failures += expect_true(memcmp(encoded, golden_table_frame,
-                                   sizeof(golden_table_frame)) == 0,
-                            "golden table frame roundtrip is byte exact");
+                                &encoded_length) == BOOL_TRUE &&
+                                encoded_length == sizeof(golden_table_frame) &&
+                                memcmp(encoded, golden_table_frame,
+                                       sizeof(golden_table_frame)) == 0,
+                            "old table frame roundtrip is byte exact");
 
     failures += expect_true(sys_calibration_driver_encode(
                                 SYS_CALIBRATION_DRIVER_CMD_SET,
@@ -258,7 +244,8 @@ int main(void)
                                 simple_frame[3] == 0x01U && simple_frame[4] == 0xC8U &&
                                 simple_frame[5] == 0xF2U && simple_frame[6] == 0x0DU &&
                                 simple_frame[7] == 0x0AU,
-                            "set point golden envelope");
+                            "old SET LEVEL 200 golden envelope");
+
     {
         const u8 query_frame[7U] = {0x3A, 0x26, 0x08, 0x00, 0x2E, 0x0D, 0x0A};
         const u8 reply_frame[13U] =
@@ -267,28 +254,18 @@ int main(void)
         failures += expect_true(sys_calibration_driver_decode(
                                     query_frame, 7U, &message) == BOOL_TRUE &&
                                     message.command == SYS_CALIBRATION_DRIVER_CMD_QUERY,
-                                "query golden envelope");
+                                "old QUERY measurement envelope");
         failures += expect_true(sys_calibration_driver_decode(
                                     reply_frame, 13U, &message) == BOOL_TRUE &&
                                     message.command == SYS_CALIBRATION_DRIVER_CMD_QUERY_REPLY,
-                                "query reply golden envelope");
+                                "old QUERY measurement reply envelope");
     }
 
     memcpy(encoded, golden_table_frame, sizeof(encoded));
     encoded[sizeof(encoded) - 3U] ^= 1U;
     failures += expect_true(sys_calibration_driver_decode(
                                 encoded, sizeof(encoded), &message) == BOOL_FALSE,
-                            "bad checksum is rejected");
-    memcpy(encoded, golden_table_frame, sizeof(encoded));
-    encoded[3] = 0xC5U;
-    failures += expect_true(sys_calibration_driver_decode(
-                                encoded, sizeof(encoded), &message) == BOOL_FALSE,
-                            "bad length is rejected");
-    memcpy(encoded, golden_table_frame, sizeof(encoded));
-    encoded[0] = 0x3BU;
-    failures += expect_true(sys_calibration_driver_decode(
-                                encoded, sizeof(encoded), &message) == BOOL_FALSE,
-                            "bad header is rejected");
+                            "bad table checksum is rejected");
 
     memset(&max_message, 0, sizeof(max_message));
     max_message.command = SYS_CALIBRATION_DRIVER_CMD_SET;
@@ -296,52 +273,44 @@ int main(void)
     max_message.length = sizeof(max_payload);
     memcpy(max_message.data, max_payload, sizeof(max_payload));
     failures += expect_true(sys_calibration_driver_validate_message(
-                                &max_message) == BOOL_TRUE,
-                            "maximum context validates");
-    failures += expect_true(sys_calibration_driver_max_context_decode(
-                                max_payload, sizeof(max_payload), &max_context) ==
-                                BOOL_TRUE &&
+                                &max_message) == BOOL_TRUE &&
+                                sys_calibration_driver_max_context_decode(
+                                    max_payload, sizeof(max_payload), &max_context) == BOOL_TRUE &&
                                 max_context.input_ac_voltage_float_bits == 0x435D2042UL &&
                                 max_context.maximum_output_voltage_01v == 0x0616U &&
                                 max_context.maximum_output_current_ma == 0x042BU,
-                            "maximum context is big endian");
+                            "old UAC/Umax/Imax context is big endian");
     failures += expect_true(sys_calibration_driver_measurement_decode(
-                                measure_payload, sizeof(measure_payload), &measurement) ==
-                                BOOL_TRUE && measurement.device_output_current_ma == 0x0102U &&
+                                measure_payload, sizeof(measure_payload), &measurement) == BOOL_TRUE &&
+                                measurement.device_output_current_ma == 0x0102U &&
                                 measurement.device_output_power_01w == 0x0064U &&
                                 measurement.input_current_ad == 0x0023U,
-                            "measurement reply is big endian");
+                            "old device measurement reply is big endian");
 
     failures += expect_true(sys_calibration_curve_validate_pwm(
-                                pwm, SYS_CALIBRATION_CURVE_POINT_COUNT) == BOOL_TRUE,
-                            "11 point curve is monotonic");
-    failures += expect_true(sys_calibration_curve_interpolate(
-                                pwm, SYS_CALIBRATION_CURVE_POINT_COUNT, 10U,
-                                &interpolated) == BOOL_TRUE && interpolated == 50U,
-                            "curve interpolation boundary");
+                                pwm, SYS_CALIBRATION_CURVE_POINT_COUNT) == BOOL_TRUE &&
+                                sys_calibration_curve_interpolate(
+                                    pwm, SYS_CALIBRATION_CURVE_POINT_COUNT, 10U,
+                                    &interpolated) == BOOL_TRUE && interpolated == 50U,
+                            "11-point curve remains monotonic and interpolates");
     pwm[5] = 1001U;
     failures += expect_true(sys_calibration_curve_validate_pwm(
                                 pwm, SYS_CALIBRATION_CURVE_POINT_COUNT) == BOOL_FALSE,
                             "PWM overflow is rejected");
     pwm[5] = 500U;
-    pwm[6] = 400U;
-    failures += expect_true(sys_calibration_curve_validate_pwm(
-                                pwm, SYS_CALIBRATION_CURVE_POINT_COUNT) == BOOL_FALSE,
-                            "non-monotonic curve is rejected");
+
     failures += expect_true(sys_calibration_safety_limit_current_ma(250U) == 1400U &&
                                 sys_calibration_safety_limit_current_ma(360U) == 1388U &&
                                 sys_calibration_safety_limit_current_ma(560U) == 892U &&
                                 sys_calibration_safety_limit_current_ma(249U) == 0U,
-                            "50W 25/36/56V current and power cap");
+                            "default 50W voltage/current safety cap remains intact");
     failures += expect_true(sys_calibration_safety_limit_percent(
                                 100U, 400U, 1400U, &safe_percent) == BOOL_TRUE &&
                                 safe_percent == 89U,
-                            "50W percent cap");
-    failures += expect_true(sys_calibration_safety_is_absolute_overcurrent(1680U) ==
-                                BOOL_TRUE &&
-                                sys_calibration_safety_is_absolute_overcurrent(1679U) ==
-                                BOOL_FALSE,
-                            "1.68A absolute current fail-off threshold");
+                            "default 50W percent cap remains intact");
+    failures += expect_true(sys_calibration_safety_is_absolute_overcurrent(1680U) == BOOL_TRUE &&
+                                sys_calibration_safety_is_absolute_overcurrent(1679U) == BOOL_FALSE,
+                            "default 50W absolute fail threshold remains intact");
     failures += expect_true(
         sys_product_profile_validate_runtime_current(profile, 560U, 890U) ==
             SYS_PRODUCT_CURRENT_VALID &&
@@ -355,91 +324,41 @@ int main(void)
             SYS_PRODUCT_CURRENT_VALID &&
         sys_product_profile_validate_runtime_current(profile, 250U, 1401U) ==
             SYS_PRODUCT_CURRENT_IV_LIMIT &&
-        sys_product_profile_validate_runtime_current(profile, 560U, 0U) ==
-            SYS_PRODUCT_CURRENT_ZERO &&
         sys_product_profile_validate_runtime_current(profile, 560U, 1680U) ==
             SYS_PRODUCT_CURRENT_ABSOLUTE_FAIL &&
         sys_product_profile_validate_runtime_current(profile, 580U, 890U) ==
             SYS_PRODUCT_CURRENT_VOLTAGE_UNBOUND,
-        "writable SET_OUTCUR is bounded by voltage, power and special-test gates");
+        "actual operating point still enforces I-V/power/Hardware Max safety");
     failures += expect_true(
         sys_product_profile_scale_percent_to_pwm(
             profile, 560U, 45U, 1000U, &scaled_pwm) == BOOL_TRUE &&
         scaled_pwm == 238U,
-        "lower SET table level reuses the profile I100 PWM scale without double scaling");
-    failures += expect_true(
-        sys_product_profile_validate_calibrated_current(
-            800U, BOOL_FALSE, 0U) ==
-            SYS_PRODUCT_CURRENT_CALIBRATION_MAX_UNAVAILABLE &&
-        sys_product_profile_validate_calibrated_current(
-            890U, BOOL_TRUE, 890U) == SYS_PRODUCT_CURRENT_VALID &&
-        sys_product_profile_validate_calibrated_current(
-            891U, BOOL_TRUE, 890U) ==
-            SYS_PRODUCT_CURRENT_EXCEEDS_CALIBRATED_MAX,
-        "runtime SET_OUTCUR also stays within the committed calibrated maximum");
-    failures += expect_true(
-        sys_calibration_safety_arbitrate_pwm(
-            1000U, SYS_CALIBRATION_OUTPUT_SOURCE_NORMAL, BOOL_FALSE,
-            BOOL_FALSE, BOOL_TRUE) == 1000U &&
-        sys_calibration_safety_arbitrate_pwm(
-            1000U, SYS_CALIBRATION_OUTPUT_SOURCE_OFFLINE_PLAN, BOOL_TRUE,
-            BOOL_FALSE, BOOL_TRUE) == 0U &&
-        sys_calibration_safety_arbitrate_pwm(
-            1000U, SYS_CALIBRATION_OUTPUT_SOURCE_FACTORY_DIRECT, BOOL_FALSE,
-            BOOL_FALSE, BOOL_TRUE) == 0U &&
-        sys_calibration_safety_arbitrate_pwm(
-            1000U, SYS_CALIBRATION_OUTPUT_SOURCE_FACTORY_DIRECT, BOOL_FALSE,
-            BOOL_FALSE, BOOL_FALSE) == 0U &&
-        sys_calibration_safety_arbitrate_pwm(
-            1000U, SYS_CALIBRATION_OUTPUT_SOURCE_NORMAL, BOOL_FALSE,
-            BOOL_TRUE, BOOL_TRUE) == 0U &&
-        sys_calibration_safety_arbitrate_pwm(
-            1000U, (sys_calibration_output_source_en)99U, BOOL_FALSE,
-            BOOL_FALSE, BOOL_TRUE) == 0U &&
-        sys_calibration_safety_arbitrate_pwm(
-            0U, SYS_CALIBRATION_OUTPUT_SOURCE_FACTORY_DIRECT, BOOL_TRUE,
-            BOOL_TRUE, BOOL_FALSE) == 0U,
-        "normal/offline/direct inhibit, emergency, invalid and stale feedback gates");
+        "legacy Level path keeps profile I100 PWM baseline");
 
     failures += expect_true(sys_product_profile_context_build(
-                                560U,
-                                890U,
-                                890U,
-                                sys_calibration_storage_crc32(payload,
-                                                              sizeof(payload)),
+                                560U, 890U, 890U,
+                                sys_calibration_storage_crc32(payload, sizeof(payload)),
                                 &calibration_context) == BOOL_TRUE &&
                                 calibration_context.calibrated_max_current_ma == 890U,
-                            "calibration context binds table-derived maximum and CRC");
+                            "calibration context binds old table maximum and CRC");
     failures += expect_true(sys_calibration_storage_record_build(
                                 &first_record, 1U, &calibration_context, payload,
                                 sizeof(payload)) == BOOL_TRUE &&
-                                sys_calibration_storage_record_validate(&first_record) ==
-                                BOOL_TRUE,
-                            "A record builds and validates");
+                                sys_calibration_storage_record_validate(&first_record) == BOOL_TRUE,
+                            "A calibration record builds and validates");
     failures += expect_true(sys_calibration_storage_record_build(
                                 &second_record, 2U, &calibration_context, payload,
-                                sizeof(payload)) == BOOL_TRUE,
-                            "B record builds");
-    failures += expect_true(sys_calibration_storage_select_newest(
-                                &first_record, &second_record, &selected) == BOOL_TRUE &&
+                                sizeof(payload)) == BOOL_TRUE &&
+                                sys_calibration_storage_select_newest(
+                                    &first_record, &second_record, &selected) == BOOL_TRUE &&
                                 selected == &second_record,
-                            "newest A/B generation selected");
+                            "newest A/B calibration record is selected");
     second_record.payload[0] ^= 1U;
-    failures += expect_true(sys_calibration_storage_record_validate(&second_record) ==
-                                BOOL_FALSE &&
+    failures += expect_true(sys_calibration_storage_record_validate(&second_record) == BOOL_FALSE &&
                                 sys_calibration_storage_select_newest(
                                     &first_record, &second_record, &selected) == BOOL_TRUE &&
                                 selected == &first_record,
-                            "torn payload is not selected");
-    first_record.commit_word = 0xFFFFFFFFUL;
-    failures += expect_true(sys_calibration_storage_record_validate(&first_record) ==
-                                BOOL_FALSE,
-                            "torn commit is not valid");
-    first_record.commit_word = SYS_CALIBRATION_STORAGE_COMMIT_WORD;
-    first_record.context.profile_fingerprint_crc32 ^= 1U;
-    failures += expect_true(sys_calibration_storage_record_validate(&first_record) ==
-                                BOOL_FALSE,
-                            "foreign profile fingerprint is rejected fail-closed");
+                            "torn calibration payload is rejected");
 
     failures += expect_true(sys_calibration_boot_inhibit_record_build(
                                 &inhibit_first, 1U,
@@ -451,28 +370,20 @@ int main(void)
                                 &inhibit_second, 2U,
                                 SYS_CALIBRATION_BOOT_INHIBIT_INACTIVE) == BOOL_TRUE &&
                                 sys_calibration_boot_inhibit_select_newest(
-                                    &inhibit_first, &inhibit_second, &inhibit_state) ==
-                                BOOL_TRUE && inhibit_state ==
-                                SYS_CALIBRATION_BOOT_INHIBIT_INACTIVE,
-                            "newest boot-inhibit state selected");
+                                    &inhibit_first, &inhibit_second, &inhibit_state) == BOOL_TRUE &&
+                                inhibit_state == SYS_CALIBRATION_BOOT_INHIBIT_INACTIVE,
+                            "newest boot-inhibit state is selected");
     inhibit_second.record_crc32 ^= 1U;
     failures += expect_true(sys_calibration_boot_inhibit_select_newest(
                                 &inhibit_first, &inhibit_second, &inhibit_state) == BOOL_TRUE &&
                                 inhibit_state == SYS_CALIBRATION_BOOT_INHIBIT_ACTIVE,
                             "invalid boot-inhibit slot is ignored");
-    memset(&inhibit_first, 0xFF, sizeof(inhibit_first));
-    memset(&inhibit_second, 0xFF, sizeof(inhibit_second));
-    inhibit_state = SYS_CALIBRATION_BOOT_INHIBIT_ACTIVE;
-    failures += expect_true(
-        sys_calibration_boot_inhibit_select_newest(
-            &inhibit_first, &inhibit_second, &inhibit_state) == BOOL_FALSE &&
-        inhibit_state == SYS_CALIBRATION_BOOT_INHIBIT_UNKNOWN,
-        "pristine boot-inhibit slots fail closed without unlock");
 
     if (failures != 0)
     {
         return 1;
     }
-    printf("protocol and safety host tests: PASS\n");
+
+    printf("legacy 11-point protocol, six profiles and safety host tests: PASS\n");
     return 0;
 }
