@@ -1,0 +1,17 @@
+name: legacy-calibration-verify
+
+on:
+  push:
+    branches:
+      - feat/legacy-11point-calibration-20260903
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run legacy calibration host tests
+        run: bash tools/calibration/run_host_tests.sh
