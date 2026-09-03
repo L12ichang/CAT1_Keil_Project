@@ -7,6 +7,8 @@
 
 #include <string.h>
 
+#define SYS_CALIBRATION_OCO_GAIN_ANCHOR_INDEX        9U
+
 static void sys_calibration_put_u16_le(u8 *destination, u16 value)
 {
     destination[0] = (u8)value;
@@ -71,6 +73,69 @@ static boolean_en sys_calibration_hex_nibble(char value, u8 *nibble)
     return BOOL_FALSE;
 }
 
+/*
+ * Payload V2 keeps the historical 11-pair OCO wire area for compatibility,
+ * but the production sampling algorithm is frozen as two-point linear:
+ *   level 0   -> Offset Raw
+ *   level 180 -> Gain anchor (90%)
+ *
+ * Every OCO wire pair must therefore lie on that same line and its current
+ * axis must equal the Output TargetCurrent axis. This prevents an old client
+ * from silently re-introducing an independent 11-point OCO correction model.
+ */
+static boolean_en sys_calibration_payload_oco_two_point_valid(
+    const sys_calibration_payload_st *payload)
+{
+    u16 offset_raw;
+    u16 anchor_raw;
+    u16 anchor_reference_ma;
+    u32 delta_raw;
+    u8 index;
+
+    if (payload == NULL ||
+        SYS_CALIBRATION_OCO_GAIN_ANCHOR_INDEX >=
+            SYS_CALIBRATION_PAYLOAD_POINT_COUNT)
+    {
+        return BOOL_FALSE;
+    }
+
+    offset_raw = payload->oco[0].oco_adc_raw;
+    anchor_raw = payload->oco[
+        SYS_CALIBRATION_OCO_GAIN_ANCHOR_INDEX].oco_adc_raw;
+    anchor_reference_ma = payload->oco[
+        SYS_CALIBRATION_OCO_GAIN_ANCHOR_INDEX].reference_output_current_ma;
+
+    if (payload->oco[0].reference_output_current_ma != 0U ||
+        anchor_raw <= offset_raw || anchor_reference_ma == 0U)
+    {
+        return BOOL_FALSE;
+    }
+    delta_raw = (u32)anchor_raw - (u32)offset_raw;
+
+    for (index = 0U; index < SYS_CALIBRATION_PAYLOAD_POINT_COUNT; ++index)
+    {
+        u16 reference_ma = payload->oco[index].reference_output_current_ma;
+        u32 expected_raw;
+
+        if (reference_ma !=
+            payload->output[index].reference_output_current_ma)
+        {
+            return BOOL_FALSE;
+        }
+
+        expected_raw = (u32)offset_raw +
+            (((u32)reference_ma * delta_raw +
+              (u32)anchor_reference_ma / 2U) /
+             (u32)anchor_reference_ma);
+        if (expected_raw > 65535UL ||
+            payload->oco[index].oco_adc_raw != (u16)expected_raw)
+        {
+            return BOOL_FALSE;
+        }
+    }
+    return BOOL_TRUE;
+}
+
 u32 sys_calibration_payload_crc32_iso_hdlc(const u8 *data, u16 length)
 {
     u32 crc = 0xFFFFFFFFUL;
@@ -102,9 +167,6 @@ boolean_en sys_calibration_payload_validate(
     }
     for (index = 0U; index < SYS_CALIBRATION_PAYLOAD_POINT_COUNT; ++index)
     {
-        /* Output reference is the exact requested target current. OCO/BL
-         * references are the external standard values observed after the PWM
-         * search converges. They are intentionally not forced to be equal. */
         if (payload->output[index].logical_pwm > 1000U ||
             (index == 0U && payload->output[index].logical_pwm != 0U))
         {
@@ -143,7 +205,8 @@ boolean_en sys_calibration_payload_validate(
         payload->bl_power[10].bl_power_raw <=
             payload->bl_power[0].bl_power_raw ||
         payload->bl_power[10].reference_input_power_01w <=
-            payload->bl_power[0].reference_input_power_01w)
+            payload->bl_power[0].reference_input_power_01w ||
+        sys_calibration_payload_oco_two_point_valid(payload) != BOOL_TRUE)
     {
         return BOOL_FALSE;
     }
