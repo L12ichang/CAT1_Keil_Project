@@ -272,6 +272,18 @@ int main(int argc, char **argv)
         sys_calibration_payload_validate(&decoded) == BOOL_FALSE,
         "payload rejects a non-monotonic correction section");
     decoded = source;
+    decoded.oco[5].oco_adc_raw =
+        (u16)(decoded.oco[5].oco_adc_raw + 10U);
+    failures += expect_true(
+        sys_calibration_payload_validate(&decoded) == BOOL_FALSE,
+        "payload rejects a bent OCO table that is not the two-point Offset/Gain line");
+    decoded = source;
+    decoded.oco[5].reference_output_current_ma =
+        (u16)(decoded.oco[5].reference_output_current_ma + 1U);
+    failures += expect_true(
+        sys_calibration_payload_validate(&decoded) == BOOL_FALSE,
+        "payload requires OCO current axis to equal Output TargetCurrent axis");
+    decoded = source;
     decoded.voltage_gain_q24 = 0U;
     failures += expect_true(
         sys_calibration_payload_validate(&decoded) == BOOL_FALSE,
