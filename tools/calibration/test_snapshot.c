@@ -102,7 +102,7 @@ int main(void)
     int failures = 0;
 
     failures += expect_true(sys_product_profile_context_build(
-                                560U, 890U, 0U, 0U,
+                                560U, 892U, 0U, 0U,
                                 &calibration_context) == BOOL_TRUE &&
                                 calibration_context.calibrated_max_current_ma == 0U,
                             "BEGIN context has no calibrated maximum before sampling");
@@ -260,7 +260,7 @@ int main(void)
             put_u16_be(staged_payload, index * 18U + 16U, index * 100U);
         }
         failures += expect_true(sys_product_profile_context_build(
-                                    560U, 890U, 800U,
+                                    560U, 892U, 800U,
                                     sys_calibration_storage_crc32(
                                         staged_payload, sizeof(staged_payload)),
                                     &staged_context) == BOOL_TRUE,
@@ -322,10 +322,10 @@ int main(void)
                                     sizeof(legacy_max_frame), SYS_CALIBRATION_RAW_SET,
                                     &service_status) == SYS_CALIBRATION_RESULT_OK &&
                                     service_status.context.calibrated_max_current_ma == 800U,
-                                "legacy 0x07 accepts pre-gain Imax below SET_OUTCUR");
+                                "legacy 0x07 accepts pre-gain Imax below theoretical I100");
         failures += expect_true(
             sys_calibration_service_apply_fullscale_gain_pwm(
-                500U, 1000U, &gained_pwm) == BOOL_TRUE && gained_pwm == 556U,
+                500U, 1000U, &gained_pwm) == BOOL_TRUE && gained_pwm == 558U,
             "pre-gain Imax derives internal full-scale PWM gain");
         failures += expect_true(
             sys_calibration_service_apply_fullscale_gain_pwm(
@@ -334,7 +334,7 @@ int main(void)
         failures += expect_true(
             sys_calibration_service_get_calibrated_target_current_ma(
                 560U, &calibrated_target_current) == BOOL_TRUE &&
-                calibrated_target_current == 890U,
+                calibrated_target_current == 892U,
             "runtime current gate uses calibrated target rather than pre-gain Imax");
         failures += expect_true(sys_calibration_service_raw_seq(
                                     42U, 103U, 10U, raw_query, sizeof(raw_query),
