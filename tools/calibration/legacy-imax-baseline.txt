@@ -1,0 +1,4 @@
+Legacy 11-point baseline:
+- pre-stage: CC 50mA -> Umax -> CV -> Imax/UAC -> 0x24/0x07
+- 11-point full-scale span anchor: measured 0x07 Imax
+- SET_OUTCUR: runtime rated-current setting only, not the calibration full-scale definition
