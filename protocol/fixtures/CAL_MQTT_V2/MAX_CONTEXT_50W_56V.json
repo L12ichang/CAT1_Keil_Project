@@ -1,0 +1,43 @@
+{
+  "fixtureVersion": 1,
+  "name": "MAX_CONTEXT_50W_56V",
+  "requestTopic": "MS/TEST50W0000001/plt2dev",
+  "responseTopic": "MS/TEST50W0000001/dev2plt",
+  "request": {
+    "SN": "TEST50W0000001",
+    "TM": "2026-08-17 10:00:01.5",
+    "SV": "cal",
+    "ID": "X007",
+    "CT": "W",
+    "DT": {
+      "op": "SET_MAX_CONTEXT",
+      "protocolVersion": 2,
+      "sessionId": 1234,
+      "seq": 2,
+      "frameHex": "3A240708436600000258037AB30D0A"
+    }
+  },
+  "expectedResponse": {
+    "DT": {
+      "op": "SET_MAX_CONTEXT",
+      "protocolVersion": 2,
+      "seq": 2,
+      "result": 0,
+      "ack": true,
+      "readback": {
+        "profileContext": {
+          "contextVersion": 1,
+          "profileId": 50,
+          "modelCode": "DL-50Z-56T-MXG",
+          "profileVersion": 1,
+          "profileFingerprint": 2809625630,
+          "calibrationVoltage01V": 560,
+          "configuredRatedCurrentMa": 890,
+          "calibratedMaxCurrentMa": 890,
+          "tableCrc32": 0
+        },
+        "profileBindingCrc32": 2984763304
+      }
+    }
+  }
+}
