@@ -6,53 +6,241 @@
   "steps": [
     {
       "request": {
-        "SN": "TEST50W0000001", "TM": "2026-08-17 10:00:03", "SV": "cal", "ID": "A001", "CT": "W",
-        "DT": {"op": "APPLY", "protocolVersion": 2, "sessionId": 1234, "seq": 3,
-          "profileContext": {"contextVersion": 1, "profileId": 50, "modelCode": "DL-50Z-56T-MXG", "profileVersion": 1, "profileFingerprint": 2809625630, "calibrationVoltage01V": 560, "configuredRatedCurrentMa": 890, "calibratedMaxCurrentMa": 890, "tableCrc32": 3796061022},
-          "profileBindingCrc32": 538152895}
+        "SN": "TEST50W0000001",
+        "TM": "2026-08-17 10:00:03",
+        "SV": "cal",
+        "ID": "A001",
+        "CT": "W",
+        "DT": {
+          "op": "APPLY",
+          "protocolVersion": 2,
+          "sessionId": 1234,
+          "seq": 4,
+          "profileContext": {
+            "contextVersion": 1,
+            "profileId": 50,
+            "modelCode": "DL-50Z-56T-MXG",
+            "profileVersion": 1,
+            "profileFingerprint": 2809625630,
+            "calibrationVoltage01V": 560,
+            "configuredRatedCurrentMa": 890,
+            "calibratedMaxCurrentMa": 890,
+            "tableCrc32": 3796061022
+          },
+          "profileBindingCrc32": 538152895
+        }
       },
-      "expectedResponse": {"DT": {"op": "APPLY", "protocolVersion": 2, "seq": 3, "result": 0, "ack": true,
-        "readback": {"profileContext": {"contextVersion": 1, "profileId": 50, "modelCode": "DL-50Z-56T-MXG", "profileVersion": 1, "profileFingerprint": 2809625630, "calibrationVoltage01V": 560, "configuredRatedCurrentMa": 890, "calibratedMaxCurrentMa": 890, "tableCrc32": 3796061022}, "profileBindingCrc32": 538152895}}}
+      "expectedResponse": {
+        "DT": {
+          "op": "APPLY",
+          "protocolVersion": 2,
+          "seq": 4,
+          "result": 0,
+          "ack": true,
+          "readback": {
+            "profileContext": {
+              "contextVersion": 1,
+              "profileId": 50,
+              "modelCode": "DL-50Z-56T-MXG",
+              "profileVersion": 1,
+              "profileFingerprint": 2809625630,
+              "calibrationVoltage01V": 560,
+              "configuredRatedCurrentMa": 890,
+              "calibratedMaxCurrentMa": 890,
+              "tableCrc32": 3796061022
+            },
+            "profileBindingCrc32": 538152895
+          }
+        }
+      }
     },
     {
       "request": {
-        "SN": "TEST50W0000001", "TM": "2026-08-17 10:00:04", "SV": "cal", "ID": "V001", "CT": "W",
-        "DT": {"op": "SET_VALIDATION_PERCENT", "protocolVersion": 2, "sessionId": 1234, "seq": 4, "targetPercent": 50}
+        "SN": "TEST50W0000001",
+        "TM": "2026-08-17 10:00:04",
+        "SV": "cal",
+        "ID": "V001",
+        "CT": "W",
+        "DT": {
+          "op": "SET_VALIDATION_PERCENT",
+          "protocolVersion": 2,
+          "sessionId": 1234,
+          "seq": 5,
+          "targetPercent": 50
+        }
       },
-      "expectedResponse": {"DT": {"op": "SET_VALIDATION_PERCENT", "protocolVersion": 2, "seq": 4, "result": 0, "ack": true,
-        "readback": {"profileContext": {"contextVersion": 1, "profileId": 50, "modelCode": "DL-50Z-56T-MXG", "profileVersion": 1, "profileFingerprint": 2809625630, "calibrationVoltage01V": 560, "configuredRatedCurrentMa": 890, "calibratedMaxCurrentMa": 890, "tableCrc32": 3796061022}, "profileBindingCrc32": 538152895}}}
+      "expectedResponse": {
+        "DT": {
+          "op": "SET_VALIDATION_PERCENT",
+          "protocolVersion": 2,
+          "seq": 5,
+          "result": 0,
+          "ack": true,
+          "readback": {
+            "profileContext": {
+              "contextVersion": 1,
+              "profileId": 50,
+              "modelCode": "DL-50Z-56T-MXG",
+              "profileVersion": 1,
+              "profileFingerprint": 2809625630,
+              "calibrationVoltage01V": 560,
+              "configuredRatedCurrentMa": 890,
+              "calibratedMaxCurrentMa": 890,
+              "tableCrc32": 3796061022
+            },
+            "profileBindingCrc32": 538152895
+          }
+        }
+      }
     },
     {
       "request": {
-        "SN": "TEST50W0000001", "TM": "2026-08-17 10:00:05", "SV": "cal", "ID": "R001", "CT": "R",
-        "DT": {"op": "READBACK", "protocolVersion": 2, "sessionId": 1234, "seq": 5,
-          "profileContext": {"contextVersion": 1, "profileId": 50, "modelCode": "DL-50Z-56T-MXG", "profileVersion": 1, "profileFingerprint": 2809625630, "calibrationVoltage01V": 560, "configuredRatedCurrentMa": 890, "calibratedMaxCurrentMa": 890, "tableCrc32": 3796061022},
-          "profileBindingCrc32": 538152895}
+        "SN": "TEST50W0000001",
+        "TM": "2026-08-17 10:00:05",
+        "SV": "cal",
+        "ID": "R001",
+        "CT": "R",
+        "DT": {
+          "op": "READBACK",
+          "protocolVersion": 2,
+          "sessionId": 1234,
+          "seq": 6,
+          "profileContext": {
+            "contextVersion": 1,
+            "profileId": 50,
+            "modelCode": "DL-50Z-56T-MXG",
+            "profileVersion": 1,
+            "profileFingerprint": 2809625630,
+            "calibrationVoltage01V": 560,
+            "configuredRatedCurrentMa": 890,
+            "calibratedMaxCurrentMa": 890,
+            "tableCrc32": 3796061022
+          },
+          "profileBindingCrc32": 538152895
+        }
       },
-      "expectedResponse": {"DT": {"op": "READBACK", "protocolVersion": 2, "seq": 5, "result": 0, "ack": true,
-        "readback": {"profileContext": {"contextVersion": 1, "profileId": 50, "modelCode": "DL-50Z-56T-MXG", "profileVersion": 1, "profileFingerprint": 2809625630, "calibrationVoltage01V": 560, "configuredRatedCurrentMa": 890, "calibratedMaxCurrentMa": 890, "tableCrc32": 3796061022}, "profileBindingCrc32": 538152895, "tableCrc32": 3796061022,
-          "payloadHex": "00640000000000000000000000000000000014640000000A003200590032005800320064286400000014006400B2006400B0006400C83C640000001E0096010B009601080096012C50640000002800C8016400C8016000C8019064640000003200FA01BD00FA01B800FA01F478640000003C012C0216012C0210012C02588C6400000046015E026F015E0268015E02BCA06400000050019002C8019002C001900320B4640000005A01C2032101C2031801C20384C8640000006401F4037A01F4037001F403E8"}}}
+      "expectedResponse": {
+        "DT": {
+          "op": "READBACK",
+          "protocolVersion": 2,
+          "seq": 6,
+          "result": 0,
+          "ack": true,
+          "readback": {
+            "profileContext": {
+              "contextVersion": 1,
+              "profileId": 50,
+              "modelCode": "DL-50Z-56T-MXG",
+              "profileVersion": 1,
+              "profileFingerprint": 2809625630,
+              "calibrationVoltage01V": 560,
+              "configuredRatedCurrentMa": 890,
+              "calibratedMaxCurrentMa": 890,
+              "tableCrc32": 3796061022
+            },
+            "profileBindingCrc32": 538152895,
+            "tableCrc32": 3796061022,
+            "payloadHex": "00640000000000000000000000000000000014640000000A003200590032005800320064286400000014006400B2006400B0006400C83C640000001E0096010B009601080096012C50640000002800C8016400C8016000C8019064640000003200FA01BD00FA01B800FA01F478640000003C012C0216012C0210012C02588C6400000046015E026F015E0268015E02BCA06400000050019002C8019002C001900320B4640000005A01C2032101C2031801C20384C8640000006401F4037A01F4037001F403E8"
+          }
+        }
+      }
     },
     {
       "request": {
-        "SN": "TEST50W0000001", "TM": "2026-08-17 10:00:06", "SV": "cal", "ID": "M001", "CT": "W",
-        "DT": {"op": "COMMIT", "protocolVersion": 2, "sessionId": 1234, "seq": 6,
-          "profileContext": {"contextVersion": 1, "profileId": 50, "modelCode": "DL-50Z-56T-MXG", "profileVersion": 1, "profileFingerprint": 2809625630, "calibrationVoltage01V": 560, "configuredRatedCurrentMa": 890, "calibratedMaxCurrentMa": 890, "tableCrc32": 3796061022},
-          "profileBindingCrc32": 538152895}
+        "SN": "TEST50W0000001",
+        "TM": "2026-08-17 10:00:06",
+        "SV": "cal",
+        "ID": "M001",
+        "CT": "W",
+        "DT": {
+          "op": "COMMIT",
+          "protocolVersion": 2,
+          "sessionId": 1234,
+          "seq": 7,
+          "profileContext": {
+            "contextVersion": 1,
+            "profileId": 50,
+            "modelCode": "DL-50Z-56T-MXG",
+            "profileVersion": 1,
+            "profileFingerprint": 2809625630,
+            "calibrationVoltage01V": 560,
+            "configuredRatedCurrentMa": 890,
+            "calibratedMaxCurrentMa": 890,
+            "tableCrc32": 3796061022
+          },
+          "profileBindingCrc32": 538152895
+        }
       },
-      "expectedResponse": {"DT": {"op": "COMMIT", "protocolVersion": 2, "seq": 6, "result": 0, "ack": true,
-        "readback": {"committed": true, "committedGeneration": 3, "committedTableCrc32": 3796061022, "committedProfileBindingCrc32": 538152895}}}
+      "expectedResponse": {
+        "DT": {
+          "op": "COMMIT",
+          "protocolVersion": 2,
+          "seq": 7,
+          "result": 0,
+          "ack": true,
+          "readback": {
+            "committed": true,
+            "committedGeneration": 3,
+            "committedTableCrc32": 3796061022,
+            "committedProfileBindingCrc32": 538152895
+          }
+        }
+      }
     },
     {
       "request": {
-        "SN": "TEST50W0000001", "TM": "2026-08-17 10:00:07", "SV": "cal", "ID": "R002", "CT": "R",
-        "DT": {"op": "READBACK", "protocolVersion": 2, "sessionId": 1234, "seq": 7,
-          "profileContext": {"contextVersion": 1, "profileId": 50, "modelCode": "DL-50Z-56T-MXG", "profileVersion": 1, "profileFingerprint": 2809625630, "calibrationVoltage01V": 560, "configuredRatedCurrentMa": 890, "calibratedMaxCurrentMa": 890, "tableCrc32": 3796061022},
-          "profileBindingCrc32": 538152895}
+        "SN": "TEST50W0000001",
+        "TM": "2026-08-17 10:00:07",
+        "SV": "cal",
+        "ID": "R002",
+        "CT": "R",
+        "DT": {
+          "op": "READBACK",
+          "protocolVersion": 2,
+          "sessionId": 1234,
+          "seq": 8,
+          "profileContext": {
+            "contextVersion": 1,
+            "profileId": 50,
+            "modelCode": "DL-50Z-56T-MXG",
+            "profileVersion": 1,
+            "profileFingerprint": 2809625630,
+            "calibrationVoltage01V": 560,
+            "configuredRatedCurrentMa": 890,
+            "calibratedMaxCurrentMa": 890,
+            "tableCrc32": 3796061022
+          },
+          "profileBindingCrc32": 538152895
+        }
       },
-      "expectedResponse": {"DT": {"op": "READBACK", "protocolVersion": 2, "seq": 7, "result": 0, "ack": true,
-        "readback": {"profileContext": {"contextVersion": 1, "profileId": 50, "modelCode": "DL-50Z-56T-MXG", "profileVersion": 1, "profileFingerprint": 2809625630, "calibrationVoltage01V": 560, "configuredRatedCurrentMa": 890, "calibratedMaxCurrentMa": 890, "tableCrc32": 3796061022}, "profileBindingCrc32": 538152895, "committed": true, "committedGeneration": 3, "committedTableCrc32": 3796061022, "committedProfileBindingCrc32": 538152895,
-          "payloadHex": "00640000000000000000000000000000000014640000000A003200590032005800320064286400000014006400B2006400B0006400C83C640000001E0096010B009601080096012C50640000002800C8016400C8016000C8019064640000003200FA01BD00FA01B800FA01F478640000003C012C0216012C0210012C02588C6400000046015E026F015E0268015E02BCA06400000050019002C8019002C001900320B4640000005A01C2032101C2031801C20384C8640000006401F4037A01F4037001F403E8"}}}
+      "expectedResponse": {
+        "DT": {
+          "op": "READBACK",
+          "protocolVersion": 2,
+          "seq": 8,
+          "result": 0,
+          "ack": true,
+          "readback": {
+            "profileContext": {
+              "contextVersion": 1,
+              "profileId": 50,
+              "modelCode": "DL-50Z-56T-MXG",
+              "profileVersion": 1,
+              "profileFingerprint": 2809625630,
+              "calibrationVoltage01V": 560,
+              "configuredRatedCurrentMa": 890,
+              "calibratedMaxCurrentMa": 890,
+              "tableCrc32": 3796061022
+            },
+            "profileBindingCrc32": 538152895,
+            "committed": true,
+            "committedGeneration": 3,
+            "committedTableCrc32": 3796061022,
+            "committedProfileBindingCrc32": 538152895,
+            "payloadHex": "00640000000000000000000000000000000014640000000A003200590032005800320064286400000014006400B2006400B0006400C83C640000001E0096010B009601080096012C50640000002800C8016400C8016000C8019064640000003200FA01BD00FA01B800FA01F478640000003C012C0216012C0210012C02588C6400000046015E026F015E0268015E02BCA06400000050019002C8019002C001900320B4640000005A01C2032101C2031801C20384C8640000006401F4037A01F4037001F403E8"
+          }
+        }
+      }
     }
   ]
 }

@@ -236,6 +236,9 @@ int main(void)
         unsigned char readback_payload[SYS_CALIBRATION_DRIVER_TABLE_PAYLOAD_LENGTH];
         const unsigned char raw_query[7U] =
             {0x3AU, 0x26U, 0x08U, 0x00U, 0x2EU, 0x0DU, 0x0AU};
+        const unsigned char legacy_max_frame[15U] =
+            {0x3AU, 0x24U, 0x07U, 0x08U, 0x43U, 0x66U, 0x00U, 0x00U,
+             0x02U, 0x58U, 0x03U, 0x7AU, 0xB3U, 0x0DU, 0x0AU};
         unsigned short readback_length;
         unsigned short corrected_current;
         unsigned char corrected_percent;
@@ -259,7 +262,7 @@ int main(void)
                                     sys_calibration_storage_crc32(
                                         staged_payload, sizeof(staged_payload)),
                                     &staged_context) == BOOL_TRUE,
-                                "staged context stores table-derived calibrated max");
+                                "staged context stores legacy 0x07 characterized Imax");
         sys_calibration_service_init();
         safe_off_calls = 0U;
         set_level_calls = 0U;
@@ -313,10 +316,11 @@ int main(void)
                                     set_level_calls == 2U && last_level == 20U,
                                 "authorized nonzero protocol point reaches output callback");
         failures += expect_true(sys_calibration_service_raw_seq(
-                                    42U, 102U, 9U, raw_query, sizeof(raw_query),
-                                    SYS_CALIBRATION_RAW_QUERY, &service_status) ==
-                                    SYS_CALIBRATION_RESULT_NOT_AVAILABLE,
-                                "raw query is codec-checked then transport-gated");
+                                    42U, 102U, 9U, legacy_max_frame,
+                                    sizeof(legacy_max_frame), SYS_CALIBRATION_RAW_SET,
+                                    &service_status) == SYS_CALIBRATION_RESULT_OK &&
+                                    service_status.context.calibrated_max_current_ma == 890U,
+                                "legacy 0x07 writes characterized Imax before STAGE");
         failures += expect_true(sys_calibration_service_raw_seq(
                                     42U, 103U, 10U, raw_query, sizeof(raw_query),
                                     SYS_CALIBRATION_RAW_SET, &service_status) ==

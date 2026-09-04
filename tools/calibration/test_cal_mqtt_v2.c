@@ -544,9 +544,9 @@ static int validate_stale_raw_rejected(void)
         "{\"SN\":\"TEST50W0000001\",\"TM\":\"2026-08-19 06:50:44\","
         "\"SV\":\"cal\",\"ID\":\"W009\",\"CT\":\"R\",\"DT\":{"
         "\"op\":\"RAW\",\"protocolVersion\":2,"
-        "\"sessionId\":1234,\"seq\":9}}";
+        "\"sessionId\":1234,\"seq\":11}}";
     static const char expected_text[] =
-        "{\"DT\":{\"op\":\"RAW\",\"protocolVersion\":2,\"seq\":9,"
+        "{\"DT\":{\"op\":\"RAW\",\"protocolVersion\":2,\"seq\":11,"
         "\"result\":1,\"ack\":false,\"readback\":{"
         "\"sessionId\":1234,\"lastSeq\":9}}}";
     cJSON *request = cJSON_Parse(request_text);
@@ -665,6 +665,7 @@ int main(int argc, char **argv)
     failures += validate_fixture_crc(argv[1]);
     failures += run_fixture(argv[1], "CAPABILITIES_50W_FIRST_CAL.json");
     failures += run_fixture(argv[1], "BEGIN_50W_56V.json");
+    failures += run_fixture(argv[1], "MAX_CONTEXT_50W_56V.json");
     failures += run_fixture(argv[1], "STAGE_50W_56V_198B.json");
     failures += run_fixture(argv[1], "COMMIT_READBACK_50W_56V.json");
     prepare_raw_snapshot();

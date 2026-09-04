@@ -13,19 +13,19 @@
       "op": "RAW",
       "protocolVersion": 2,
       "sessionId": 1234,
-      "seq": 8
+      "seq": 9
     }
   },
   "expectedResponse": {
     "DT": {
       "op": "RAW",
       "protocolVersion": 2,
-      "seq": 8,
+      "seq": 9,
       "result": 0,
       "ack": true,
       "readback": {
         "sessionId": 1234,
-        "lastSeq": 8,
+        "lastSeq": 9,
         "currentLevel": 100
       },
       "raw": {

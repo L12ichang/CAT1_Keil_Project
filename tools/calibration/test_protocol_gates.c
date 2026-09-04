@@ -120,6 +120,15 @@ int main(void)
         sys_product_profile_calculate_fingerprint(profile) == profile->fingerprint_crc32 &&
         sys_product_profile_is_complete(profile) == BOOL_TRUE,
         "selected default 50W profile is complete");
+    failures += expect_true(
+        sys_product_profile_context_build(360U, 890U, 1400U, 0U,
+                                          &calibration_context) == BOOL_TRUE &&
+        calibration_context.calibrated_max_current_ma == 1400U,
+        "legacy measured Imax may exceed theoretical rated-power I100 within physical I-V");
+    failures += expect_true(
+        sys_product_profile_context_build(360U, 890U, 1401U, 0U,
+                                          &calibration_context) == BOOL_FALSE,
+        "legacy measured Imax remains bounded by physical I-V");
 
     for (profile_index = 0U;
          profile_index < (u32)(sizeof(expected_profiles) / sizeof(expected_profiles[0]));
