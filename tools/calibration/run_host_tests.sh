@@ -30,6 +30,7 @@ cc \
   -Wall \
   -Wextra \
   -Werror \
+  -Wno-error=int-to-pointer-cast \
   -DUSE_HAL_DRIVER \
   -DSTM32F103xE \
   -I"${ROOT_DIR}/Core/Inc" \
