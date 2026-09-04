@@ -492,14 +492,14 @@ static int validate_fixture_crc(const char *directory)
     }
     failures += expect_true(
         sys_product_profile_context_build(
-            560U, 890U, 890U,
+            560U, 892U, 890U,
             sys_calibration_storage_crc32(bytes, sizeof(bytes)), &parsed) == BOOL_TRUE &&
         parsed.table_crc32 == 3796061022UL &&
-        sys_product_profile_context_binding_crc32(&parsed) == 538152895UL,
+        sys_product_profile_context_binding_crc32(&parsed) == 1136900741UL,
         "198-byte table CRC and big-endian profile binding CRC match fixture");
     failures += expect_true(
-        sys_product_profile_context_build(560U, 890U, 0U, 0U, &parsed) == BOOL_TRUE &&
-        sys_product_profile_context_binding_crc32(&parsed) == 2215728488UL,
+        sys_product_profile_context_build(560U, 892U, 0U, 0U, &parsed) == BOOL_TRUE &&
+        sys_product_profile_context_binding_crc32(&parsed) == 3888210002UL,
         "first-calibration zero context binding CRC matches fixture");
     cJSON_Delete(fixture);
     return failures;

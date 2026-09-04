@@ -23,11 +23,11 @@
             "profileVersion": 1,
             "profileFingerprint": 2809625630,
             "calibrationVoltage01V": 560,
-            "configuredRatedCurrentMa": 890,
+            "configuredRatedCurrentMa": 892,
             "calibratedMaxCurrentMa": 890,
             "tableCrc32": 3796061022
           },
-          "profileBindingCrc32": 538152895
+          "profileBindingCrc32": 1136900741
         }
       },
       "expectedResponse": {
@@ -45,11 +45,11 @@
               "profileVersion": 1,
               "profileFingerprint": 2809625630,
               "calibrationVoltage01V": 560,
-              "configuredRatedCurrentMa": 890,
+              "configuredRatedCurrentMa": 892,
               "calibratedMaxCurrentMa": 890,
               "tableCrc32": 3796061022
             },
-            "profileBindingCrc32": 538152895
+            "profileBindingCrc32": 1136900741
           }
         }
       }
@@ -84,11 +84,11 @@
               "profileVersion": 1,
               "profileFingerprint": 2809625630,
               "calibrationVoltage01V": 560,
-              "configuredRatedCurrentMa": 890,
+              "configuredRatedCurrentMa": 892,
               "calibratedMaxCurrentMa": 890,
               "tableCrc32": 3796061022
             },
-            "profileBindingCrc32": 538152895
+            "profileBindingCrc32": 1136900741
           }
         }
       }
@@ -112,11 +112,11 @@
             "profileVersion": 1,
             "profileFingerprint": 2809625630,
             "calibrationVoltage01V": 560,
-            "configuredRatedCurrentMa": 890,
+            "configuredRatedCurrentMa": 892,
             "calibratedMaxCurrentMa": 890,
             "tableCrc32": 3796061022
           },
-          "profileBindingCrc32": 538152895
+          "profileBindingCrc32": 1136900741
         }
       },
       "expectedResponse": {
@@ -134,11 +134,11 @@
               "profileVersion": 1,
               "profileFingerprint": 2809625630,
               "calibrationVoltage01V": 560,
-              "configuredRatedCurrentMa": 890,
+              "configuredRatedCurrentMa": 892,
               "calibratedMaxCurrentMa": 890,
               "tableCrc32": 3796061022
             },
-            "profileBindingCrc32": 538152895,
+            "profileBindingCrc32": 1136900741,
             "tableCrc32": 3796061022,
             "payloadHex": "00640000000000000000000000000000000014640000000A003200590032005800320064286400000014006400B2006400B0006400C83C640000001E0096010B009601080096012C50640000002800C8016400C8016000C8019064640000003200FA01BD00FA01B800FA01F478640000003C012C0216012C0210012C02588C6400000046015E026F015E0268015E02BCA06400000050019002C8019002C001900320B4640000005A01C2032101C2031801C20384C8640000006401F4037A01F4037001F403E8"
           }
@@ -164,11 +164,11 @@
             "profileVersion": 1,
             "profileFingerprint": 2809625630,
             "calibrationVoltage01V": 560,
-            "configuredRatedCurrentMa": 890,
+            "configuredRatedCurrentMa": 892,
             "calibratedMaxCurrentMa": 890,
             "tableCrc32": 3796061022
           },
-          "profileBindingCrc32": 538152895
+          "profileBindingCrc32": 1136900741
         }
       },
       "expectedResponse": {
@@ -182,7 +182,7 @@
             "committed": true,
             "committedGeneration": 3,
             "committedTableCrc32": 3796061022,
-            "committedProfileBindingCrc32": 538152895
+            "committedProfileBindingCrc32": 1136900741
           }
         }
       }
@@ -206,11 +206,11 @@
             "profileVersion": 1,
             "profileFingerprint": 2809625630,
             "calibrationVoltage01V": 560,
-            "configuredRatedCurrentMa": 890,
+            "configuredRatedCurrentMa": 892,
             "calibratedMaxCurrentMa": 890,
             "tableCrc32": 3796061022
           },
-          "profileBindingCrc32": 538152895
+          "profileBindingCrc32": 1136900741
         }
       },
       "expectedResponse": {
@@ -228,15 +228,15 @@
               "profileVersion": 1,
               "profileFingerprint": 2809625630,
               "calibrationVoltage01V": 560,
-              "configuredRatedCurrentMa": 890,
+              "configuredRatedCurrentMa": 892,
               "calibratedMaxCurrentMa": 890,
               "tableCrc32": 3796061022
             },
-            "profileBindingCrc32": 538152895,
+            "profileBindingCrc32": 1136900741,
             "committed": true,
             "committedGeneration": 3,
             "committedTableCrc32": 3796061022,
-            "committedProfileBindingCrc32": 538152895,
+            "committedProfileBindingCrc32": 1136900741,
             "payloadHex": "00640000000000000000000000000000000014640000000A003200590032005800320064286400000014006400B2006400B0006400C83C640000001E0096010B009601080096012C50640000002800C8016400C8016000C8019064640000003200FA01BD00FA01B800FA01F478640000003C012C0216012C0210012C02588C6400000046015E026F015E0268015E02BCA06400000050019002C8019002C001900320B4640000005A01C2032101C2031801C20384C8640000006401F4037A01F4037001F403E8"
           }
         }

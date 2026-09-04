@@ -22,11 +22,11 @@
         "profileVersion": 1,
         "profileFingerprint": 2809625630,
         "calibrationVoltage01V": 560,
-        "configuredRatedCurrentMa": 890,
+        "configuredRatedCurrentMa": 892,
         "calibratedMaxCurrentMa": 0,
         "tableCrc32": 0
       },
-      "profileBindingCrc32": 2215728488
+      "profileBindingCrc32": 3888210002
     }
   },
   "expectedResponse": {
@@ -44,11 +44,11 @@
           "profileVersion": 1,
           "profileFingerprint": 2809625630,
           "calibrationVoltage01V": 560,
-          "configuredRatedCurrentMa": 890,
+          "configuredRatedCurrentMa": 892,
           "calibratedMaxCurrentMa": 0,
           "tableCrc32": 0
         },
-        "profileBindingCrc32": 2215728488,
+        "profileBindingCrc32": 3888210002,
         "committed": false,
         "committedTableCrc32": 0,
         "committedProfileBindingCrc32": 0

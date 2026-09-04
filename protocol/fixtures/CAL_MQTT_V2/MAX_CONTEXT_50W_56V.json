@@ -32,11 +32,11 @@
           "profileVersion": 1,
           "profileFingerprint": 2809625630,
           "calibrationVoltage01V": 560,
-          "configuredRatedCurrentMa": 890,
+          "configuredRatedCurrentMa": 892,
           "calibratedMaxCurrentMa": 890,
           "tableCrc32": 0
         },
-        "profileBindingCrc32": 2984763304
+        "profileBindingCrc32": 3526879890
       }
     }
   }
