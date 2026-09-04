@@ -121,12 +121,12 @@ int main(void)
         sys_product_profile_is_complete(profile) == BOOL_TRUE,
         "selected default 50W profile is complete");
     failures += expect_true(
-        sys_product_profile_context_build(360U, 890U, 1400U, 0U,
+        sys_product_profile_context_build(360U, 1388U, 1400U, 0U,
                                           &calibration_context) == BOOL_TRUE &&
         calibration_context.calibrated_max_current_ma == 1400U,
         "legacy measured Imax may exceed theoretical rated-power I100 within physical I-V");
     failures += expect_true(
-        sys_product_profile_context_build(360U, 890U, 1401U, 0U,
+        sys_product_profile_context_build(360U, 1388U, 1401U, 0U,
                                           &calibration_context) == BOOL_FALSE,
         "legacy measured Imax remains bounded by physical I-V");
 
@@ -345,11 +345,11 @@ int main(void)
         "legacy Level path keeps profile I100 PWM baseline");
 
     failures += expect_true(sys_product_profile_context_build(
-                                560U, 890U, 890U,
+                                560U, 892U, 890U,
                                 sys_calibration_storage_crc32(payload, sizeof(payload)),
                                 &calibration_context) == BOOL_TRUE &&
                                 calibration_context.calibrated_max_current_ma == 890U,
-                            "calibration context binds old table maximum and CRC");
+                            "calibration context binds theoretical I100, old measured Imax and CRC");
     failures += expect_true(sys_calibration_storage_record_build(
                                 &first_record, 1U, &calibration_context, payload,
                                 sizeof(payload)) == BOOL_TRUE &&
