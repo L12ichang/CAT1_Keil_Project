@@ -1,0 +1,29 @@
+name: apply-legacy-imax-semantics
+on:
+  push:
+    branches: [feat/legacy-11point-calibration-20260903]
+    paths:
+      - tools/calibration/apply-legacy-imax-semantics.py
+      - .github/workflows/apply-legacy-imax-semantics.yml
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/legacy-11point-calibration-20260903
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply exact firmware patch
+        run: python tools/calibration/apply-legacy-imax-semantics.py
+      - name: Commit patched firmware
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "feat(calibration): bind 11-point span to legacy 0x07 Imax"
+          git push origin HEAD:feat/legacy-11point-calibration-20260903
