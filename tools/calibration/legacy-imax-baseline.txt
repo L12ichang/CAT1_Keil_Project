@@ -1,4 +1,9 @@
 Legacy 11-point baseline:
-- pre-stage: CC 50mA -> Umax -> CV -> Imax/UAC -> 0x24/0x07
-- 11-point full-scale span anchor: measured 0x07 Imax
-- SET_OUTCUR: runtime rated-current setting only, not the calibration full-scale definition
+- pre-stage protocol remains frozen: CC 50mA -> Level200 -> Umax -> CV -> pre-gain Imax/UAC -> 0x24/0x07
+- 0x07 Imax: actual Level200/100% output current measured before per-device full-scale gain; it may be below or above SET_OUTCUR
+- firmware full-scale gain: derive internally from calibrated target SET_OUTCUR / pre-gain 0x07 Imax; host never searches or writes PWM
+- after 0x07: formal Level 0,20,...,200 sweep uses the internal full-scale gain
+- 11-point full-scale acceptance: final Standard Iout must land near configured SET_OUTCUR, not near the pre-gain 0x07 Imax
+- 11-point PWL: corrects residual/nonlinear output mapping and measurement mapping after full-scale gain correction
+- SET_OUTCUR: product/runtime rated-current target and the calibrated full-scale target for this calibration; it is not Hardware Max
+- HWMAX / I-V / absolute-fail limits remain independent physical safety envelopes
