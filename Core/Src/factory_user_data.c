@@ -174,7 +174,7 @@ sys_product_current_validation_en factory_user_validate_runtime_current(
         return result;
     }
     calibrated_max_available =
-        sys_calibration_service_get_calibrated_max_current_ma(
+        sys_calibration_service_get_calibrated_target_current_ma(
             bound_voltage_01v, &calibrated_max_current_ma);
     return sys_product_profile_validate_calibrated_current(
         configured_current_ma, calibrated_max_available,
@@ -226,7 +226,7 @@ sys_product_current_validation_en factory_user_validate_candidate(
         return result;
     }
     calibrated_max_available =
-        sys_calibration_service_get_calibrated_max_current_ma(
+        sys_calibration_service_get_calibrated_target_current_ma(
             bound_voltage_01v, &calibrated_max_current_ma);
     if (calibrated_max_available != BOOL_TRUE &&
         configured_current_ma == SET_OUTCUR)

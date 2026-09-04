@@ -171,7 +171,9 @@ u8  fa_test_EN;
              if (sys_product_profile_scale_percent_to_pwm(
                      sys_product_profile_current(),
                      BOUND_OUTPUT_VOLTAGE_01V, persent,
-                     PWM_USEFUL_RANGE, &pwm) == BOOL_TRUE)
+                     PWM_USEFUL_RANGE, &pwm) == BOOL_TRUE &&
+                 sys_calibration_service_apply_fullscale_gain_pwm(
+                     pwm, PWM_USEFUL_RANGE, &pwm) == BOOL_TRUE)
              {
                  pwm_value = pwm;
              }
@@ -435,7 +437,9 @@ boolean_en sys_pwm_calibration_set_level(u16 level)
     }
     if (sys_product_profile_scale_percent_to_pwm(
             profile, context.calibration_voltage_01v, safe_percent,
-            PWM_USEFUL_RANGE, &pwm) != BOOL_TRUE)
+            PWM_USEFUL_RANGE, &pwm) != BOOL_TRUE ||
+        sys_calibration_service_apply_fullscale_gain_pwm(
+            pwm, PWM_USEFUL_RANGE, &pwm) != BOOL_TRUE)
     {
         sys_pwm_force_safe_off();
         return BOOL_FALSE;

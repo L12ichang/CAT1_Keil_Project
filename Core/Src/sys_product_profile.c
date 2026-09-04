@@ -481,9 +481,7 @@ boolean_en sys_product_profile_context_build(
             configured_rated_current_ma) != SYS_PRODUCT_CURRENT_VALID ||
         sys_product_profile_validate_legacy_i_max(
             profile, calibration_voltage_01v,
-            calibrated_max_current_ma) != BOOL_TRUE ||
-        (calibrated_max_current_ma != 0U &&
-         configured_rated_current_ma > calibrated_max_current_ma))
+            calibrated_max_current_ma) != BOOL_TRUE)
     {
         return BOOL_FALSE;
     }

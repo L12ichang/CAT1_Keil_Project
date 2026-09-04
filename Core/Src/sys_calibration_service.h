@@ -114,6 +114,13 @@ extern boolean_en sys_calibration_service_runtime_context_matches_voltage(
 extern boolean_en sys_calibration_service_get_calibrated_max_current_ma(
     u16 bound_voltage_01v,
     u16 *calibrated_max_current_ma);
+extern boolean_en sys_calibration_service_get_calibrated_target_current_ma(
+    u16 bound_voltage_01v,
+    u16 *calibrated_target_current_ma);
+extern boolean_en sys_calibration_service_apply_fullscale_gain_pwm(
+    u16 nominal_pwm,
+    u16 pwm_limit,
+    u16 *corrected_pwm);
 extern boolean_en sys_calibration_service_correct_output_percent(
     u8 requested_percent,
     u16 rated_current_ma,

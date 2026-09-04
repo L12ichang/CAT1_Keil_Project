@@ -262,6 +262,7 @@ static boolean_en sys_calibration_service_validate_table(
 {
     const sys_product_profile_st *profile = sys_product_profile_current();
     u16 characterized_i_max_ma;
+    u16 calibrated_target_ma;
     u32 minimum_span_current_ma;
     u32 maximum_span_current_ma;
     u8 index;
@@ -277,6 +278,8 @@ static boolean_en sys_calibration_service_validate_table(
     }
     characterized_i_max_ma =
         _service.status.context.calibrated_max_current_ma;
+    calibrated_target_ma =
+        _service.status.context.configured_rated_current_ma;
     for (index = 1U; index < SYS_CALIBRATION_DRIVER_POINT_COUNT; ++index)
     {
         if (table->point[index].instrument_output_current_ma <
@@ -298,16 +301,16 @@ static boolean_en sys_calibration_service_validate_table(
         }
     }
     minimum_span_current_ma =
-        ((u32)characterized_i_max_ma *
+        ((u32)calibrated_target_ma *
          (1000U - profile->calibration_span_tolerance_permille)) / 1000U;
     maximum_span_current_ma =
-        ((u32)characterized_i_max_ma *
+        ((u32)calibrated_target_ma *
          (1000U + profile->calibration_span_tolerance_permille) + 999U) /
         1000U;
 
-    /* The old protocol defines full scale by the external instrument Imax
-       measured in the 50mA->Umax->CV pre-stage. Device current is not used
-       as the span reference because the 11-point table exists to correct it. */
+    /* 0x07 Imax is the pre-gain Level200 measurement. After it is written,
+       firmware applies the per-device full-scale gain before the formal
+       11-point sweep, so Level200 must land near configured SET_OUTCUR. */
     if (table->point[SYS_CALIBRATION_DRIVER_POINT_COUNT - 1U]
             .instrument_output_current_ma >= profile->absolute_fail_current_ma ||
         table->point[SYS_CALIBRATION_DRIVER_POINT_COUNT - 1U]
@@ -610,6 +613,59 @@ boolean_en sys_calibration_service_get_calibrated_max_current_ma(
     return BOOL_TRUE;
 }
 
+boolean_en sys_calibration_service_get_calibrated_target_current_ma(
+    u16 bound_voltage_01v,
+    u16 *calibrated_target_current_ma)
+{
+    if (calibrated_target_current_ma == NULL ||
+        _service.status.context_valid != BOOL_TRUE ||
+        _service.status.context.configured_rated_current_ma == 0U ||
+        _service.status.context.calibrated_max_current_ma == 0U ||
+        sys_calibration_service_runtime_context_matches_voltage(
+            bound_voltage_01v) != BOOL_TRUE)
+    {
+        return BOOL_FALSE;
+    }
+    *calibrated_target_current_ma =
+        _service.status.context.configured_rated_current_ma;
+    return BOOL_TRUE;
+}
+
+boolean_en sys_calibration_service_apply_fullscale_gain_pwm(
+    u16 nominal_pwm,
+    u16 pwm_limit,
+    u16 *corrected_pwm)
+{
+    u32 scaled_pwm;
+    u16 characterized_i_max_ma;
+    u16 target_current_ma;
+
+    if (corrected_pwm == NULL || pwm_limit == 0U || nominal_pwm > pwm_limit)
+    {
+        return BOOL_FALSE;
+    }
+    *corrected_pwm = nominal_pwm;
+    if (_service.status.context_valid != BOOL_TRUE ||
+        _service.status.context.calibrated_max_current_ma == 0U ||
+        _service.status.context.configured_rated_current_ma == 0U)
+    {
+        return BOOL_TRUE;
+    }
+    characterized_i_max_ma =
+        _service.status.context.calibrated_max_current_ma;
+    target_current_ma =
+        _service.status.context.configured_rated_current_ma;
+    scaled_pwm = ((u32)nominal_pwm * (u32)target_current_ma +
+                  (u32)characterized_i_max_ma / 2U) /
+                 (u32)characterized_i_max_ma;
+    if (scaled_pwm > pwm_limit)
+    {
+        scaled_pwm = pwm_limit;
+    }
+    *corrected_pwm = (u16)scaled_pwm;
+    return BOOL_TRUE;
+}
+
 boolean_en sys_calibration_service_correct_output_percent(
     u8 requested_percent,
     u16 rated_current_ma,
@@ -630,8 +686,7 @@ boolean_en sys_calibration_service_correct_output_percent(
     if (requested_percent == 0U ||
         sys_calibration_service_get_runtime_table(&table) != BOOL_TRUE ||
         sys_calibration_service_validate_table(
-            &table, &calibrated_max_current_ma) != BOOL_TRUE ||
-        rated_current_ma > calibrated_max_current_ma)
+            &table, &calibrated_max_current_ma) != BOOL_TRUE)
     {
         return BOOL_FALSE;
     }
@@ -1009,8 +1064,6 @@ sys_calibration_result_en sys_calibration_service_raw_seq(
         max_context.maximum_output_voltage_01v == 0U ||
         max_context.maximum_output_current_ma == 0U ||
         iv_limit_ma == 0U ||
-        max_context.maximum_output_current_ma <
-            _service.status.context.configured_rated_current_ma ||
         max_context.maximum_output_current_ma > iv_limit_ma ||
         max_context.maximum_output_current_ma > profile->hw_max_current_ma ||
         max_context.maximum_output_current_ma >= profile->absolute_fail_current_ma)
@@ -1021,8 +1074,9 @@ sys_calibration_result_en sys_calibration_service_raw_seq(
         return SYS_CALIBRATION_RESULT_SAFETY_NOT_READY;
     }
 
-    /* Persisted context field keeps its wire name for compatibility, but in
-       the legacy flow its semantic value is exactly the measured 0x07 Imax. */
+    /* Persist the raw pre-gain Level200 Imax. The gain is derived from
+       SET_OUTCUR/Imax at runtime, so no new wire field or Flash coefficient
+       is required and the old 0x07 protocol remains unchanged. */
     _service.status.context.calibrated_max_current_ma =
         max_context.maximum_output_current_ma;
     sys_calibration_service_finish(session_id, seq, SYS_CALIBRATION_OP_RAW,
