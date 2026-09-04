@@ -195,8 +195,7 @@ static boolean_en sys_calibration_mqtt_read_context(
     model_code = cJSON_GetObjectItem(object, "modelCode");
     if (model_code == NULL || !cJSON_IsString(model_code) ||
         model_code->valuestring == NULL ||
-        strcmp(model_code->valuestring, profile->model_code) != 0 ||
-        context->configured_rated_current_ma != SET_OUTCUR)
+        strcmp(model_code->valuestring, profile->model_code) != 0)
     {
         return BOOL_FALSE;
     }

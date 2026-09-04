@@ -474,8 +474,16 @@ boolean_en sys_product_profile_context_build(
     sys_calibration_context_st *context)
 {
     const sys_product_profile_st *profile = sys_product_profile_current();
+    u16 theoretical_i100_ma;
 
+    /* Keep the frozen wire field name, but bind it to the product algorithm:
+       calibration target I100 = rated power / selected CV, limited by the
+       existing I-V table and Hardware Max. It is not the 56V default SET. */
     if (context == NULL ||
+        sys_product_profile_compute_i100_ma(
+            profile, calibration_voltage_01v,
+            &theoretical_i100_ma) != BOOL_TRUE ||
+        configured_rated_current_ma != theoretical_i100_ma ||
         sys_product_profile_validate_runtime_current(
             profile, calibration_voltage_01v,
             configured_rated_current_ma) != SYS_PRODUCT_CURRENT_VALID ||
@@ -489,6 +497,8 @@ boolean_en sys_product_profile_context_build(
     context->profile_version = profile->profile_version;
     context->profile_fingerprint_crc32 = profile->fingerprint_crc32;
     context->calibration_voltage_01v = calibration_voltage_01v;
+    /* Frozen field name; calibration semantics are theoretical I100 at
+       calibration_voltage_01v, not the runtime/default SET_OUTCUR value. */
     context->configured_rated_current_ma = configured_rated_current_ma;
     /* Legacy protocol meaning: after 0x24/0x07 this is the measured Imax.
        It is not the theoretical rated-power I100 and not SET_OUTCUR. */

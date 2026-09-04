@@ -223,10 +223,7 @@ static sys_calibration_result_en sys_calibration_service_require_session(
             &_service.status.context,
             (_service.status.state == SYS_CALIBRATION_STATE_STAGED ||
              _service.status.state == SYS_CALIBRATION_STATE_APPLIED) ?
-                BOOL_TRUE : BOOL_FALSE) != BOOL_TRUE ||
-        _service.get_bound_voltage == NULL ||
-        _service.status.context.calibration_voltage_01v !=
-            _service.get_bound_voltage())
+                BOOL_TRUE : BOOL_FALSE) != BOOL_TRUE)
     {
         sys_calibration_service_safe_off();
         _service.status.state = SYS_CALIBRATION_STATE_FAULT;
@@ -310,7 +307,8 @@ static boolean_en sys_calibration_service_validate_table(
 
     /* 0x07 Imax is the pre-gain Level200 measurement. After it is written,
        firmware applies the per-device full-scale gain before the formal
-       11-point sweep, so Level200 must land near configured SET_OUTCUR. */
+       11-point sweep, so Level200 must land near the theoretical I100 for
+       this calibration voltage. */
     if (table->point[SYS_CALIBRATION_DRIVER_POINT_COUNT - 1U]
             .instrument_output_current_ma >= profile->absolute_fail_current_ma ||
         table->point[SYS_CALIBRATION_DRIVER_POINT_COUNT - 1U]
@@ -778,8 +776,6 @@ sys_calibration_result_en sys_calibration_service_begin_context_seq(
     if (session_id == 0U || context == NULL || context->table_crc32 != 0U ||
         context->calibrated_max_current_ma != 0U ||
         sys_product_profile_context_validate(context, BOOL_FALSE) != BOOL_TRUE ||
-        _service.get_bound_voltage == NULL ||
-        context->calibration_voltage_01v != _service.get_bound_voltage() ||
         sys_calibration_service_validate_lease(lease_ms) != BOOL_TRUE)
     {
         sys_calibration_service_safe_off();
@@ -1078,8 +1074,8 @@ sys_calibration_result_en sys_calibration_service_raw_seq(
     }
 
     /* Persist the raw pre-gain Level200 Imax. The gain is derived from
-       SET_OUTCUR/Imax at runtime, so no new wire field or Flash coefficient
-       is required and the old 0x07 protocol remains unchanged. */
+       theoretical calibration I100 / Imax, so no new wire field or Flash
+       coefficient is required and the old 0x07 protocol remains unchanged. */
     _service.status.context.calibrated_max_current_ma =
         max_context.maximum_output_current_ma;
     sys_calibration_service_finish(session_id, seq, SYS_CALIBRATION_OP_RAW,

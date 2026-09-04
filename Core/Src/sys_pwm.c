@@ -129,13 +129,13 @@ u8  fa_test_EN;
           }
           if (persent > 0U)
           {
-              if (sys_calibration_service_correct_output_percent(
-                      persent, (u16)SET_OUTCUR,
-                      &calibrated_percent) == BOOL_TRUE &&
-                  sys_product_profile_compute_i100_ma(
+              if (sys_product_profile_compute_i100_ma(
                       sys_product_profile_current(),
                       BOUND_OUTPUT_VOLTAGE_01V,
-                      &pwm_current_reference_ma) == BOOL_TRUE)
+                      &pwm_current_reference_ma) == BOOL_TRUE &&
+                  sys_calibration_service_correct_output_percent(
+                      persent, pwm_current_reference_ma,
+                      &calibrated_percent) == BOOL_TRUE)
               {
                   /* The table level was produced with the profile I100 PWM
                      scale; do not multiply by the lower SET a second time. */
@@ -421,8 +421,6 @@ boolean_en sys_pwm_calibration_set_level(u16 level)
         sys_product_profile_compute_i100_ma(
             profile, context.calibration_voltage_01v,
             &calibration_max_current_ma) != BOOL_TRUE ||
-        sys_calibration_service_runtime_context_matches_voltage(
-            BOUND_OUTPUT_VOLTAGE_01V) != BOOL_TRUE ||
         Error_1_OL != 0U || Error_Out_LV != 0U ||
         Error_3_OV != 0U || Error_4_LV != 0U ||
         adc.valid_flags == 0U || (HAL_GetTick() - adc.tick_ms) > 500U ||
