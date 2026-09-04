@@ -660,7 +660,10 @@ boolean_en sys_calibration_service_apply_fullscale_gain_pwm(
                  (u32)characterized_i_max_ma;
     if (scaled_pwm > pwm_limit)
     {
-        scaled_pwm = pwm_limit;
+        /* The characterized device does not have enough PWM headroom to
+           reach SET_OUTCUR. Do not drive at the hardware ceiling and hope
+           the later 11-point table rejects it; fail off immediately. */
+        return BOOL_FALSE;
     }
     *corrected_pwm = (u16)scaled_pwm;
     return BOOL_TRUE;

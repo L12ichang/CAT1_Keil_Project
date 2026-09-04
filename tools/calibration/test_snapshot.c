@@ -328,6 +328,10 @@ int main(void)
                 500U, 1000U, &gained_pwm) == BOOL_TRUE && gained_pwm == 556U,
             "pre-gain Imax derives internal full-scale PWM gain");
         failures += expect_true(
+            sys_calibration_service_apply_fullscale_gain_pwm(
+                900U, 1000U, &gained_pwm) == BOOL_FALSE,
+            "full-scale gain fails off when required PWM exceeds available headroom");
+        failures += expect_true(
             sys_calibration_service_get_calibrated_target_current_ma(
                 560U, &calibrated_target_current) == BOOL_TRUE &&
                 calibrated_target_current == 890U,
