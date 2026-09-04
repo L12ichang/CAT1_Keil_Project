@@ -921,6 +921,21 @@ boolean_en sys_calibration_mqtt_handle(
                 session_id, HAL_GetTick(), seq, level, &status);
         }
     }
+    else if (strcmp(operation, "SET_MAX_CONTEXT") == 0)
+    {
+        if (!cJSON_IsString(cJSON_GetObjectItem(dt, "frameHex")) ||
+            sys_calibration_mqtt_read_payload(
+                dt, "frameHex", payload, sizeof(payload), &length) != BOOL_TRUE)
+        {
+            result = SYS_CALIBRATION_RESULT_PROTOCOL_ERROR;
+        }
+        else
+        {
+            result = sys_calibration_service_raw_seq(
+                session_id, HAL_GetTick(), seq, payload, length,
+                SYS_CALIBRATION_RAW_SET, &status);
+        }
+    }
     else if (strcmp(operation, "SET_VALIDATION_PERCENT") == 0)
     {
         if (sys_calibration_mqtt_read_u16(

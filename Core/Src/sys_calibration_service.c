@@ -261,9 +261,9 @@ static boolean_en sys_calibration_service_validate_table(
     u16 *calibrated_max_current_ma)
 {
     const sys_product_profile_st *profile = sys_product_profile_current();
-    u16 profile_max_current_ma;
-    u16 derived_max_current_ma;
+    u16 characterized_i_max_ma;
     u32 minimum_span_current_ma;
+    u32 maximum_span_current_ma;
     u8 index;
 
     if (table == NULL || calibrated_max_current_ma == NULL ||
@@ -271,12 +271,12 @@ static boolean_en sys_calibration_service_validate_table(
         sys_product_profile_context_validate(&_service.status.context,
             (_service.status.context.table_crc32 != 0U) ?
                 BOOL_TRUE : BOOL_FALSE) != BOOL_TRUE ||
-        sys_product_profile_compute_i100_ma(
-            profile, _service.status.context.calibration_voltage_01v,
-            &profile_max_current_ma) != BOOL_TRUE)
+        _service.status.context.calibrated_max_current_ma == 0U)
     {
         return BOOL_FALSE;
     }
+    characterized_i_max_ma =
+        _service.status.context.calibrated_max_current_ma;
     for (index = 1U; index < SYS_CALIBRATION_DRIVER_POINT_COUNT; ++index)
     {
         if (table->point[index].instrument_output_current_ma <
@@ -298,33 +298,28 @@ static boolean_en sys_calibration_service_validate_table(
         }
     }
     minimum_span_current_ma =
-        ((u32)profile_max_current_ma *
+        ((u32)characterized_i_max_ma *
          (1000U - profile->calibration_span_tolerance_permille)) / 1000U;
+    maximum_span_current_ma =
+        ((u32)characterized_i_max_ma *
+         (1000U + profile->calibration_span_tolerance_permille) + 999U) /
+        1000U;
+
+    /* The old protocol defines full scale by the external instrument Imax
+       measured in the 50mA->Umax->CV pre-stage. Device current is not used
+       as the span reference because the 11-point table exists to correct it. */
     if (table->point[SYS_CALIBRATION_DRIVER_POINT_COUNT - 1U]
-            .instrument_output_current_ma >=
-                profile->absolute_fail_current_ma ||
+            .instrument_output_current_ma >= profile->absolute_fail_current_ma ||
         table->point[SYS_CALIBRATION_DRIVER_POINT_COUNT - 1U]
-            .device_output_current_ma >=
-                profile->absolute_fail_current_ma ||
+            .device_output_current_ma >= profile->absolute_fail_current_ma ||
         table->point[SYS_CALIBRATION_DRIVER_POINT_COUNT - 1U]
-            .instrument_output_current_ma <
-                minimum_span_current_ma ||
+            .instrument_output_current_ma < minimum_span_current_ma ||
         table->point[SYS_CALIBRATION_DRIVER_POINT_COUNT - 1U]
-            .device_output_current_ma <
-                minimum_span_current_ma)
+            .instrument_output_current_ma > maximum_span_current_ma)
     {
         return BOOL_FALSE;
     }
-    derived_max_current_ma =
-        table->point[SYS_CALIBRATION_DRIVER_POINT_COUNT - 1U]
-            .instrument_output_current_ma;
-    /* The external instrument is the calibration reference.  Device-side
-       current may differ by the sensor error that this table corrects. */
-    if (derived_max_current_ma > profile_max_current_ma)
-    {
-        derived_max_current_ma = profile_max_current_ma;
-    }
-    *calibrated_max_current_ma = derived_max_current_ma;
+    *calibrated_max_current_ma = characterized_i_max_ma;
     return BOOL_TRUE;
 }
 
@@ -723,6 +718,7 @@ sys_calibration_result_en sys_calibration_service_begin_context_seq(
         return replay_result;
     }
     if (session_id == 0U || context == NULL || context->table_crc32 != 0U ||
+        context->calibrated_max_current_ma != 0U ||
         sys_product_profile_context_validate(context, BOOL_FALSE) != BOOL_TRUE ||
         _service.get_bound_voltage == NULL ||
         context->calibration_voltage_01v != _service.get_bound_voltage() ||
@@ -957,8 +953,12 @@ sys_calibration_result_en sys_calibration_service_raw_seq(
     sys_calibration_raw_direction_en direction,
     sys_calibration_service_status_st *status)
 {
+    const sys_product_profile_st *profile = sys_product_profile_current();
     sys_calibration_driver_message_st message;
+    sys_calibration_driver_max_context_st max_context;
     sys_calibration_result_en result;
+    u16 iv_limit_ma = 0U;
+    u32 index;
 
     if (sys_calibration_service_check_replay(
             session_id, seq, SYS_CALIBRATION_OP_RAW, &result, status) ==
@@ -966,14 +966,12 @@ sys_calibration_result_en sys_calibration_service_raw_seq(
     {
         return result;
     }
-
-    if ((direction != SYS_CALIBRATION_RAW_QUERY &&
-         direction != SYS_CALIBRATION_RAW_SET) || frame == NULL ||
+    if (direction != SYS_CALIBRATION_RAW_SET || frame == NULL ||
         sys_calibration_driver_decode(frame, frame_length, &message) != BOOL_TRUE ||
-        (direction == SYS_CALIBRATION_RAW_QUERY &&
-         message.command != SYS_CALIBRATION_DRIVER_CMD_QUERY) ||
-        (direction == SYS_CALIBRATION_RAW_SET &&
-         message.command != SYS_CALIBRATION_DRIVER_CMD_SET))
+        message.command != SYS_CALIBRATION_DRIVER_CMD_SET ||
+        message.offset != SYS_CALIBRATION_DRIVER_OFFSET_MAX_CONTEXT ||
+        sys_calibration_driver_max_context_decode(
+            message.data, message.length, &max_context) != BOOL_TRUE)
     {
         sys_calibration_service_finish(session_id, seq, SYS_CALIBRATION_OP_RAW,
                                        SYS_CALIBRATION_RESULT_PROTOCOL_ERROR,
@@ -986,11 +984,50 @@ sys_calibration_result_en sys_calibration_service_raw_seq(
     {
         return result;
     }
-    /* 此旧接口仅保留正式3A帧编解码验证；MQTT RAW使用设备快照接口。 */
-    (void)message;
+    if (_service.status.state != SYS_CALIBRATION_STATE_ACTIVE ||
+        _service.status.context.calibrated_max_current_ma != 0U ||
+        sys_product_profile_is_complete(profile) != BOOL_TRUE)
+    {
+        sys_calibration_service_finish(session_id, seq, SYS_CALIBRATION_OP_RAW,
+                                       SYS_CALIBRATION_RESULT_INVALID_STATE,
+                                       status);
+        return SYS_CALIBRATION_RESULT_INVALID_STATE;
+    }
+    for (index = 0U; index < profile->iv_limit_count; ++index)
+    {
+        if (_service.status.context.calibration_voltage_01v >=
+                profile->iv_limits[index].voltage_01v)
+        {
+            iv_limit_ma = profile->iv_limits[index].current_ma;
+        }
+        else
+        {
+            break;
+        }
+    }
+    if (max_context.input_ac_voltage_float_bits == 0U ||
+        max_context.maximum_output_voltage_01v == 0U ||
+        max_context.maximum_output_current_ma == 0U ||
+        iv_limit_ma == 0U ||
+        max_context.maximum_output_current_ma <
+            _service.status.context.configured_rated_current_ma ||
+        max_context.maximum_output_current_ma > iv_limit_ma ||
+        max_context.maximum_output_current_ma > profile->hw_max_current_ma ||
+        max_context.maximum_output_current_ma >= profile->absolute_fail_current_ma)
+    {
+        sys_calibration_service_finish(session_id, seq, SYS_CALIBRATION_OP_RAW,
+                                       SYS_CALIBRATION_RESULT_SAFETY_NOT_READY,
+                                       status);
+        return SYS_CALIBRATION_RESULT_SAFETY_NOT_READY;
+    }
+
+    /* Persisted context field keeps its wire name for compatibility, but in
+       the legacy flow its semantic value is exactly the measured 0x07 Imax. */
+    _service.status.context.calibrated_max_current_ma =
+        max_context.maximum_output_current_ma;
     sys_calibration_service_finish(session_id, seq, SYS_CALIBRATION_OP_RAW,
-                                   SYS_CALIBRATION_RESULT_NOT_AVAILABLE, status);
-    return SYS_CALIBRATION_RESULT_NOT_AVAILABLE;
+                                   SYS_CALIBRATION_RESULT_OK, status);
+    return SYS_CALIBRATION_RESULT_OK;
 }
 
 sys_calibration_result_en sys_calibration_service_snapshot_seq(

@@ -427,6 +427,45 @@ boolean_en sys_product_profile_scale_percent_to_pwm(
     return BOOL_TRUE;
 }
 
+static boolean_en sys_product_profile_validate_legacy_i_max(
+    const sys_product_profile_st *profile,
+    u16 calibration_voltage_01v,
+    u16 characterized_i_max_ma)
+{
+    u32 index;
+    u16 iv_limit_ma = 0U;
+
+    if (characterized_i_max_ma == 0U)
+    {
+        return BOOL_TRUE;
+    }
+    if (sys_product_profile_is_complete(profile) != BOOL_TRUE ||
+        calibration_voltage_01v < profile->minimum_voltage_01v ||
+        calibration_voltage_01v > profile->maximum_voltage_01v ||
+        calibration_voltage_01v == profile->special_test_voltage_01v)
+    {
+        return BOOL_FALSE;
+    }
+    for (index = 0U; index < profile->iv_limit_count; ++index)
+    {
+        if (calibration_voltage_01v >= profile->iv_limits[index].voltage_01v)
+        {
+            iv_limit_ma = profile->iv_limits[index].current_ma;
+        }
+        else
+        {
+            break;
+        }
+    }
+    if (iv_limit_ma == 0U || characterized_i_max_ma > iv_limit_ma ||
+        characterized_i_max_ma > profile->hw_max_current_ma ||
+        characterized_i_max_ma >= profile->absolute_fail_current_ma)
+    {
+        return BOOL_FALSE;
+    }
+    return BOOL_TRUE;
+}
+
 boolean_en sys_product_profile_context_build(
     u16 calibration_voltage_01v,
     u16 configured_rated_current_ma,
@@ -435,15 +474,14 @@ boolean_en sys_product_profile_context_build(
     sys_calibration_context_st *context)
 {
     const sys_product_profile_st *profile = sys_product_profile_current();
-    u16 profile_max_current_ma;
 
     if (context == NULL ||
-        sys_product_profile_compute_i100_ma(profile, calibration_voltage_01v,
-                                            &profile_max_current_ma) != BOOL_TRUE ||
         sys_product_profile_validate_runtime_current(
             profile, calibration_voltage_01v,
             configured_rated_current_ma) != SYS_PRODUCT_CURRENT_VALID ||
-        calibrated_max_current_ma > profile_max_current_ma ||
+        sys_product_profile_validate_legacy_i_max(
+            profile, calibration_voltage_01v,
+            calibrated_max_current_ma) != BOOL_TRUE ||
         (calibrated_max_current_ma != 0U &&
          configured_rated_current_ma > calibrated_max_current_ma))
     {
@@ -454,6 +492,8 @@ boolean_en sys_product_profile_context_build(
     context->profile_fingerprint_crc32 = profile->fingerprint_crc32;
     context->calibration_voltage_01v = calibration_voltage_01v;
     context->configured_rated_current_ma = configured_rated_current_ma;
+    /* Legacy protocol meaning: after 0x24/0x07 this is the measured Imax.
+       It is not the theoretical rated-power I100 and not SET_OUTCUR. */
     context->calibrated_max_current_ma = calibrated_max_current_ma;
     context->table_crc32 = table_crc32;
     return BOOL_TRUE;
@@ -477,8 +517,7 @@ boolean_en sys_product_profile_context_validate(
         context->calibrated_max_current_ma != expected.calibrated_max_current_ma ||
         (require_table_crc == BOOL_TRUE &&
          (context->table_crc32 == 0U || context->calibrated_max_current_ma == 0U)) ||
-        (require_table_crc != BOOL_TRUE &&
-         (context->table_crc32 != 0U || context->calibrated_max_current_ma != 0U)))
+        (require_table_crc != BOOL_TRUE && context->table_crc32 != 0U))
     {
         return BOOL_FALSE;
     }
