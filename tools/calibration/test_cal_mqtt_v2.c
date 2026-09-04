@@ -577,7 +577,7 @@ static int validate_tx_exhaustion_raw_rejected(void)
         "{\"SN\":\"TEST50W0000001\",\"TM\":\"2026-08-19 06:50:45\","
         "\"SV\":\"cal\",\"ID\":\"W010\",\"CT\":\"R\",\"DT\":{"
         "\"op\":\"RAW\",\"protocolVersion\":2,"
-        "\"sessionId\":1234,\"seq\":10}}";
+        "\"sessionId\":1234,\"seq\":12}}";
     static const char expected_text[] =
         "{\"DT\":{\"op\":\"RAW\",\"protocolVersion\":2,\"seq\":12,"
         "\"result\":1,\"ack\":false}}";
