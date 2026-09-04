@@ -1,0 +1,52 @@
+name: Apply full-scale gain headroom guard
+
+on:
+  push:
+    branches:
+      - feat/legacy-11point-calibration-20260903
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/legacy-11point-calibration-20260903
+          fetch-depth: 0
+      - name: Apply headroom guard
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              if text.count(old) != 1:
+                  raise SystemExit(f'expected one match in {path}, got {text.count(old)}')
+              p.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              'Core/Src/sys_calibration_service.c',
+              '''    if (scaled_pwm > pwm_limit)\n    {\n        scaled_pwm = pwm_limit;\n    }\n    *corrected_pwm = (u16)scaled_pwm;\n    return BOOL_TRUE;''',
+              '''    if (scaled_pwm > pwm_limit)\n    {\n        /* The characterized device does not have enough PWM headroom to\n           reach SET_OUTCUR. Do not drive at the hardware ceiling and hope\n           the later 11-point table rejects it; fail off immediately. */\n        return BOOL_FALSE;\n    }\n    *corrected_pwm = (u16)scaled_pwm;\n    return BOOL_TRUE;''')
+
+          replace_once(
+              'tools/calibration/test_snapshot.c',
+              '''        failures += expect_true(\n            sys_calibration_service_apply_fullscale_gain_pwm(\n                500U, 1000U, &gained_pwm) == BOOL_TRUE && gained_pwm == 556U,\n            "pre-gain Imax derives internal full-scale PWM gain");''',
+              '''        failures += expect_true(\n            sys_calibration_service_apply_fullscale_gain_pwm(\n                500U, 1000U, &gained_pwm) == BOOL_TRUE && gained_pwm == 556U,\n            "pre-gain Imax derives internal full-scale PWM gain");\n        failures += expect_true(\n            sys_calibration_service_apply_fullscale_gain_pwm(\n                900U, 1000U, &gained_pwm) == BOOL_FALSE,\n            "full-scale gain fails off when required PWM exceeds available headroom");''')
+          PY
+      - name: Run firmware host tests
+        run: bash tools/calibration/run_host_tests.sh
+      - name: Commit guarded firmware
+        shell: bash
+        run: |
+          rm .github/workflows/apply-fullscale-headroom-guard.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "fix(calibration): fail off when full-scale gain exceeds PWM headroom"
+          git push origin HEAD:feat/legacy-11point-calibration-20260903
