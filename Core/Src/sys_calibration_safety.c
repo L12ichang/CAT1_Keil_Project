@@ -9,7 +9,6 @@
 #include "sys_calibration_safety.h"
 #include "sys_calibration_curve.h"
 #include "sys_calibration_service.h"
-#include "sys_pwm.h"
 #include "factory_user_data.h"
 
 static u32 _calibration_range_session_id;
@@ -210,43 +209,6 @@ u16 sys_calibration_service_calibration_span_ma(void)
      * without explicit range fields. New MQTT/desktop flows always use the
      * explicit selected Product I-V node. */
     return sys_calibration_safety_calibration_span_ma(360U, HWMAX_OUTCUR);
-}
-
-sys_calibration_result_en sys_calibration_service_set_point_direct_seq(
-    u32 session_id,
-    u32 now_ms,
-    u32 seq,
-    u16 level,
-    u16 logical_pwm,
-    sys_calibration_service_status_st *status)
-{
-    sys_calibration_result_en result;
-    u16 actual_pwm = 0U;
-
-    /* First reuse the mature service session/lease/seq/fault validation. The
-     * baseline PWM applied by that call is immediately replaced before the
-     * station starts its stabilization window. */
-    result = sys_calibration_service_set_point_seq(
-        session_id, now_ms, seq, level, status);
-    if (result != SYS_CALIBRATION_RESULT_OK)
-    {
-        return result;
-    }
-    if (sys_pwm_calibration_set_direct_pwm(
-            level, logical_pwm, &actual_pwm) != BOOL_TRUE)
-    {
-        sys_pwm_force_safe_off();
-        return SYS_CALIBRATION_RESULT_HARDWARE_FAULT;
-    }
-    if (status != NULL)
-    {
-        status->current_level = level;
-        status->current_percent = (u8)(level / 2U);
-        status->actual_pwm = actual_pwm;
-        status->calibration_voltage_01v = _calibration_range_voltage_01v;
-        status->calibration_span_ma = sys_calibration_service_calibration_span_ma();
-    }
-    return SYS_CALIBRATION_RESULT_OK;
 }
 
 boolean_en sys_calibration_safety_limit_percent(

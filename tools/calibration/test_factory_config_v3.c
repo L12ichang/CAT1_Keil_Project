@@ -6,7 +6,7 @@
 
 sys_data_st sys_data __attribute__((aligned(4)));
 static u32 store_calls;
-static boolean_en calibration_active;
+static sys_calibration_state_en calibration_state;
 static boolean_en store_success = BOOL_TRUE;
 static u32 pwm_reload_calls;
 
@@ -21,9 +21,10 @@ void sys_data_store(void)
     (void)sys_data_store_checked();
 }
 
-boolean_en sys_calibration_service_is_output_authorized(void)
+boolean_en sys_calibration_service_is_session_active(void)
 {
-    return calibration_active;
+    return calibration_state != SYS_CALIBRATION_STATE_IDLE ?
+           BOOL_TRUE : BOOL_FALSE;
 }
 
 void sys_pwm_reload(void)
@@ -52,10 +53,11 @@ int main(void)
     int failures = 0;
     u8 candidate[128];
     u16 raised_hwmax;
+    u8 state;
 
     memset(&sys_data, 0, sizeof(sys_data));
     memset(sys_data.fa_Parambuf, 0xFF, sizeof(sys_data.fa_Parambuf));
-    calibration_active = BOOL_FALSE;
+    calibration_state = SYS_CALIBRATION_STATE_IDLE;
     factory_user_load_data();
     failures += expect_true(
         MID == SYS_PRODUCT_PROFILE_CURRENT_MID &&
@@ -125,18 +127,30 @@ int main(void)
         "failed CFG1 commit rolls User SET back in RAM");
     store_success = BOOL_TRUE;
 
-    calibration_active = BOOL_TRUE;
+    for (state = (u8)SYS_CALIBRATION_STATE_ACTIVE;
+         state <= (u8)SYS_CALIBRATION_STATE_COMMITTED; ++state)
+    {
+        calibration_state = (sys_calibration_state_en)state;
+        failures += expect_true(
+            factory_user_validate_candidate(candidate) ==
+                SYS_PRODUCT_CURRENT_CALIBRATION_ACTIVE &&
+            factory_user_set_runtime_current(
+                SYS_PRODUCT_PROFILE_CURRENT_DEFAULT_CURRENT_MA) ==
+                SYS_PRODUCT_CURRENT_CALIBRATION_ACTIVE &&
+            factory_user_set_hwmax_current(
+                SYS_PRODUCT_PROFILE_CURRENT_HW_MAX_CURRENT_MA) ==
+                SYS_PRODUCT_CURRENT_CALIBRATION_ACTIVE,
+            "ACTIVE/STAGED/APPLIED/COMMITTED all reject Factory current writes");
+    }
+    calibration_state = SYS_CALIBRATION_STATE_IDLE;
     failures += expect_true(
         factory_user_set_runtime_current(
             SYS_PRODUCT_PROFILE_CURRENT_DEFAULT_CURRENT_MA) ==
-            SYS_PRODUCT_CURRENT_CALIBRATION_ACTIVE &&
-        factory_user_set_hwmax_current(
-            SYS_PRODUCT_PROFILE_CURRENT_HW_MAX_CURRENT_MA) ==
-            SYS_PRODUCT_CURRENT_CALIBRATION_ACTIVE,
-        "active calibration keeps the existing configuration-write gate");
-    failures += expect_true(store_calls == 5U,
-                            "four successful and one failed Config commits observed");
-    failures += expect_true(pwm_reload_calls == 4U,
+            SYS_PRODUCT_CURRENT_VALID,
+        "Factory current writes resume after returning to IDLE");
+    failures += expect_true(store_calls == 6U,
+                            "five successful and one failed Config commits observed");
+    failures += expect_true(pwm_reload_calls == 5U,
                             "successful SET/HWMAX changes apply immediately");
 
     if (failures != 0)

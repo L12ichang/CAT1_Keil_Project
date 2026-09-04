@@ -188,7 +188,7 @@ sys_product_current_validation_en factory_user_validate_candidate(
     u16 hw_max_current_ma;
     u16 rs3_mohm;
 
-    if (sys_calibration_service_is_output_authorized() == BOOL_TRUE)
+    if (sys_calibration_service_is_session_active() == BOOL_TRUE)
     {
         return SYS_PRODUCT_CURRENT_CALIBRATION_ACTIVE;
     }
@@ -224,7 +224,7 @@ sys_product_current_validation_en factory_user_set_hwmax_current(
     const sys_product_profile_st *profile = sys_product_profile_current();
     u16 previous_hwmax;
 
-    if (sys_calibration_service_is_output_authorized() == BOOL_TRUE)
+    if (sys_calibration_service_is_session_active() == BOOL_TRUE)
     {
         return SYS_PRODUCT_CURRENT_CALIBRATION_ACTIVE;
     }
@@ -255,7 +255,7 @@ sys_product_current_validation_en factory_user_set_runtime_current(
 {
     sys_product_current_validation_en result;
     u16 previous_set;
-    if (sys_calibration_service_is_output_authorized() == BOOL_TRUE)
+    if (sys_calibration_service_is_session_active() == BOOL_TRUE)
     {
         return SYS_PRODUCT_CURRENT_CALIBRATION_ACTIVE;
     }

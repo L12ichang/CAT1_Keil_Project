@@ -3,6 +3,7 @@
 
 #include "factory_user_data.h"
 #include "sys_calibration_service.h"
+#include "sys_calibration_safety.h"
 #include "sys_calibration_snapshot.h"
 #include "sys_pwm.h"
 #include "sys_temp_over_protect.h"
@@ -29,9 +30,11 @@ static boolean_en adc_fresh = BOOL_TRUE;
 static u32 test_tick = 1000U;
 static u16 hardware_pwm;
 static u8 hardware_kind;
+static u32 hardware_write_count;
 static u16 prepared_requested;
 static u16 prepared_protected;
 static u32 clear_pending_count;
+static u32 active_session_id;
 
 enum
 {
@@ -98,6 +101,35 @@ boolean_en sys_calibration_service_is_boot_inhibited(void)
     return boot_inhibited;
 }
 
+boolean_en sys_calibration_service_get_status(
+    sys_calibration_service_status_st *status)
+{
+    if (status == NULL)
+    {
+        return BOOL_FALSE;
+    }
+    memset(status, 0, sizeof(*status));
+    status->state = active_session_id ? SYS_CALIBRATION_STATE_ACTIVE :
+                                      SYS_CALIBRATION_STATE_IDLE;
+    status->session_id = active_session_id;
+    return BOOL_TRUE;
+}
+
+sys_calibration_result_en sys_calibration_service_begin_seq(
+    u32 session_id, u32 now_ms, u32 lease_ms, u32 seq,
+    u16 profile_id, u32 profile_fingerprint,
+    sys_calibration_service_status_st *status)
+{
+    active_session_id = session_id;
+    (void)now_ms;
+    (void)lease_ms;
+    (void)seq;
+    (void)profile_id;
+    (void)profile_fingerprint;
+    (void)sys_calibration_service_get_status(status);
+    return SYS_CALIBRATION_RESULT_OK;
+}
+
 void net_dim_clear_pending(void)
 {
     ++clear_pending_count;
@@ -140,24 +172,28 @@ void sys_calibration_snapshot_publish_pwm(u32 tick_ms,
 
 void hw_tim1_pwm2_set_PWM_OUT(u16 pwm)
 {
+    ++hardware_write_count;
     hardware_kind = TEST_HW_DEFAULT;
     hardware_pwm = pwm;
 }
 
 void hw_tim1_pwm2_set_calibrated_PWM_OUT(u16 pwm)
 {
+    ++hardware_write_count;
     hardware_kind = TEST_HW_CALIBRATED;
     hardware_pwm = pwm;
 }
 
 void hw_tim1_pwm2_set_calibration_PWM_OUT(u16 pwm)
 {
+    ++hardware_write_count;
     hardware_kind = TEST_HW_CAL_POINT;
     hardware_pwm = pwm;
 }
 
 void hw_tim1_pwm2_set_calibration_default_PWM_OUT(u16 pwm)
 {
+    ++hardware_write_count;
     hardware_kind = TEST_HW_CAL_DEFAULT;
     hardware_pwm = pwm;
 }
@@ -196,6 +232,7 @@ static void reset_hardware(void)
     hardware_kind = 0U;
     prepared_requested = 0U;
     prepared_protected = 0U;
+    hardware_write_count = 0U;
 }
 
 int main(void)
@@ -217,7 +254,7 @@ int main(void)
     boot_inhibited = BOOL_FALSE;
     pwm_output(100U);
     failures += expect_true(
-        hardware_kind == TEST_HW_DEFAULT && hardware_pwm == 619U &&
+        hardware_kind == TEST_HW_DEFAULT && hardware_pwm == 515U &&
             prepared_requested == 100U && prepared_protected == 100U,
         "no Calibration uses Default PWM then OP offset boundary");
 
@@ -252,9 +289,17 @@ int main(void)
     correction_available = BOOL_FALSE;
     failures += expect_true(
         sys_pwm_calibration_set_level(100U, &actual_pwm) == BOOL_TRUE &&
-            hardware_kind == TEST_HW_CAL_DEFAULT && hardware_pwm > 0U &&
-            actual_pwm == hardware_pwm,
-        "SET_POINT uses the synchronous calibration percent/current mapping");
+            hardware_kind == TEST_HW_CAL_DEFAULT && hardware_pwm == 404U &&
+            actual_pwm == hardware_pwm && hardware_write_count == 1U,
+        "SET_POINT uses 36V span 1400mA instead of SET 893mA exactly once");
+
+    reset_hardware();
+    failures += expect_true(
+        sys_pwm_calibration_probe_pwm(650U, &actual_pwm) == BOOL_TRUE &&
+            hardware_kind == TEST_HW_CAL_POINT && hardware_pwm == 650U &&
+            actual_pwm == 650U && hardware_write_count == 1U &&
+            prepared_requested == 100U && prepared_protected == 100U,
+        "PROBE_PWM writes the requested 100 percent endpoint exactly once");
 
     correction_pwm = hardware_pwm;
     sys_pwm_normal_output(80U);
@@ -286,9 +331,9 @@ int main(void)
     reset_hardware();
     correction_available = BOOL_FALSE;
     failures += expect_true(
-        sys_pwm_calibration_set_output(45U, &actual_pwm) == BOOL_TRUE &&
-            hardware_kind == TEST_HW_CAL_DEFAULT && hardware_pwm > 0U,
-        "APPLIED out-of-range target uses authorized Default+offset fallback");
+        sys_pwm_calibration_set_output(45U, &actual_pwm) == BOOL_FALSE &&
+            hardware_pwm == 0U,
+        "APPLIED SET_OUTPUT fails closed when no staged curve covers the target");
 
     reset_hardware();
     bl_fresh = BOOL_FALSE;
@@ -308,10 +353,58 @@ int main(void)
 
     reset_hardware();
     boot_inhibited = BOOL_FALSE;
-    SET_OUTCUR = 1500U;
+    SET_OUTCUR = (u16)(HWMAX_OUTCUR + 1U);
     pwm_output(100U);
     failures += expect_true(hardware_pwm == 0U,
                             "SET greater than HWMAX cannot produce output");
+
+    /* Real range wrapper -> real PWM path, with only session/hardware faked. */
+    {
+        static const u16 voltages[] = {360U, 400U, 440U, 480U, 520U, 560U};
+        static const u16 spans[] = {1400U, 1250U, 1140U, 1040U, 960U, 900U};
+        sys_calibration_service_status_st status;
+        u16 voltage_index;
+        u16 point;
+        SET_OUTCUR = 893U;
+        HWMAX_OUTCUR = 1680U;
+        OP_PWM_OFFSET = 0U;
+        boot_inhibited = BOOL_TRUE;
+        correction_available = BOOL_TRUE;
+        correction_pwm = 999U; /* BUILD must not use this saved curve. */
+        for (voltage_index = 0U; voltage_index < 6U; ++voltage_index)
+        {
+            failures += expect_true(
+                sys_calibration_service_begin_range_seq(
+                    100U + voltage_index, test_tick, 30000U, 1U,
+                    50U, SYS_PRODUCT_PROFILE_50W_FINGERPRINT_CRC32,
+                    voltages[voltage_index], spans[voltage_index], &status) ==
+                    SYS_CALIBRATION_RESULT_OK,
+                "selected voltage opens its theoretical current span");
+            for (point = 0U; point <= 10U; ++point)
+            {
+                u16 target = (u16)(((u32)spans[voltage_index] * point + 5U) / 10U);
+                u16 expected = (u16)(((u32)target * 1000U) / HWMAX_OUTCUR);
+                reset_hardware();
+                failures += expect_true(
+                    sys_pwm_calibration_set_level(point * 20U, &actual_pwm) == BOOL_TRUE &&
+                    actual_pwm == expected && hardware_write_count == 1U &&
+                    SET_OUTCUR == 893U && HWMAX_OUTCUR == 1680U,
+                    "all 11 BUILD points use voltage span without Factory mutation");
+            }
+        }
+        /* The same 56V session can run with lower SET, without shrinking BUILD. */
+        SET_OUTCUR = 500U;
+        failures += expect_true(
+            sys_pwm_calibration_set_level(200U, &actual_pwm) == BOOL_TRUE &&
+            actual_pwm == 535U && SET_OUTCUR == 500U,
+            "calibration target is independent of runtime SET");
+        active_session_id = 0U;
+        boot_inhibited = BOOL_FALSE;
+        correction_available = BOOL_FALSE;
+        pwm_output(100U);
+        failures += expect_true(hardware_pwm == 297U && SET_OUTCUR == 500U,
+            "normal output still uses unchanged runtime SET after calibration");
+    }
 
     if (failures != 0)
     {

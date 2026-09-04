@@ -122,25 +122,17 @@ static boolean_en sys_pwm_default_for_percent(u8 percent, u16 *logical_pwm)
     return BOOL_TRUE;
 }
 
+/* Calibration-only theoretical current; never rewrite Factory SET/HWMAX. */
 static boolean_en sys_pwm_default_for_target(u16 target_current_ma,
-                                              u16 *logical_pwm)
+                                             u16 *logical_pwm)
 {
-    u16 useful_range;
-    u32 scaled;
-
     if (logical_pwm == NULL || HWMAX_OUTCUR == 0U ||
         OP_PWM_OFFSET >= PWM_OUT_MAX || target_current_ma > HWMAX_OUTCUR)
     {
         return BOOL_FALSE;
     }
-    useful_range = (u16)(PWM_OUT_MAX - OP_PWM_OFFSET);
-    scaled = ((u32)target_current_ma * (u32)useful_range) /
-             (u32)HWMAX_OUTCUR;
-    if (scaled > useful_range)
-    {
-        scaled = useful_range;
-    }
-    *logical_pwm = (u16)scaled;
+    *logical_pwm = (u16)(((u32)target_current_ma *
+                          (PWM_OUT_MAX - OP_PWM_OFFSET)) / HWMAX_OUTCUR);
     return BOOL_TRUE;
 }
 
@@ -383,7 +375,7 @@ void sys_pwm_force_safe_off(void)
     sys_pwm_publish(0U, 0U);
 }
 
-/* BUILD path: characterize the mature, uncalibrated SET/HWMAX transfer. */
+/* BUILD uses the selected voltage's session span, bypassing saved curves. */
 boolean_en sys_pwm_calibration_set_level(u16 level, u16 *actual_pwm)
 {
     u8 percent;
@@ -404,7 +396,7 @@ boolean_en sys_pwm_calibration_set_level(u16 level, u16 *actual_pwm)
         return BOOL_TRUE;
     }
     if (sys_pwm_calibration_prepare_percent(percent, &target_current_ma) !=
-        BOOL_TRUE ||
+            BOOL_TRUE ||
         sys_pwm_default_for_target(target_current_ma, &logical_pwm) != BOOL_TRUE)
     {
         sys_pwm_force_safe_off();
@@ -471,32 +463,18 @@ boolean_en sys_pwm_calibration_set_output(u8 percent, u16 *actual_pwm)
     return (*actual_pwm == logical_pwm) ? BOOL_TRUE : BOOL_FALSE;
 }
 
-boolean_en sys_pwm_calibration_set_direct_pwm(
-    u16 level,
+boolean_en sys_pwm_calibration_probe_pwm(
     u16 logical_pwm,
     u16 *actual_pwm)
 {
-    u8 percent;
     u16 protected_pwm;
 
-    if (actual_pwm == NULL || logical_pwm > PWM_OUT_MAX ||
-        sys_calibration_curve_validate_level(level) != BOOL_TRUE)
+    if (actual_pwm == NULL || logical_pwm == 0U ||
+        logical_pwm > PWM_OUT_MAX)
     {
         return BOOL_FALSE;
     }
-    percent = (u8)(level / 2U);
-    if (level == 0U)
-    {
-        if (logical_pwm != 0U)
-        {
-            return BOOL_FALSE;
-        }
-        sys_pwm_force_safe_off();
-        *actual_pwm = 0U;
-        return BOOL_TRUE;
-    }
-    if (logical_pwm == 0U ||
-        sys_pwm_calibration_feedback_ready() != BOOL_TRUE ||
+    if (sys_pwm_calibration_feedback_ready() != BOOL_TRUE ||
         sys_pwm_apply_dynamic_limits(100U) != 100U)
     {
         sys_pwm_force_safe_off();
@@ -516,7 +494,7 @@ boolean_en sys_pwm_calibration_set_direct_pwm(
     }
 
     hw_tim1_pwm2_set_calibration_PWM_OUT(logical_pwm);
-    sys_pwm_publish(percent, percent);
+    sys_pwm_publish(100U, 100U);
     *actual_pwm = hw_tim1_pwm2_get_logical_pwm();
     return (*actual_pwm == logical_pwm) ? BOOL_TRUE : BOOL_FALSE;
 }

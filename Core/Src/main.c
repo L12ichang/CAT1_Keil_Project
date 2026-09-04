@@ -231,6 +231,7 @@ int main(void)
     sys_calibration_service_bind_output(sys_pwm_force_safe_off,
                                         sys_pwm_calibration_set_level,
                                         sys_pwm_calibration_set_output);
+    sys_calibration_service_bind_probe(sys_pwm_calibration_probe_pwm);
     sys_calibration_service_bind_storage(sys_calibration_flash_set_inhibit,
                                          sys_calibration_flash_commit_v3);
     sys_calibration_snapshot_prepare_pwm(0U, 0U);

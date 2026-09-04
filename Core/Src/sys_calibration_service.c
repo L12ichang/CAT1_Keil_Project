@@ -44,6 +44,7 @@ typedef enum
     SYS_CALIBRATION_OP_BEGIN,
     SYS_CALIBRATION_OP_HEARTBEAT,
     SYS_CALIBRATION_OP_SET_POINT,
+    SYS_CALIBRATION_OP_PROBE_PWM,
     SYS_CALIBRATION_OP_RAW,
     SYS_CALIBRATION_OP_STAGE,
     SYS_CALIBRATION_OP_APPLY,
@@ -61,6 +62,7 @@ static u8 _committed_payload[SYS_CALIBRATION_PAYLOAD_LENGTH];
 static sys_calibration_safe_off_fn _safe_off;
 static sys_calibration_set_level_fn _set_level;
 static sys_calibration_set_output_fn _set_output;
+static sys_calibration_probe_pwm_fn _probe_pwm;
 static sys_calibration_set_inhibit_fn _set_inhibit;
 static sys_calibration_commit_v3_fn _commit_v3;
 
@@ -575,6 +577,7 @@ void sys_calibration_service_init(void)
     _safe_off = NULL;
     _set_level = NULL;
     _set_output = NULL;
+    _probe_pwm = NULL;
     _replay_valid = BOOL_FALSE;
     _expired_session_id = 0U;
 }
@@ -587,6 +590,12 @@ void sys_calibration_service_bind_output(
     _safe_off = safe_off;
     _set_level = set_level;
     _set_output = set_output;
+}
+
+void sys_calibration_service_bind_probe(
+    sys_calibration_probe_pwm_fn probe_pwm)
+{
+    _probe_pwm = probe_pwm;
 }
 
 void sys_calibration_service_bind_storage(
@@ -664,6 +673,12 @@ boolean_en sys_calibration_service_is_output_authorized(void)
            BOOL_TRUE : BOOL_FALSE;
 }
 
+boolean_en sys_calibration_service_is_session_active(void)
+{
+    return (_status.state != SYS_CALIBRATION_STATE_IDLE) ?
+           BOOL_TRUE : BOOL_FALSE;
+}
+
 sys_calibration_result_en sys_calibration_service_begin_seq(
     u32 session_id,
     u32 now_ms,
@@ -729,7 +744,7 @@ sys_calibration_result_en sys_calibration_service_begin_seq(
             SYS_CALIBRATION_RESULT_FLASH_ERROR, status);
     }
     if (_status.safety_ready != BOOL_TRUE || _safe_off == NULL ||
-        _set_level == NULL || _set_output == NULL ||
+        _set_level == NULL || _set_output == NULL || _probe_pwm == NULL ||
         (sys_calibration_service_fault_flags() &
          (u16)~SYS_CALIBRATION_FAULT_OUTPUT_LOW_VOLTAGE) != 0U)
     {
@@ -857,6 +872,73 @@ sys_calibration_result_en sys_calibration_service_set_point_seq(
     _status.actual_pwm = actual_pwm;
     return sys_calibration_service_finish(
         session_id, seq, SYS_CALIBRATION_OP_SET_POINT,
+        SYS_CALIBRATION_RESULT_OK, status);
+}
+
+sys_calibration_result_en sys_calibration_service_probe_pwm_seq(
+    u32 session_id,
+    u32 now_ms,
+    u32 seq,
+    u16 logical_pwm,
+    sys_calibration_service_status_st *status)
+{
+    sys_calibration_result_en result;
+    sys_calibration_result_en replay;
+    u16 actual_pwm = 0U;
+
+    _request_signature = sys_calibration_service_signature_mix(
+        2166136261UL, logical_pwm);
+    if (sys_calibration_service_get_replay(session_id, seq,
+                                           SYS_CALIBRATION_OP_PROBE_PWM,
+                                           &replay, status) == BOOL_TRUE)
+    {
+        return replay;
+    }
+    if (logical_pwm == 0U || logical_pwm > SYS_CALIBRATION_PWM_MAX)
+    {
+        if (_status.session_id == session_id)
+        {
+            sys_calibration_service_safe_off();
+        }
+        return sys_calibration_service_finish(
+            session_id, seq, SYS_CALIBRATION_OP_PROBE_PWM,
+            SYS_CALIBRATION_RESULT_RANGE_ERROR, status);
+    }
+    result = sys_calibration_service_require_session(
+        session_id, now_ms, seq, (u16)(1U << SYS_CALIBRATION_STATE_ACTIVE));
+    if (result != SYS_CALIBRATION_RESULT_OK)
+    {
+        return sys_calibration_service_finish(
+            session_id, seq, SYS_CALIBRATION_OP_PROBE_PWM, result, status);
+    }
+    if (_status.current_level != SYS_CALIBRATION_LEVEL_MAX ||
+        _status.current_percent != 100U)
+    {
+        return sys_calibration_service_finish(
+            session_id, seq, SYS_CALIBRATION_OP_PROBE_PWM,
+            SYS_CALIBRATION_RESULT_BAD_STATE, status);
+    }
+    if (sys_bl0942_is_fresh(now_ms) != BOOL_TRUE)
+    {
+        sys_calibration_service_safe_off();
+        return sys_calibration_service_finish(
+            session_id, seq, SYS_CALIBRATION_OP_PROBE_PWM,
+            SYS_CALIBRATION_RESULT_DATA_STALE, status);
+    }
+    if (_probe_pwm == NULL ||
+        _probe_pwm(logical_pwm, &actual_pwm) != BOOL_TRUE)
+    {
+        sys_calibration_service_safe_off();
+        return sys_calibration_service_finish(
+            session_id, seq, SYS_CALIBRATION_OP_PROBE_PWM,
+            SYS_CALIBRATION_RESULT_HARDWARE_FAULT, status);
+    }
+
+    _status.current_level = SYS_CALIBRATION_LEVEL_MAX;
+    _status.current_percent = 100U;
+    _status.actual_pwm = actual_pwm;
+    return sys_calibration_service_finish(
+        session_id, seq, SYS_CALIBRATION_OP_PROBE_PWM,
         SYS_CALIBRATION_RESULT_OK, status);
 }
 
@@ -1290,6 +1372,11 @@ boolean_en sys_calibration_service_correct_output_current_raw(
         return BOOL_FALSE;
     }
     sys_calibration_service_load_oco_curve(payload, raw, reference);
+    if (oco_raw <= raw[0U])
+    {
+        *corrected_current_ma = 0U;
+        return BOOL_TRUE;
+    }
     return sys_calibration_curve_interpolate_u16(
         raw, reference, SYS_CALIBRATION_POINT_COUNT,
         oco_raw, corrected_current_ma);

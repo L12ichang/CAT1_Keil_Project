@@ -69,6 +69,33 @@ boolean_en sys_calibration_service_is_boot_inhibited(void)
     return BOOL_FALSE;
 }
 
+boolean_en sys_calibration_service_get_status(
+    sys_calibration_service_status_st *status)
+{
+    if (status == NULL)
+    {
+        return BOOL_FALSE;
+    }
+    memset(status, 0, sizeof(*status));
+    status->state = SYS_CALIBRATION_STATE_IDLE;
+    return BOOL_TRUE;
+}
+
+sys_calibration_result_en sys_calibration_service_begin_seq(
+    u32 session_id, u32 now_ms, u32 lease_ms, u32 seq,
+    u16 profile_id, u32 profile_fingerprint,
+    sys_calibration_service_status_st *status)
+{
+    (void)session_id;
+    (void)now_ms;
+    (void)lease_ms;
+    (void)seq;
+    (void)profile_id;
+    (void)profile_fingerprint;
+    (void)status;
+    return SYS_CALIBRATION_RESULT_BAD_STATE;
+}
+
 void net_dim_clear_pending(void)
 {
 }

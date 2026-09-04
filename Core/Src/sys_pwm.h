@@ -19,8 +19,7 @@ void sys_pwm_reload(void);
 void sys_pwm_force_safe_off(void);
 boolean_en sys_pwm_calibration_set_level(u16 level, u16 *actual_pwm);
 boolean_en sys_pwm_calibration_set_output(u8 percent, u16 *actual_pwm);
-boolean_en sys_pwm_calibration_set_direct_pwm(
-    u16 level,
+boolean_en sys_pwm_calibration_probe_pwm(
     u16 logical_pwm,
     u16 *actual_pwm);
 

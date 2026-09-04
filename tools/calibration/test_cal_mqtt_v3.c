@@ -28,24 +28,25 @@ static size_t tx_pool_offset;
 static size_t tx_pool_peak;
 static int tx_pool_exhausted;
 static char last_json[TEST_JSON_SIZE];
-static size_t max_json_length[14];
-static size_t max_pool_peak[14];
+static size_t max_json_length[15];
+static size_t max_pool_peak[15];
 static sys_calibration_service_status_st fake_status;
 static u8 fake_staged[SYS_CALIBRATION_PAYLOAD_LENGTH];
 static u8 fake_committed[SYS_CALIBRATION_PAYLOAD_LENGTH];
 static u32 fake_tick = 1000U;
 static u32 begin_calls;
 static u32 set_point_calls;
+static u32 probe_pwm_calls;
 static u32 stage_calls;
 static u32 commit_calls;
 static int fake_raw_stale;
 static int fake_raw_hardware_fault;
 static int fake_set_point_hardware_fault;
-static const char *const metric_operation_name[14] =
+static const char *const metric_operation_name[15] =
 {
-    "", "CAP", "BEGIN", "HEARTBEAT", "SET_POINT", "RAW", "STAGE",
-    "APPLY", "SET_OUTPUT", "COMMIT", "READ", "ABORT", "RELEASE",
-    "DIAG"
+    "", "CAP", "BEGIN", "HEARTBEAT", "SET_POINT", "PROBE_PWM", "RAW",
+    "STAGE", "APPLY", "SET_OUTPUT", "COMMIT", "READ", "ABORT",
+    "RELEASE", "DIAG"
 };
 
 static int expect_true(int condition, const char *name)
@@ -114,7 +115,7 @@ static int operation_index(const char *operation)
 {
     int index;
 
-    for (index = 1; index < 14; ++index)
+    for (index = 1; index < 15; ++index)
     {
         if (operation != NULL &&
             strcmp(operation, metric_operation_name[index]) == 0)
@@ -287,6 +288,33 @@ sys_calibration_result_en sys_calibration_service_begin_seq(
     return fake_finish(SYS_CALIBRATION_RESULT_OK, seq, status);
 }
 
+sys_calibration_result_en sys_calibration_service_begin_range_seq(
+    u32 session_id, u32 now_ms, u32 lease_ms, u32 seq,
+    u16 profile_id, u32 profile_fingerprint,
+    u16 calibration_voltage_01v, u16 calibration_span_ma,
+    sys_calibration_service_status_st *status)
+{
+    sys_calibration_result_en result = sys_calibration_service_begin_seq(
+        session_id, now_ms, lease_ms, seq, profile_id,
+        profile_fingerprint, status);
+
+    if (result == SYS_CALIBRATION_RESULT_OK)
+    {
+        fake_status.calibration_voltage_01v = calibration_voltage_01v;
+        fake_status.calibration_span_ma = calibration_span_ma;
+        if (status != NULL)
+        {
+            *status = fake_status;
+        }
+    }
+    return result;
+}
+
+u16 sys_calibration_service_calibration_span_ma(void)
+{
+    return fake_status.calibration_span_ma;
+}
+
 sys_calibration_result_en sys_calibration_service_heartbeat_seq(
     u32 session_id, u32 now_ms, u32 lease_ms, u32 seq,
     sys_calibration_service_status_st *status)
@@ -311,6 +339,19 @@ sys_calibration_result_en sys_calibration_service_set_point_seq(
     }
     fake_status.current_level = level;
     fake_status.actual_pwm = (u16)(level * 3U);
+    return fake_finish(SYS_CALIBRATION_RESULT_OK, seq, status);
+}
+
+sys_calibration_result_en sys_calibration_service_probe_pwm_seq(
+    u32 session_id, u32 now_ms, u32 seq, u16 logical_pwm,
+    sys_calibration_service_status_st *status)
+{
+    (void)session_id;
+    (void)now_ms;
+    ++probe_pwm_calls;
+    fake_status.current_level = SYS_CALIBRATION_LEVEL_MAX;
+    fake_status.current_percent = 100U;
+    fake_status.actual_pwm = logical_pwm;
     return fake_finish(SYS_CALIBRATION_RESULT_OK, seq, status);
 }
 
@@ -594,7 +635,7 @@ int main(int argc, char **argv)
     char duplicate_json[TEST_JSON_SIZE];
     int failures = 0;
     int index;
-    static const int ordinary_ack[] = {2, 3, 4, 6, 7, 8, 9, 11, 12};
+    static const int ordinary_ack[] = {3, 4, 5, 7, 8, 9, 10, 12, 13};
 
     if (argc != 2)
     {
@@ -663,9 +704,9 @@ int main(int argc, char **argv)
     free(g6_begin_text);
 
     failures += expect_true(
-        send_request("{\"v\":3,\"op\":\"BEGIN\",\"sid\":880,\"seq\":1,\"profileId\":50,\"profileFingerprint\":287454020,\"leaseMs\":30000}", "W") == 0 &&
+        send_request("{\"v\":3,\"op\":\"BEGIN\",\"sid\":880,\"seq\":1,\"profileId\":50,\"profileFingerprint\":287454020,\"leaseMs\":30000,\"calibrationVoltage01V\":360,\"calibrationSpanMa\":1400}", "W") == 0 &&
         strstr(last_json, "\"rc\":10") != NULL &&
-        send_request("{\"v\":3,\"op\":\"BEGIN\",\"sid\":881,\"seq\":1,\"profileId\":50,\"profileFingerprint\":1122902929,\"leaseMs\":999}", "W") == 0 &&
+        send_request("{\"v\":3,\"op\":\"BEGIN\",\"sid\":881,\"seq\":1,\"profileId\":50,\"profileFingerprint\":1122902929,\"leaseMs\":999,\"calibrationVoltage01V\":360,\"calibrationSpanMa\":1400}", "W") == 0 &&
         strstr(last_json, "\"rc\":5") != NULL && begin_calls == 0U,
         "BEGIN rejects Product mismatch and out-of-range lease before service");
 
@@ -678,7 +719,7 @@ int main(int argc, char **argv)
         begin_calls == 1U && strcmp(duplicate_json, last_json) == 0,
         "exact BEGIN retry replays the first response without side effects");
     failures += expect_true(
-        send_request("{\"v\":3,\"op\":\"BEGIN\",\"sid\":123456,\"seq\":1,\"profileId\":50,\"profileFingerprint\":1122902929,\"leaseMs\":31000}", "W") == 0,
+        send_request("{\"v\":3,\"op\":\"BEGIN\",\"sid\":123456,\"seq\":1,\"profileId\":50,\"profileFingerprint\":1122902929,\"leaseMs\":31000,\"calibrationVoltage01V\":360,\"calibrationSpanMa\":1400}", "W") == 0,
         "conflicting duplicate BEGIN is handled");
     response = last_response();
     failures += expect_true(begin_calls == 1U && response != NULL &&
@@ -693,6 +734,10 @@ int main(int argc, char **argv)
         send_request("{\"v\":3,\"op\":\"SET_POINT\",\"sid\":123456,\"seq\":7,\"level\":21}", "W") == 0 &&
         strstr(last_json, "\"rc\":5") != NULL && set_point_calls == 0U,
         "SET_POINT rejects non-canonical levels before service");
+    failures += expect_true(
+        send_request("{\"v\":3,\"op\":\"SET_POINT\",\"sid\":123456,\"seq\":7,\"level\":100,\"logicalPwm\":650}", "W") == 0 &&
+        strstr(last_json, "\"rc\":1") != NULL && set_point_calls == 0U,
+        "SET_POINT rejects the removed logicalPwm reuse field");
     failures += expect_true(
         send_fixture(argv[1], "G6_SET_POINT.request.fixture", "W") == 0,
         "G6 SET_POINT succeeds");
@@ -722,7 +767,22 @@ int main(int argc, char **argv)
     fake_status.boot_inhibit_active = BOOL_TRUE;
 
     failures += expect_true(
-        send_request("{\"v\":3,\"op\":\"RAW\",\"sid\":123456,\"seq\":9}", "R") == 0,
+        send_fixture(argv[1], "G6_PROBE_PWM.request.fixture", "W") == 0,
+        "PROBE_PWM performs the independent 100 percent endpoint probe");
+    strcpy(duplicate_json, last_json);
+    failures += expect_true(
+        probe_pwm_calls == 1U && strstr(last_json, "\"level\":200") != NULL &&
+        strstr(last_json, "\"actualPwm\":650") != NULL &&
+        send_fixture(argv[1], "G6_PROBE_PWM.request.fixture", "W") == 0 &&
+        probe_pwm_calls == 1U && strcmp(duplicate_json, last_json) == 0,
+        "exact PROBE_PWM retry replays without another physical request");
+    failures += expect_true(
+        send_request("{\"v\":3,\"op\":\"PROBE_PWM\",\"sid\":123456,\"seq\":9,\"logicalPwm\":651}", "W") == 0 &&
+        strstr(last_json, "\"rc\":1") != NULL && probe_pwm_calls == 1U,
+        "conflicting PROBE_PWM retry is BAD_REQUEST");
+
+    failures += expect_true(
+        send_request("{\"v\":3,\"op\":\"RAW\",\"sid\":123456,\"seq\":10}", "R") == 0,
         "ACTIVE RAW succeeds");
     response = last_response();
     failures += expect_true(response != NULL &&
@@ -743,11 +803,11 @@ int main(int argc, char **argv)
     snprintf(fixture_path, sizeof(fixture_path), "%s/%s", argv[1],
              "G6_STAGE.request.fixture");
     bad_stage = load_text(fixture_path);
-    crc_text = bad_stage != NULL ? strstr(bad_stage, "105973917") : NULL;
+    crc_text = bad_stage != NULL ? strstr(bad_stage, "2863848479") : NULL;
     seq_text = bad_stage != NULL ? strstr(bad_stage, "\"seq\":20") : NULL;
     if (crc_text != NULL)
     {
-        memcpy(crc_text, "105973918", 9U);
+        memcpy(crc_text, "2863848478", 10U);
     }
     if (seq_text != NULL)
     {
@@ -831,12 +891,12 @@ int main(int argc, char **argv)
         response_has_number(response, "hasCalibration", 1.0) &&
         response_has_number(response, "generation", 7.0) &&
         response_has_number(response, "payloadLength", 244.0) &&
-        response_has_number(response, "payloadCrc32", 105973917.0),
+        response_has_number(response, "payloadCrc32", 2863848479.0),
         "CAP reports committed generation/length/CRC after release");
     cJSON_Delete(response);
 
     failures += expect_true(
-        send_request("{\"v\":3,\"op\":\"BEGIN\",\"sid\":777,\"seq\":1,\"profileId\":50,\"profileFingerprint\":1122902929,\"leaseMs\":30000}", "W") == 0,
+        send_request("{\"v\":3,\"op\":\"BEGIN\",\"sid\":777,\"seq\":1,\"profileId\":50,\"profileFingerprint\":1122902929,\"leaseMs\":30000,\"calibrationVoltage01V\":360,\"calibrationSpanMa\":1400}", "W") == 0,
         "second session begins");
     fake_raw_stale = 1;
     failures += expect_true(
@@ -855,7 +915,7 @@ int main(int argc, char **argv)
         "ABORT closes an uncommitted session");
 
     failures += expect_true(
-        send_request("{\"v\":3,\"op\":\"BEGIN\",\"sid\":778,\"seq\":1,\"profileId\":50,\"profileFingerprint\":1122902929,\"leaseMs\":30000}", "W") == 0,
+        send_request("{\"v\":3,\"op\":\"BEGIN\",\"sid\":778,\"seq\":1,\"profileId\":50,\"profileFingerprint\":1122902929,\"leaseMs\":30000,\"calibrationVoltage01V\":360,\"calibrationSpanMa\":1400}", "W") == 0,
         "hardware-fault RAW session begins");
     fake_raw_hardware_fault = 1;
     failures += expect_true(
@@ -890,7 +950,7 @@ int main(int argc, char **argv)
         "hardware-fault RAW session aborts");
 
     failures += expect_true(
-        send_request("{\"v\":3,\"op\":\"BEGIN\",\"sid\":779,\"seq\":1,\"profileId\":50,\"profileFingerprint\":1122902929,\"leaseMs\":30000}", "W") == 0,
+        send_request("{\"v\":3,\"op\":\"BEGIN\",\"sid\":779,\"seq\":1,\"profileId\":50,\"profileFingerprint\":1122902929,\"leaseMs\":30000,\"calibrationVoltage01V\":360,\"calibrationSpanMa\":1400}", "W") == 0,
         "non-RAW hardware-fault session begins");
     fake_set_point_hardware_fault = 1;
     failures += expect_true(
@@ -926,11 +986,13 @@ int main(int argc, char **argv)
     }
     failures += expect_true(max_json_length[1] < 1024U,
                             "CAP stays below 1024 bytes");
-    failures += expect_true(max_json_length[5] < 768U,
+    failures += expect_true(max_json_length[2] < 320U,
+                            "BEGIN with voltage/span stays below 320 bytes");
+    failures += expect_true(max_json_length[6] < 768U,
                             "RAW stays below 768 bytes");
-    failures += expect_true(max_json_length[10] < 1024U,
+    failures += expect_true(max_json_length[11] < 1024U,
                             "READ stays below 1024 bytes");
-    for (index = 1; index < 14; ++index)
+    for (index = 1; index < 15; ++index)
     {
         failures += expect_true(max_json_length[index] > 0U &&
                                 max_json_length[index] < 1536U,

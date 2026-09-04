@@ -25,6 +25,7 @@ typedef enum
     SYS_CALIBRATION_MQTT_OP_BEGIN,
     SYS_CALIBRATION_MQTT_OP_HEARTBEAT,
     SYS_CALIBRATION_MQTT_OP_SET_POINT,
+    SYS_CALIBRATION_MQTT_OP_PROBE_PWM,
     SYS_CALIBRATION_MQTT_OP_RAW,
     SYS_CALIBRATION_MQTT_OP_STAGE,
     SYS_CALIBRATION_MQTT_OP_APPLY,
@@ -84,6 +85,7 @@ static const char *sys_calibration_mqtt_operation_text(
         "BEGIN",
         "HEARTBEAT",
         "SET_POINT",
+        "PROBE_PWM",
         "RAW",
         "STAGE",
         "APPLY",
@@ -250,9 +252,9 @@ static boolean_en sys_calibration_mqtt_field_allowed(
         case SYS_CALIBRATION_MQTT_OP_HEARTBEAT:
             return strcmp(key, "leaseMs") == 0 ? BOOL_TRUE : BOOL_FALSE;
         case SYS_CALIBRATION_MQTT_OP_SET_POINT:
-            return (strcmp(key, "level") == 0 ||
-                    strcmp(key, "logicalPwm") == 0) ?
-                   BOOL_TRUE : BOOL_FALSE;
+            return strcmp(key, "level") == 0 ? BOOL_TRUE : BOOL_FALSE;
+        case SYS_CALIBRATION_MQTT_OP_PROBE_PWM:
+            return strcmp(key, "logicalPwm") == 0 ? BOOL_TRUE : BOOL_FALSE;
         case SYS_CALIBRATION_MQTT_OP_STAGE:
             return (strcmp(key, "payloadLength") == 0 ||
                     strcmp(key, "payloadCrc32") == 0 ||
@@ -505,6 +507,10 @@ static boolean_en sys_calibration_mqtt_add_operation_response(
                 cJSON_AddNumberToObject(dt, "level", response->status.current_level);
                 cJSON_AddNumberToObject(dt, "actualPwm", response->status.actual_pwm);
                 break;
+            case SYS_CALIBRATION_MQTT_OP_PROBE_PWM:
+                cJSON_AddNumberToObject(dt, "level", SYS_CALIBRATION_LEVEL_MAX);
+                cJSON_AddNumberToObject(dt, "actualPwm", response->status.actual_pwm);
+                break;
             case SYS_CALIBRATION_MQTT_OP_STAGE:
             case SYS_CALIBRATION_MQTT_OP_APPLY:
                 cJSON_AddNumberToObject(dt, "payloadLength",
@@ -625,7 +631,6 @@ boolean_en sys_calibration_mqtt_handle(
     cJSON *dt;
     cJSON *op_node;
     cJSON *payload_hex_node;
-    cJSON *logical_pwm_node;
     const char *operation_text = "";
     sys_calibration_mqtt_operation_en operation = SYS_CALIBRATION_MQTT_OP_INVALID;
     sys_calibration_mqtt_response_st *response = &_working_response;
@@ -649,7 +654,6 @@ boolean_en sys_calibration_mqtt_handle(
     u16 read_length = 0U;
     u8 percent = 0U;
     u8 replay_result;
-    boolean_en direct_pwm_requested = BOOL_FALSE;
     boolean_en request_cacheable = BOOL_FALSE;
 
     if (root == NULL || header == NULL || strcmp(header->sv, ZK_SV_CAL) != 0)
@@ -775,31 +779,29 @@ boolean_en sys_calibration_mqtt_handle(
             {
                 break;
             }
-            logical_pwm_node = cJSON_GetObjectItemCaseSensitive(
-                dt, "logicalPwm");
-            if (logical_pwm_node != NULL)
-            {
-                if (sys_calibration_mqtt_read_u16(
-                        dt, "logicalPwm", &logical_pwm) != BOOL_TRUE)
-                {
-                    break;
-                }
-                direct_pwm_requested = BOOL_TRUE;
-            }
             request_cacheable = BOOL_TRUE;
             parameter_digest = sys_calibration_mqtt_parameter_digest(
-                operation, level,
-                direct_pwm_requested == BOOL_TRUE ? logical_pwm : 0U,
-                direct_pwm_requested == BOOL_TRUE ? 1U : 0U);
+                operation, level, 0U, 0U);
             result = (level <= SYS_CALIBRATION_LEVEL_MAX &&
-                      (level % SYS_CALIBRATION_LEVEL_STEP) == 0U &&
-                      (direct_pwm_requested != BOOL_TRUE ||
-                       (logical_pwm <= SYS_CALIBRATION_PWM_MAX &&
-                        ((level == 0U && logical_pwm == 0U) ||
-                         (level != 0U && logical_pwm != 0U))))) ?
+                      (level % SYS_CALIBRATION_LEVEL_STEP) == 0U) ?
                      SYS_CALIBRATION_RESULT_OK :
                      SYS_CALIBRATION_RESULT_RANGE_ERROR;
             response->level = level;
+            break;
+        case SYS_CALIBRATION_MQTT_OP_PROBE_PWM:
+            if (sys_calibration_mqtt_read_u16(
+                    dt, "logicalPwm", &logical_pwm) != BOOL_TRUE)
+            {
+                break;
+            }
+            request_cacheable = BOOL_TRUE;
+            parameter_digest = sys_calibration_mqtt_parameter_digest(
+                operation, logical_pwm, 0U, 0U);
+            result = (logical_pwm > 0U &&
+                      logical_pwm <= SYS_CALIBRATION_PWM_MAX) ?
+                     SYS_CALIBRATION_RESULT_OK :
+                     SYS_CALIBRATION_RESULT_RANGE_ERROR;
+            response->level = SYS_CALIBRATION_LEVEL_MAX;
             break;
         case SYS_CALIBRATION_MQTT_OP_STAGE:
             payload_hex_node = cJSON_GetObjectItemCaseSensitive(
@@ -933,13 +935,14 @@ boolean_en sys_calibration_mqtt_handle(
                 response->lease_ms = response->status.lease_ms;
                 break;
             case SYS_CALIBRATION_MQTT_OP_SET_POINT:
-                result = direct_pwm_requested == BOOL_TRUE ?
-                    sys_calibration_service_set_point_direct_seq(
-                        session_id, HAL_GetTick(), seq, level, logical_pwm,
-                        &response->status) :
-                    sys_calibration_service_set_point_seq(
-                        session_id, HAL_GetTick(), seq, level,
-                        &response->status);
+                result = sys_calibration_service_set_point_seq(
+                    session_id, HAL_GetTick(), seq, level,
+                    &response->status);
+                break;
+            case SYS_CALIBRATION_MQTT_OP_PROBE_PWM:
+                result = sys_calibration_service_probe_pwm_seq(
+                    session_id, HAL_GetTick(), seq, logical_pwm,
+                    &response->status);
                 break;
             case SYS_CALIBRATION_MQTT_OP_RAW:
                 result = sys_calibration_service_raw_seq(

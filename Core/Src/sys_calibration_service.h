@@ -108,6 +108,8 @@ typedef boolean_en (*sys_calibration_set_level_fn)(u16 level,
                                                     u16 *actual_pwm);
 typedef boolean_en (*sys_calibration_set_output_fn)(u8 percent,
                                                      u16 *actual_pwm);
+typedef boolean_en (*sys_calibration_probe_pwm_fn)(u16 logical_pwm,
+                                                    u16 *actual_pwm);
 typedef boolean_en (*sys_calibration_set_inhibit_fn)(boolean_en active);
 typedef boolean_en (*sys_calibration_commit_v3_fn)(
     const u8 payload[SYS_CALIBRATION_PAYLOAD_LENGTH],
@@ -120,6 +122,8 @@ extern void sys_calibration_service_bind_output(
     sys_calibration_safe_off_fn safe_off,
     sys_calibration_set_level_fn set_level,
     sys_calibration_set_output_fn set_output);
+extern void sys_calibration_service_bind_probe(
+    sys_calibration_probe_pwm_fn probe_pwm);
 /* Production defaults call WP2 V3 storage. Tests may inject equivalent fakes. */
 extern void sys_calibration_service_bind_storage(
     sys_calibration_set_inhibit_fn set_inhibit,
@@ -136,6 +140,7 @@ extern boolean_en sys_calibration_service_get_status(
     sys_calibration_service_status_st *status);
 extern boolean_en sys_calibration_service_is_boot_inhibited(void);
 extern boolean_en sys_calibration_service_is_output_authorized(void);
+extern boolean_en sys_calibration_service_is_session_active(void);
 extern u16 sys_calibration_service_calibration_span_ma(void);
 
 /* Compatibility wrapper: legacy callers default to the 36V Product I-V span. */
@@ -171,13 +176,12 @@ extern sys_calibration_result_en sys_calibration_service_set_point_seq(
     u32 seq,
     u16 level,
     sys_calibration_service_status_st *status);
-/* Same SET_POINT operation, optional logicalPwm field. Used by the station to
- * search the PWM that makes the external reference hit the requested target. */
-extern sys_calibration_result_en sys_calibration_service_set_point_direct_seq(
+/* Endpoint coverage probe. This is independent from normal BUILD SET_POINT
+ * and is fixed to the 100 percent calibration point. */
+extern sys_calibration_result_en sys_calibration_service_probe_pwm_seq(
     u32 session_id,
     u32 now_ms,
     u32 seq,
-    u16 level,
     u16 logical_pwm,
     sys_calibration_service_status_st *status);
 extern sys_calibration_result_en sys_calibration_service_raw_seq(
