@@ -548,7 +548,7 @@ static int validate_stale_raw_rejected(void)
     static const char expected_text[] =
         "{\"DT\":{\"op\":\"RAW\",\"protocolVersion\":2,\"seq\":11,"
         "\"result\":1,\"ack\":false,\"readback\":{"
-        "\"sessionId\":1234,\"lastSeq\":9}}}";
+        "\"sessionId\":1234,\"lastSeq\":11}}}";
     cJSON *request = cJSON_Parse(request_text);
     cJSON *expected = cJSON_Parse(expected_text);
     cJSON *dt;
@@ -579,7 +579,7 @@ static int validate_tx_exhaustion_raw_rejected(void)
         "\"op\":\"RAW\",\"protocolVersion\":2,"
         "\"sessionId\":1234,\"seq\":10}}";
     static const char expected_text[] =
-        "{\"DT\":{\"op\":\"RAW\",\"protocolVersion\":2,\"seq\":10,"
+        "{\"DT\":{\"op\":\"RAW\",\"protocolVersion\":2,\"seq\":12,"
         "\"result\":1,\"ack\":false}}";
     cJSON *request = cJSON_Parse(request_text);
     cJSON *expected = cJSON_Parse(expected_text);
